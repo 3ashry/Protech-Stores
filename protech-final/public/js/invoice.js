@@ -4,138 +4,162 @@ function printInvoice(id) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a5' });
 
-  // ── HEADER BACKGROUND ──
-  doc.setFillColor(242, 101, 34); // Protech orange
-  doc.rect(0, 0, 148, 26, 'F');
-  doc.setFillColor(45, 41, 38); // Protech dark
-  doc.rect(0, 26, 148, 9, 'F');
+  const orange = [242, 101, 34];
+  const dark = [45, 41, 38];
+  const lightGray = [245, 245, 245];
+  const white = [255, 255, 255];
 
-  // ── LOGO P ──
-  doc.setFillColor(255, 255, 255);
-  doc.roundedRect(6, 4, 16, 18, 2, 2, 'F');
-  doc.setTextColor(242, 101, 34);
-  doc.setFontSize(16);
+  doc.setFillColor(...white);
+  doc.rect(0, 0, 148, 210, 'F');
+
+  // Orange top border
+  doc.setFillColor(...orange);
+  doc.rect(0, 0, 148, 2, 'F');
+
+  // Logo
+  try {
+    const logoEl = document.querySelector('.topbar-logo img');
+    if (logoEl) {
+      const src = logoEl.src;
+      doc.addImage(src, 'PNG', 5, 4, 40, 22);
+    }
+  } catch(e) {}
+
+  // Invoice title Arabic
+  doc.setTextColor(...orange);
+  doc.setFontSize(22);
   doc.setFont('helvetica', 'bold');
-  doc.text('P', 9.5, 17);
+  doc.text('فاتوره', 143, 18, { align: 'right' });
 
-  // ── COMPANY NAME ──
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(15);
-  doc.setFont('helvetica', 'bold');
-  doc.text('PROTECH', 26, 14);
-  doc.setFontSize(7);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(255, 220, 200);
-  doc.text('بروتيك — Professional Tools', 26, 20);
+  // Divider
+  doc.setDrawColor(...orange);
+  doc.setLineWidth(0.4);
+  doc.line(5, 29, 143, 29);
 
-  // ── INVOICE LABEL (top right) ──
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'bold');
-  doc.text('INVOICE', 142, 12, { align: 'right' });
-  doc.setFontSize(7.5);
-  doc.setFont('helvetica', 'normal');
-  doc.text(o.code, 142, 18, { align: 'right' });
+  // Info grid
+  const lc = [160, 160, 160];
 
-  // ── DARK STRIP TEXT ──
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(7);
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Date: ${o.date}`, 8, 31.5);
-  doc.text(`Status: ${o.status}`, 74, 31.5, { align: 'center' });
-  doc.text(`Shipping: ${o.ship_code || '—'}`, 142, 31.5, { align: 'right' });
+  // Left: customer info
+  doc.setFontSize(7); doc.setFont('helvetica','normal'); doc.setTextColor(...lc);
+  doc.text('العميل', 5, 35);
+  doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(...dark);
+  doc.text(o.customer_name || '', 5, 41);
 
-  // ── CUSTOMER BOX ──
-  doc.setFillColor(250, 246, 243);
-  doc.roundedRect(8, 36, 132, 24, 2, 2, 'F');
-  doc.setTextColor(122, 111, 104);
-  doc.setFontSize(7);
-  doc.setFont('helvetica', 'bold');
-  doc.text('BILL TO', 12, 42);
-  doc.setTextColor(45, 41, 38);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
-  doc.text(o.customer_name, 12, 49);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.text(`Phone: ${o.phone}`, 12, 55);
-  doc.setFontSize(8);
-  doc.text(`Est. Shipping: EGP ${fmt(o.est_shipping || 0)}`, 88, 49);
-  doc.text(`Actual Shipping: EGP ${fmt(o.actual_shipping || 0)}`, 88, 55);
+  doc.setFontSize(7); doc.setFont('helvetica','normal'); doc.setTextColor(...lc);
+  doc.text('عنوان الشحن', 5, 48);
+  doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(...dark);
+  doc.text('القاهره عين شمس', 5, 54);
 
-  // ── PRODUCTS TABLE HEADER ──
-  doc.setFillColor(45, 41, 38);
-  doc.rect(8, 63, 132, 9, 'F');
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(7.5);
-  doc.setFont('helvetica', 'bold');
-  doc.text('PRODUCT', 11, 68.5);
-  doc.text('QTY', 88, 68.5, { align: 'center' });
-  doc.text('UNIT PRICE', 110, 68.5, { align: 'center' });
-  doc.text('TOTAL', 138, 68.5, { align: 'right' });
+  doc.setFontSize(7); doc.setFont('helvetica','normal'); doc.setTextColor(...lc);
+  doc.text('تليفون العميل', 5, 61);
+  doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(...dark);
+  doc.text(o.phone || '', 5, 67);
 
-  // ── PRODUCT ROWS ──
-  doc.setTextColor(45, 41, 38);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  let y = 77;
+  // Right: invoice info
+  doc.setFontSize(7); doc.setFont('helvetica','normal'); doc.setTextColor(...lc);
+  doc.text('رقم الفاتوره', 143, 35, { align: 'right' });
+  doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(...dark);
+  doc.text(o.code || '', 143, 41, { align: 'right' });
+
+  doc.setFontSize(7); doc.setFont('helvetica','normal'); doc.setTextColor(...lc);
+  doc.text('تاريخ الاصدار', 143, 48, { align: 'right' });
+  doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(...dark);
+  doc.text(o.date || '', 143, 54, { align: 'right' });
+
+  doc.setFontSize(7); doc.setFont('helvetica','normal'); doc.setTextColor(...lc);
+  doc.text('كود الشحن', 143, 61, { align: 'right' });
+  doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(...dark);
+  doc.text(o.ship_code || '—', 143, 67, { align: 'right' });
+
+  // Divider
+  doc.setDrawColor(...orange);
+  doc.line(5, 72, 143, 72);
+
+  // Table header
+  doc.setFillColor(245, 245, 245);
+  doc.rect(5, 73, 138, 8, 'F');
+  doc.setFontSize(7.5); doc.setFont('helvetica','bold'); doc.setTextColor(...dark);
+  doc.text('الاجمالي', 143, 79, { align: 'right' });
+  doc.text('سعرالوحده', 118, 79, { align: 'right' });
+  doc.text('الكميه', 94, 79, { align: 'right' });
+  doc.text('وصف المنتج', 68, 79, { align: 'right' });
+  doc.text('كود المنتج', 30, 79, { align: 'right' });
+
+  // Product rows
+  let y = 90;
+  doc.setFont('helvetica','normal'); doc.setFontSize(8);
 
   (o.products || []).forEach((p, idx) => {
     const pr = cache.products.find(pp => pp.code === p.code);
-    const name = (pr?.name || p.code).substring(0, 34);
-    const line = parseFloat(p.sell_price || 0) * parseInt(p.qty || 1);
-    if (idx % 2 === 1) {
-      doc.setFillColor(250, 246, 243);
-      doc.rect(8, y - 5.5, 132, 8, 'F');
+    const name = (pr?.name || p.code).substring(0, 22);
+    const qty = parseInt(p.qty || 1);
+    const unit = parseFloat(p.sell_price || 0);
+    const line = unit * qty;
+    if (idx % 2 === 0) {
+      doc.setFillColor(252, 252, 252);
+      doc.rect(5, y - 6, 138, 8, 'F');
     }
-    doc.setTextColor(45, 41, 38);
-    doc.text(name, 11, y);
-    doc.text(String(p.qty), 88, y, { align: 'center' });
-    doc.text('EGP ' + fmt(p.sell_price), 110, y, { align: 'center' });
-    doc.text('EGP ' + fmt(line), 138, y, { align: 'right' });
-    y += 8;
+    doc.setTextColor(...dark);
+    doc.text(Math.round(line).toString(), 143, y, { align: 'right' });
+    doc.text(Math.round(unit).toString(), 118, y, { align: 'right' });
+    doc.text(qty.toString(), 94, y, { align: 'right' });
+    doc.text(name, 68, y, { align: 'right' });
+    doc.text(p.code || '', 30, y, { align: 'right' });
+    y += 9;
   });
 
-  // ── DIVIDER ──
-  doc.setDrawColor(220, 210, 205);
-  doc.line(8, y + 1, 140, y + 1);
-  y += 7;
-
-  // ── TOTALS ──
-  const grandTotal = parseFloat(o.total || 0) + parseFloat(o.actual_shipping || 0);
-
-  if (parseFloat(o.actual_shipping || 0) > 0) {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.setTextColor(45, 41, 38);
-    doc.text('Order Subtotal:', 92, y);
-    doc.text('EGP ' + fmt(o.total), 138, y, { align: 'right' });
-    y += 7;
-    doc.text('Actual Shipping:', 92, y);
-    doc.text('EGP ' + fmt(o.actual_shipping), 138, y, { align: 'right' });
-    y += 7;
+  // Shipping row
+  const shipCost = parseFloat(o.actual_shipping || 0) || parseFloat(o.est_shipping || 0);
+  if (shipCost > 0) {
+    doc.setFillColor(252, 252, 252);
+    doc.rect(5, y - 6, 138, 8, 'F');
+    doc.setTextColor(...dark);
+    doc.text(Math.round(shipCost).toString(), 143, y, { align: 'right' });
+    doc.text(Math.round(shipCost).toString(), 118, y, { align: 'right' });
+    doc.text('1', 94, y, { align: 'right' });
+    doc.setTextColor(...orange);
+    doc.text('شحن', 68, y, { align: 'right' });
+    doc.setTextColor(...dark);
+    doc.text('SHIP-001', 30, y, { align: 'right' });
+    y += 9;
   }
 
-  // Grand total box
-  doc.setFillColor(242, 101, 34);
-  doc.roundedRect(88, y - 5, 52, 10, 2, 2, 'F');
-  doc.setTextColor(255, 255, 255);
-  doc.setFont('helvetica', 'bold');
+  // Divider
+  doc.setDrawColor(...orange);
+  doc.line(5, y, 143, y);
+  y += 9;
+
+  // Grand total
+  const grandTotal = parseFloat(o.total || 0) + shipCost;
+  doc.setFont('helvetica','bold'); doc.setFontSize(10);
+  doc.setTextColor(...orange);
+  doc.text('جم ' + Math.round(grandTotal), 143, y, { align: 'right' });
+  doc.setTextColor(...dark);
+  doc.text('الاجمالي', 94, y, { align: 'right' });
+
+  // Footer
+  const fy = 185;
+  doc.setFillColor(...dark);
+  doc.rect(0, fy, 148, 25, 'F');
+
+  doc.setTextColor(...orange);
+  doc.setFontSize(11); doc.setFont('helvetica','bold');
+  doc.text('الشغل عليك', 8, fy + 9);
+  doc.text('و العده علينا', 8, fy + 17);
+
+  doc.setTextColor(...white);
+  doc.setFontSize(7); doc.setFont('helvetica','normal');
+  doc.text('للتواصل كلمنا علي :', 143, fy + 7, { align: 'right' });
+  doc.setTextColor(...orange);
   doc.setFontSize(9);
-  doc.text('TOTAL:', 92, y + 1.5);
-  doc.text('EGP ' + fmt(grandTotal), 138, y + 1.5, { align: 'right' });
-
-  // ── FOOTER ──
-  doc.setFillColor(45, 41, 38);
-  doc.rect(0, 188, 148, 12, 'F');
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(7.5);
-  doc.setFont('helvetica', 'bold');
-  doc.text('PROTECH', 74, 193, { align: 'center' });
-  doc.setFont('helvetica', 'normal');
+  doc.text('01034482071', 143, fy + 13, { align: 'right' });
+  doc.setTextColor(...white);
   doc.setFontSize(7);
-  doc.setTextColor(255, 200, 170);
-  doc.text('Thank you for your order!  |  شكراً لتسوقك معنا 🔧', 74, 197.5, { align: 'center' });
+  doc.text('Support@protechstores.com', 143, fy + 19, { align: 'right' });
 
-  doc.save(`Protech-Invoice-${o.code}.pdf`);
+  // Orange bottom border
+  doc.setFillColor(...orange);
+  doc.rect(0, 208, 148, 2, 'F');
+
+  doc.save('Protech-Invoice-' + o.code + '.pdf');
 }
