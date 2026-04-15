@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&display=swap');
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 :root{
   --orange:#F26522;--dark:#2D2926;--orange-light:#FFF0E8;--orange-mid:#FDDCC8;
@@ -5,7 +6,7 @@
   --success:#16a34a;--danger:#dc2626;--warning:#d97706;--info:#2563eb;
   --radius:10px;--radius-lg:14px;
 }
-html,body{height:100%;font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);overflow-x:hidden}
+html,body{height:100%;font-family:'Cairo',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);overflow-x:hidden}
 
 /* ── LOGIN ── */
 #login-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--dark);padding:20px}
