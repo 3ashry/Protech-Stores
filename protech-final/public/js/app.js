@@ -214,11 +214,16 @@ function renderPRows() {
       </div>
     </div>`).join('');
   calcTotal();
+  // Update total when shipping changes
+  const shipInput = document.getElementById('o-shipest');
+  if (shipInput) shipInput.oninput = calcTotal;
 }
 
 function calcTotal() {
+  const estShip = parseFloat(document.getElementById('o-shipest')?.value || 0);
   const t = oPRows.reduce((a, r) => a + parseFloat(r.sell_price || 0) * parseInt(r.qty || 1), 0);
-  document.getElementById('o-total-disp').textContent = fmt(t) + ' EGP';
+  const totalWithShip = t + estShip;
+  document.getElementById('o-total-disp').textContent = fmt(totalWithShip) + ' EGP';
 }
 
 async function saveOrder() {
@@ -265,7 +270,14 @@ function viewOrder(id) {
     const line = parseFloat(p.sell_price || 0) * parseInt(p.qty || 1);
     return `<tr><td>${pr?.name || p.code}</td><td style="text-align:center">${p.qty}</td><td>EGP ${fmt(p.sell_price)}</td><td>EGP ${fmt(line)}</td></tr>`;
   }).join('');
-  const waText = encodeURIComponent(`مرحباً ${o.customer_name}،\nشكراً لتسوقك من Protech! 🔧\nنرجو تقييم تجربتك.\nكود طلبك: ${o.code}\nرأيك يهمنا كثيراً 🙏`);
+  const feedbackUrl = `${window.location.origin}/feedback.html?order=${o.code}`;
+  const waText = encodeURIComponent(`أهلاً ${o.customer_name} 😊
+شكراً لتسوقك من بروتيك! 🔧
+
+نرجو منك تقييم تجربتك معنا من خلال الرابط ده:
+${feedbackUrl}
+
+رأيك يهمنا ويساعدنا نتحسن أكتر 🙏`);
   const waPhone = o.phone.startsWith('0') ? '2' + o.phone : o.phone;
   const waLink = `https://wa.me/${waPhone}?text=${waText}`;
 
