@@ -1,0 +1,91 @@
+╔══════════════════════════════════════════════════════════════╗
+║         PROTECH — DEPLOYMENT GUIDE (YOUR DETAILS INSIDE)    ║
+║                  Total time: ~15 minutes                     ║
+╚══════════════════════════════════════════════════════════════╝
+
+Everything is pre-configured for you. You only need to do 3 things:
+  1. Run the SQL in Supabase (2 min)
+  2. Set your password in one file (1 min)
+  3. Upload to GitHub + Vercel (10 min)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1 — RUN THE DATABASE SETUP (2 minutes)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Go to: https://supabase.com/dashboard
+2. Click your project "Protech"
+3. In the left menu click "SQL Editor"
+4. Click "New query"
+5. Open the file: supabase_setup.sql (included in this zip)
+6. Copy ALL the text, paste into the SQL editor
+7. Click "Run"
+8. You should see "Success. No rows returned" ✓
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2 — SET YOUR PASSWORD (1 minute)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Open the file: public/js/db.js in Notepad
+2. Find this line near the top:
+      const ADMIN_PASS = 'CHANGE_THIS_PASSWORD';
+3. Replace CHANGE_THIS_PASSWORD with your chosen password, e.g.:
+      const ADMIN_PASS = 'MyPassword123!';
+4. Save the file
+
+Your login credentials will be:
+   Username: mahmoudelashry4597@gmail.com
+   Password: whatever you chose above
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 3 — UPLOAD TO GITHUB (5 minutes)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Go to: https://github.com — sign up or log in (FREE)
+2. Click "+" top right → "New repository"
+3. Name it: protech-orders
+4. Set to PRIVATE (important!)
+5. Click "Create repository"
+6. Click "uploading an existing file"
+7. Drag ALL files from this zip keeping the folder structure
+8. Click "Commit changes"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 4 — DEPLOY WITH VERCEL (3 minutes)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Go to: https://vercel.com
+2. Sign up → "Continue with GitHub"
+3. Click "Add New Project"
+4. Select "protech-orders" → click "Import"
+5. Leave all settings as default
+6. Click "Deploy"
+7. Wait 60 seconds...
+
+YOUR APP IS LIVE!
+URL: https://protech-orders.vercel.app (or similar)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 5 — INSTALL ON YOUR PHONE AS AN APP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+iPhone (Safari):
+  Open URL → Share button → "Add to Home Screen" → Add
+
+Android (Chrome):
+  Open URL → 3-dot menu → "Add to Home Screen" → Add
+
+It will appear on your home screen exactly like a real app.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+YOUR DETAILS (already in the code)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Username:     mahmoudelashry4597@gmail.com
+  Password:     set by you in Step 2
+  Supabase URL: https://wljxplbcfoorqpoflcdz.supabase.co
+  Supabase Key: already embedded in db.js
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+COSTS: EVERYTHING IS 100% FREE
+  Supabase: FREE | GitHub: FREE | Vercel: FREE | Domain: NOT NEEDED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

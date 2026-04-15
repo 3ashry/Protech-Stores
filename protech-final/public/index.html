@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#2D2926">
+<title>Protech Orders</title>
+<link rel="stylesheet" href="css/app.css">
+<link rel="manifest" href="manifest.json">
+</head>
+<body>
+
+<!-- LOGIN SCREEN -->
+<div id="login-screen">
+  <div class="login-box">
+    <div class="login-logo">
+      <div class="logo-p">P</div>
+      <div>
+        <div class="login-brand">PROTECH</div>
+        <div class="login-sub">بروتيك — Order Management</div>
+      </div>
+    </div>
+    <div id="login-error" class="login-error" style="display:none"></div>
+    <div class="form-group">
+      <label>Username</label>
+      <input type="text" id="l-user" placeholder="admin" autocomplete="username">
+    </div>
+    <div class="form-group">
+      <label>Password</label>
+      <input type="password" id="l-pass" placeholder="••••••••" autocomplete="current-password">
+    </div>
+    <button class="btn btn-primary" style="width:100%" onclick="doLogin()">Sign In</button>
+    <p style="text-align:center;font-size:12px;color:var(--muted);margin-top:16px">Protech Internal System — Authorized Access Only</p>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app" style="display:none">
+
+  <!-- TOP BAR -->
+  <div class="topbar">
+    <div class="logo-area">
+      <div class="logo-icon">P</div>
+      <div class="logo-text">PRO<span>TECH</span></div>
+    </div>
+    <div class="nav-scroll" id="top-nav">
+      <button class="nav-tab active" onclick="go('home')">Home</button>
+      <button class="nav-tab" onclick="go('inventory')">Inventory</button>
+      <button class="nav-tab" onclick="go('orders')">Orders</button>
+      <button class="nav-tab" onclick="go('returns')">Returns</button>
+      <button class="nav-tab" onclick="go('financials')">Financials</button>
+      <button class="nav-tab" onclick="go('invoices')">Invoices</button>
+    </div>
+    <button class="btn-logout" onclick="doLogout()">Logout</button>
+  </div>
+
+  <!-- SCREENS -->
+
+  <!-- HOME -->
+  <div class="screen active" id="screen-home">
+    <div class="page-header">
+      <div class="page-title">Dashboard <span>Overview</span></div>
+    </div>
+    <div class="stat-grid" id="home-stats"></div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">Customer Feedback</span></div>
+      <div class="card-body" id="home-feedback"></div>
+    </div>
+  </div>
+
+  <!-- INVENTORY -->
+  <div class="screen" id="screen-inventory">
+    <div class="page-header">
+      <div class="page-title">Inventory <span>Management</span></div>
+      <button class="btn btn-primary" onclick="openAddProduct()">+ Add Product</button>
+    </div>
+    <div class="stat-grid" id="inv-stats"></div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">All Products</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Code</th><th>Product Name</th><th>Qty</th><th>Buy Price</th><th>Actions</th></tr></thead>
+          <tbody id="inv-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ORDERS -->
+  <div class="screen" id="screen-orders">
+    <div class="page-header">
+      <div class="page-title">Orders <span>Management</span></div>
+      <button class="btn btn-primary" onclick="openCreateOrder()">+ New Order</button>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">All Orders</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Code</th><th>Customer</th><th>Phone</th><th>Total</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="orders-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- RETURNS -->
+  <div class="screen" id="screen-returns">
+    <div class="page-header"><div class="page-title">Returns <span>& Cancellations</span></div></div>
+    <div class="stat-grid" id="ret-stats"></div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">Cancelled Orders</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Customer</th><th>Phone</th><th>Reason</th><th>Actual Shipping</th><th>Date</th></tr></thead>
+          <tbody id="ret-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- FINANCIALS -->
+  <div class="screen" id="screen-financials">
+    <div class="page-header">
+      <div class="page-title">Financials <span>& P&L</span></div>
+      <button class="btn btn-primary btn-sm" onclick="openExpense()">+ Add Expense</button>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">Revenue Summary</span></div>
+      <div class="card-body" id="fin-revenue"></div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">Additional Expenses</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Category</th><th>Description</th><th>Amount</th><th>Date</th><th></th></tr></thead>
+          <tbody id="exp-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title" style="color:var(--orange)">Net Profit Summary</span></div>
+      <div class="card-body" id="fin-net"></div>
+    </div>
+  </div>
+
+  <!-- INVOICES -->
+  <div class="screen" id="screen-invoices">
+    <div class="page-header"><div class="page-title">Print <span>Invoices</span></div></div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">All Orders — A5 PDF</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Order Code</th><th>Customer</th><th>Total</th><th>Status</th><th>Print</th></tr></thead>
+          <tbody id="inv-orders-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- BOTTOM NAV (mobile) -->
+  <div class="bottom-nav">
+    <button class="bnav-btn active" onclick="go('home')"><span class="icon">🏠</span>Home</button>
+    <button class="bnav-btn" onclick="go('inventory')"><span class="icon">📦</span>Stock</button>
+    <button class="bnav-btn" onclick="go('orders')"><span class="icon">🛒</span>Orders</button>
+    <button class="bnav-btn" onclick="go('returns')"><span class="icon">↩️</span>Returns</button>
+    <button class="bnav-btn" onclick="go('financials')"><span class="icon">💰</span>Finance</button>
+    <button class="bnav-btn" onclick="go('invoices')"><span class="icon">🧾</span>Invoice</button>
+  </div>
+
+</div><!-- /app -->
+
+<!-- MODAL OVERLAY -->
+<div class="modal-overlay" id="overlay" style="display:none" onclick="overlayClick(event)"></div>
+
+<!-- MODAL TEMPLATES -->
+<div id="tpl-product" style="display:none">
+  <div class="modal">
+    <span class="modal-handle"></span>
+    <div class="modal-header">
+      <span class="modal-title" id="m-product-title">Add Product</span>
+      <button class="close-btn" onclick="closeModal()">✕</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Product Code</label><input id="p-code" placeholder="PRD-001"></div>
+      <div class="form-group"><label>Product Name</label><input id="p-name" placeholder="Wrench Set"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Quantity</label><input id="p-qty" type="number" min="0" placeholder="0"></div>
+      <div class="form-group"><label>Buying Price (EGP)</label><input id="p-price" type="number" min="0" step="0.01" placeholder="0.00"></div>
+    </div>
+    <input type="hidden" id="p-idx" value="-1">
+    <button class="btn btn-primary" style="width:100%;margin-top:4px" onclick="saveProduct()">Save Product</button>
+  </div>
+</div>
+
+<div id="tpl-order" style="display:none">
+  <div class="modal">
+    <span class="modal-handle"></span>
+    <div class="modal-header">
+      <span class="modal-title" id="m-order-title">New Order</span>
+      <button class="close-btn" onclick="closeModal()">✕</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Customer Name</label><input id="o-name" placeholder="Ahmed Mohamed"></div>
+      <div class="form-group"><label>Phone (Egyptian)</label><input id="o-phone" placeholder="01208198008" maxlength="11" inputmode="numeric"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Shipping Code</label><input id="o-shipcode" placeholder="BST-12345"></div>
+      <div class="form-group"><label>Est. Shipping Cost (EGP)</label><input id="o-shipest" type="number" min="0" placeholder="0" inputmode="decimal"></div>
+    </div>
+    <div class="section-divider">Products Ordered</div>
+    <div id="o-products"></div>
+    <button class="btn btn-ghost btn-sm" style="margin-bottom:14px" onclick="addProdRow()">+ Add Product</button>
+    <div class="total-box">
+      <span class="total-label">Order Total</span>
+      <span class="total-amount" id="o-total-disp">0.00 EGP</span>
+    </div>
+    <input type="hidden" id="o-idx" value="-1">
+    <button class="btn btn-primary" style="width:100%;margin-top:14px" onclick="saveOrder()">Confirm Order</button>
+  </div>
+</div>
+
+<div id="tpl-detail" style="display:none">
+  <div class="modal">
+    <span class="modal-handle"></span>
+    <div class="modal-header">
+      <span class="modal-title">Order Details</span>
+      <button class="close-btn" onclick="closeModal()">✕</button>
+    </div>
+    <div id="m-detail-body"></div>
+  </div>
+</div>
+
+<div id="tpl-expense" style="display:none">
+  <div class="modal">
+    <span class="modal-handle"></span>
+    <div class="modal-header">
+      <span class="modal-title">Add Expense</span>
+      <button class="close-btn" onclick="closeModal()">✕</button>
+    </div>
+    <div class="form-group"><label>Category</label>
+      <select id="e-cat">
+        <option>Marketing</option><option>Paid Ads</option><option>AI Subscriptions</option>
+        <option>Rent</option><option>Tools</option><option>Salaries</option>
+        <option>Packaging / Boxes</option><option>Other</option>
+      </select>
+    </div>
+    <div class="form-group"><label>Description</label><input id="e-desc" placeholder="Description"></div>
+    <div class="form-group"><label>Amount (EGP)</label><input id="e-amt" type="number" min="0" step="0.01" placeholder="0.00" inputmode="decimal"></div>
+    <button class="btn btn-primary" style="width:100%" onclick="saveExpense()">Save Expense</button>
+  </div>
+</div>
+
+<div id="tpl-feedback" style="display:none">
+  <div class="modal">
+    <span class="modal-handle"></span>
+    <div class="modal-header">
+      <span class="modal-title">Customer Feedback</span>
+      <button class="close-btn" onclick="closeModal()">✕</button>
+    </div>
+    <input type="hidden" id="fb-code">
+    <div class="form-group"><label>Communication & Service / التواصل والخدمة</label>
+      <select id="fb-service"><option value="Satisfied">راضي — Satisfied</option><option value="Not Satisfied">غير راضي — Not Satisfied</option></select></div>
+    <div class="form-group"><label>Overall Satisfaction / الرضا العام</label>
+      <select id="fb-general"><option value="Satisfied">راضي — Satisfied</option><option value="Not Satisfied">غير راضي — Not Satisfied</option></select></div>
+    <div class="form-group"><label>Would Recommend Us? / هل تنصح بنا؟</label>
+      <select id="fb-rec"><option value="Yes">أنصح — Yes</option><option value="No">لا أنصح — No</option></select></div>
+    <div class="form-group"><label>Product Quality / جودة المنتج</label>
+      <select id="fb-quality"><option value="Good Quality">جودة جيدة — Good Quality</option><option value="Poor Quality">جودة سيئة — Poor Quality</option></select></div>
+    <div class="form-group"><label>Delivery Speed / سرعة التوصيل</label>
+      <select id="fb-delivery">
+        <option value="On Time">وصل في المعاد — On Time</option>
+        <option value="Late">تأخر عن المعاد — Late</option>
+        <option value="Not Delivered">لم يصل — Not Delivered</option>
+      </select></div>
+    <div class="form-group"><label>Packaging / التغليف</label>
+      <select id="fb-packing"><option value="Excellent">ممتاز — Excellent</option><option value="Good">جيد — Good</option><option value="Poor">سيئ — Poor</option></select></div>
+    <div class="form-group"><label>Additional Comments</label>
+      <textarea id="fb-comment" rows="3" placeholder="Write anything you'd like to share..."></textarea></div>
+    <button class="btn btn-primary" style="width:100%" onclick="saveFeedback()">Submit Feedback</button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="js/db.js"></script>
+<script src="js/app.js"></script>
+<script src="js/invoice.js"></script>
+</body>
+</html>
