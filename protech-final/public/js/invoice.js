@@ -1,165 +1,251 @@
 function printInvoice(id) {
   const o = cache.orders.find(x => x.id === id);
   if (!o) return;
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a5' });
 
-  const orange = [242, 101, 34];
-  const dark = [45, 41, 38];
-  const lightGray = [245, 245, 245];
-  const white = [255, 255, 255];
+  const logoSrc = document.querySelector('.topbar-logo img')?.src || '';
+  const shipCost = parseFloat(o.actual_shipping || 0) || parseFloat(o.est_shipping || 0);
+  const grandTotal = parseFloat(o.total || 0) + shipCost;
 
-  doc.setFillColor(...white);
-  doc.rect(0, 0, 148, 210, 'F');
-
-  // Orange top border
-  doc.setFillColor(...orange);
-  doc.rect(0, 0, 148, 2, 'F');
-
-  // Logo
-  try {
-    const logoEl = document.querySelector('.topbar-logo img');
-    if (logoEl) {
-      const src = logoEl.src;
-      doc.addImage(src, 'PNG', 5, 4, 40, 22);
-    }
-  } catch(e) {}
-
-  // Invoice title Arabic
-  doc.setTextColor(...orange);
-  doc.setFontSize(22);
-  doc.setFont('helvetica', 'bold');
-  doc.text('فاتوره', 143, 18, { align: 'right' });
-
-  // Divider
-  doc.setDrawColor(...orange);
-  doc.setLineWidth(0.4);
-  doc.line(5, 29, 143, 29);
-
-  // Info grid
-  const lc = [160, 160, 160];
-
-  // Left: customer info
-  doc.setFontSize(7); doc.setFont('helvetica','normal'); doc.setTextColor(...lc);
-  doc.text('العميل', 5, 35);
-  doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(...dark);
-  doc.text(o.customer_name || '', 5, 41);
-
-  doc.setFontSize(7); doc.setFont('helvetica','normal'); doc.setTextColor(...lc);
-  doc.text('عنوان الشحن', 5, 48);
-  doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(...dark);
-  doc.text('القاهره عين شمس', 5, 54);
-
-  doc.setFontSize(7); doc.setFont('helvetica','normal'); doc.setTextColor(...lc);
-  doc.text('تليفون العميل', 5, 61);
-  doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(...dark);
-  doc.text(o.phone || '', 5, 67);
-
-  // Right: invoice info
-  doc.setFontSize(7); doc.setFont('helvetica','normal'); doc.setTextColor(...lc);
-  doc.text('رقم الفاتوره', 143, 35, { align: 'right' });
-  doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(...dark);
-  doc.text(o.code || '', 143, 41, { align: 'right' });
-
-  doc.setFontSize(7); doc.setFont('helvetica','normal'); doc.setTextColor(...lc);
-  doc.text('تاريخ الاصدار', 143, 48, { align: 'right' });
-  doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(...dark);
-  doc.text(o.date || '', 143, 54, { align: 'right' });
-
-  doc.setFontSize(7); doc.setFont('helvetica','normal'); doc.setTextColor(...lc);
-  doc.text('كود الشحن', 143, 61, { align: 'right' });
-  doc.setFontSize(9); doc.setFont('helvetica','bold'); doc.setTextColor(...dark);
-  doc.text(o.ship_code || '—', 143, 67, { align: 'right' });
-
-  // Divider
-  doc.setDrawColor(...orange);
-  doc.line(5, 72, 143, 72);
-
-  // Table header
-  doc.setFillColor(245, 245, 245);
-  doc.rect(5, 73, 138, 8, 'F');
-  doc.setFontSize(7.5); doc.setFont('helvetica','bold'); doc.setTextColor(...dark);
-  doc.text('الاجمالي', 143, 79, { align: 'right' });
-  doc.text('سعرالوحده', 118, 79, { align: 'right' });
-  doc.text('الكميه', 94, 79, { align: 'right' });
-  doc.text('وصف المنتج', 68, 79, { align: 'right' });
-  doc.text('كود المنتج', 30, 79, { align: 'right' });
-
-  // Product rows
-  let y = 90;
-  doc.setFont('helvetica','normal'); doc.setFontSize(8);
-
-  (o.products || []).forEach((p, idx) => {
+  const productsRows = (o.products || []).map((p, i) => {
     const pr = cache.products.find(pp => pp.code === p.code);
-    const name = (pr?.name || p.code).substring(0, 22);
+    const name = pr?.name || p.code;
     const qty = parseInt(p.qty || 1);
     const unit = parseFloat(p.sell_price || 0);
     const line = unit * qty;
-    if (idx % 2 === 0) {
-      doc.setFillColor(252, 252, 252);
-      doc.rect(5, y - 6, 138, 8, 'F');
-    }
-    doc.setTextColor(...dark);
-    doc.text(Math.round(line).toString(), 143, y, { align: 'right' });
-    doc.text(Math.round(unit).toString(), 118, y, { align: 'right' });
-    doc.text(qty.toString(), 94, y, { align: 'right' });
-    doc.text(name, 68, y, { align: 'right' });
-    doc.text(p.code || '', 30, y, { align: 'right' });
-    y += 9;
-  });
+    return `
+      <tr style="background:${i % 2 === 0 ? '#fff' : '#fafafa'}">
+        <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px">${p.code || ''}</td>
+        <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px">${name}</td>
+        <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px;text-align:center">${qty}</td>
+        <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px;text-align:center">${Math.round(unit)}</td>
+        <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px;text-align:center;font-weight:700;color:#F26522">${Math.round(line)}</td>
+      </tr>`;
+  }).join('');
 
-  // Shipping row
-  const shipCost = parseFloat(o.actual_shipping || 0) || parseFloat(o.est_shipping || 0);
-  if (shipCost > 0) {
-    doc.setFillColor(252, 252, 252);
-    doc.rect(5, y - 6, 138, 8, 'F');
-    doc.setTextColor(...dark);
-    doc.text(Math.round(shipCost).toString(), 143, y, { align: 'right' });
-    doc.text(Math.round(shipCost).toString(), 118, y, { align: 'right' });
-    doc.text('1', 94, y, { align: 'right' });
-    doc.setTextColor(...orange);
-    doc.text('شحن', 68, y, { align: 'right' });
-    doc.setTextColor(...dark);
-    doc.text('SHIP-001', 30, y, { align: 'right' });
-    y += 9;
+  const shippingRow = shipCost > 0 ? `
+    <tr style="background:#fff8f5">
+      <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px">SHIP-001</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px;color:#F26522">شحن</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px;text-align:center">1</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px;text-align:center">${Math.round(shipCost)}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px;text-align:center;font-weight:700;color:#F26522">${Math.round(shipCost)}</td>
+    </tr>` : '';
+
+  const html = `<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width">
+<title>فاتوره - ${o.code}</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Cairo', sans-serif;
+    background: #fff;
+    color: #2D2926;
+    direction: rtl;
   }
+  .page {
+    width: 148mm;
+    min-height: 210mm;
+    margin: 0 auto;
+    background: #fff;
+    position: relative;
+    padding-bottom: 60mm;
+  }
+  .top-border { height: 4px; background: #F26522; }
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 16px 10px;
+    border-bottom: 1px solid #f0ebe7;
+  }
+  .logo { height: 48px; width: auto; object-fit: contain; }
+  .invoice-title {
+    font-size: 28px;
+    font-weight: 900;
+    color: #F26522;
+    letter-spacing: 1px;
+  }
+  .info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+    padding: 14px 16px;
+    border-bottom: 2px solid #F26522;
+  }
+  .info-group { margin-bottom: 10px; }
+  .info-label {
+    font-size: 10px;
+    color: #aaa;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    margin-bottom: 2px;
+  }
+  .info-value {
+    font-size: 12px;
+    font-weight: 700;
+    color: #2D2926;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 0;
+  }
+  thead tr {
+    background: #f5f5f5;
+  }
+  th {
+    padding: 9px 12px;
+    font-size: 11px;
+    font-weight: 800;
+    color: #2D2926;
+    text-align: right;
+    border-bottom: 2px solid #F26522;
+  }
+  th:nth-child(3), th:nth-child(4), th:nth-child(5) { text-align: center; }
+  .total-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-top: 2px solid #F26522;
+    background: #fff8f5;
+    margin-top: 0;
+  }
+  .total-label {
+    font-size: 14px;
+    font-weight: 800;
+    color: #2D2926;
+  }
+  .total-amount {
+    font-size: 20px;
+    font-weight: 900;
+    color: #F26522;
+  }
+  .footer {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: #2D2926;
+    padding: 14px 18px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .footer-slogan {
+    font-size: 13px;
+    font-weight: 800;
+    color: #F26522;
+    line-height: 1.6;
+  }
+  .footer-contact {
+    text-align: left;
+    font-size: 10px;
+    color: #fff;
+    line-height: 1.8;
+  }
+  .footer-contact .phone {
+    color: #F26522;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .bottom-border { height: 4px; background: #F26522; }
+  @media print {
+    body { margin: 0; }
+    .page { margin: 0; width: 100%; }
+    .no-print { display: none; }
+  }
+</style>
+</head>
+<body>
 
-  // Divider
-  doc.setDrawColor(...orange);
-  doc.line(5, y, 143, y);
-  y += 9;
+<div class="no-print" style="text-align:center;padding:16px;background:#f5f5f5;font-family:Cairo,sans-serif">
+  <button onclick="window.print()" style="background:#F26522;color:#fff;border:none;padding:12px 32px;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;font-family:Cairo,sans-serif">
+    طباعة / حفظ PDF
+  </button>
+</div>
 
-  // Grand total
-  const grandTotal = parseFloat(o.total || 0) + shipCost;
-  doc.setFont('helvetica','bold'); doc.setFontSize(10);
-  doc.setTextColor(...orange);
-  doc.text('جم ' + Math.round(grandTotal), 143, y, { align: 'right' });
-  doc.setTextColor(...dark);
-  doc.text('الاجمالي', 94, y, { align: 'right' });
+<div class="page">
+  <div class="top-border"></div>
 
-  // Footer
-  const fy = 185;
-  doc.setFillColor(...dark);
-  doc.rect(0, fy, 148, 25, 'F');
+  <div class="header">
+    <img src="${logoSrc}" class="logo" alt="Protech">
+    <div class="invoice-title">فاتوره</div>
+  </div>
 
-  doc.setTextColor(...orange);
-  doc.setFontSize(11); doc.setFont('helvetica','bold');
-  doc.text('الشغل عليك', 8, fy + 9);
-  doc.text('و العده علينا', 8, fy + 17);
+  <div class="info-grid">
+    <div>
+      <div class="info-group">
+        <div class="info-label">العميل</div>
+        <div class="info-value">${o.customer_name}</div>
+      </div>
+      <div class="info-group">
+        <div class="info-label">عنوان الشحن</div>
+        <div class="info-value">القاهره عين شمس</div>
+      </div>
+      <div class="info-group">
+        <div class="info-label">تليفون العميل</div>
+        <div class="info-value">${o.phone}</div>
+      </div>
+    </div>
+    <div style="text-align:left">
+      <div class="info-group">
+        <div class="info-label">رقم الفاتوره</div>
+        <div class="info-value">${o.code}</div>
+      </div>
+      <div class="info-group">
+        <div class="info-label">تاريخ الاصدار</div>
+        <div class="info-value">${o.date}</div>
+      </div>
+      <div class="info-group">
+        <div class="info-label">كود الشحن</div>
+        <div class="info-value">${o.ship_code || '—'}</div>
+      </div>
+    </div>
+  </div>
 
-  doc.setTextColor(...white);
-  doc.setFontSize(7); doc.setFont('helvetica','normal');
-  doc.text('للتواصل كلمنا علي :', 143, fy + 7, { align: 'right' });
-  doc.setTextColor(...orange);
-  doc.setFontSize(9);
-  doc.text('01034482071', 143, fy + 13, { align: 'right' });
-  doc.setTextColor(...white);
-  doc.setFontSize(7);
-  doc.text('Support@protechstores.com', 143, fy + 19, { align: 'right' });
+  <table>
+    <thead>
+      <tr>
+        <th>كود المنتج</th>
+        <th>وصف المنتج</th>
+        <th style="text-align:center">الكميه</th>
+        <th style="text-align:center">سعر الوحده</th>
+        <th style="text-align:center">الاجمالي</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${productsRows}
+      ${shippingRow}
+    </tbody>
+  </table>
 
-  // Orange bottom border
-  doc.setFillColor(...orange);
-  doc.rect(0, 208, 148, 2, 'F');
+  <div class="total-row">
+    <div class="total-label">الاجمالي</div>
+    <div class="total-amount">جم ${Math.round(grandTotal)}</div>
+  </div>
 
-  doc.save('Protech-Invoice-' + o.code + '.pdf');
+  <div class="footer">
+    <div class="footer-slogan">الشغل عليك<br>و العده علينا</div>
+    <div class="footer-contact">
+      للتواصل كلمنا علي :<br>
+      <span class="phone">01034482071</span><br>
+      Support@protechstores.com
+    </div>
+  </div>
+
+  <div class="bottom-border"></div>
+</div>
+
+</body>
+</html>`;
+
+  const win = window.open('', '_blank');
+  win.document.write(html);
+  win.document.close();
 }
