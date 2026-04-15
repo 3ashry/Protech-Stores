@@ -64,8 +64,9 @@ const USE_SUPABASE = SUPABASE_URL !== 'YOUR_SUPABASE_URL';
 function sbHeaders(extra = {}) {
   return {
     'apikey': SUPABASE_ANON_KEY,
-    'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+    'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
     'Content-Type': 'application/json',
+    'Accept': 'application/json',
     ...extra
   };
 }
@@ -154,7 +155,8 @@ async function loadAll() {
     cache.expenses = expenses || [];
     cache.feedbacks = feedbacks || [];
   } catch (e) {
-    console.warn('DB load error, using cache:', e);
+    console.warn('DB load error:', e);
+    showToast('Connection error — check your internet');
   }
   renderAll();
 }
