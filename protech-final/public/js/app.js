@@ -275,6 +275,13 @@ async function saveOrder() {
       await dbInsert('orders', data);
       cache.orders.unshift(data);
       showToast('Order created ✓');
+      // Send WhatsApp confirmation to customer
+      const orderTotal = total + est_shipping;
+      const waPhone = phone.startsWith('0') ? '2' + phone : phone;
+      const waMsg = encodeURIComponent(
+        `أهلاً ${customer_name} 👋\n\nطلبك اتأكد مع بروتيك! 🔧\n\n📦 تفاصيل طلبك:\n• رقم الطلب: ${data.code}\n• شركة الشحن: بوسطة\n• كود التتبع: ${ship_code || 'سيتم إرساله قريباً'}\n• إجمالي الطلب: ${Math.round(orderTotal)} جنيه\n\n🔍 تقدر تتابع شحنتك من هنا:\nhttps://bosta.co/en-eg/tracking-shipments\n\nشكراً لثقتك فينا! 💙`
+      );
+      window.open('https://wa.me/' + waPhone + '?text=' + waMsg, '_blank');
     }
 
     // Deduct ordered quantities from inventory
