@@ -234,10 +234,37 @@ async function saveOrder() {
   const est_shipping = parseFloat(document.getElementById('o-shipest').value || 0);
   if (!customer_name || !phone) { showToast('Please enter customer name and phone'); return; }
   if (!phoneOk(phone)) { showToast('Invalid Egyptian phone number (e.g. 01208198008)'); return; }
+
+  // Check stock availability before saving
+  for (const r of oPRows) {
+    if (!r.code) continue;
+    const prod = cache.products.find(p => p.code === r.code);
+    if (!prod) { showToast('Product not found: ' + r.code); return; }
+    const available = parseInt(prod.qty || 0);
+    const ordered = parseInt(r.qty || 1);
+    if (ordered > available) {
+      showToast(`Not enough stock for "${prod.name}" — available: ${available}`);
+      return;
+    }
+  }
+
   const total = oPRows.reduce((a, r) => a + parseFloat(r.sell_price || 0) * parseInt(r.qty || 1), 0);
   const id = document.getElementById('o-idx').value;
   try {
     if (id) {
+      // Editing existing order — restore old quantities then deduct new ones
+      const oldOrder = cache.orders.find(x => x.id === id);
+      if (oldOrder && oldOrder.products) {
+        for (const op of oldOrder.products) {
+          const prod = cache.products.find(p => p.code === op.code);
+          if (prod) {
+            const restored = parseInt(prod.qty || 0) + parseInt(op.qty || 1);
+            const pi = cache.products.findIndex(p => p.code === op.code);
+            cache.products[pi].qty = restored;
+            await dbUpdate('products', prod.id, { qty: restored });
+          }
+        }
+      }
       const upd = { customer_name, phone, ship_code, est_shipping, products: oPRows, total };
       await dbUpdate('orders', id, upd);
       const i = cache.orders.findIndex(x => x.id === id);
@@ -249,6 +276,18 @@ async function saveOrder() {
       cache.orders.unshift(data);
       showToast('Order created ✓');
     }
+
+    // Deduct ordered quantities from inventory
+    for (const r of oPRows) {
+      if (!r.code) continue;
+      const pi = cache.products.findIndex(p => p.code === r.code);
+      if (pi >= 0) {
+        const newQty = Math.max(0, parseInt(cache.products[pi].qty || 0) - parseInt(r.qty || 1));
+        cache.products[pi].qty = newQty;
+        await dbUpdate('products', cache.products[pi].id, { qty: newQty });
+      }
+    }
+
     closeModal(); renderAll();
   } catch (e) { showToast('Error: ' + e.message); }
 }
@@ -256,6 +295,18 @@ async function saveOrder() {
 async function delOrder(id) {
   if (!confirm('Delete this order permanently?')) return;
   try {
+    // Restore inventory quantities before deleting
+    const order = cache.orders.find(x => x.id === id);
+    if (order && order.products) {
+      for (const op of order.products) {
+        const pi = cache.products.findIndex(p => p.code === op.code);
+        if (pi >= 0) {
+          const restored = parseInt(cache.products[pi].qty || 0) + parseInt(op.qty || 1);
+          cache.products[pi].qty = restored;
+          await dbUpdate('products', cache.products[pi].id, { qty: restored });
+        }
+      }
+    }
     await dbDelete('orders', id);
     cache.orders = cache.orders.filter(x => x.id !== id);
     showToast('Order deleted'); renderAll();
