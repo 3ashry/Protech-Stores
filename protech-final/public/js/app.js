@@ -295,21 +295,33 @@ async function saveOrder() {
 async function delOrder(id) {
   if (!confirm('Delete this order permanently?')) return;
   try {
-    // Restore inventory quantities before deleting
-    const order = cache.orders.find(x => x.id === id);
-    if (order && order.products) {
-      for (const op of order.products) {
-        const pi = cache.products.findIndex(p => p.code === op.code);
-        if (pi >= 0) {
-          const restored = parseInt(cache.products[pi].qty || 0) + parseInt(op.qty || 1);
-          cache.products[pi].qty = restored;
-          await dbUpdate('products', cache.products[pi].id, { qty: restored });
-        }
-      }
-    }
     await dbDelete('orders', id);
     cache.orders = cache.orders.filter(x => x.id !== id);
     showToast('Order deleted'); renderAll();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+async function confirmWarehouse(id) {
+  if (!confirm('Confirm you have received this order back in your warehouse? This will add the products back to inventory.')) return;
+  const order = cache.orders.find(x => x.id === id);
+  if (!order) return;
+  try {
+    // Add quantities back to inventory
+    for (const op of (order.products || [])) {
+      const pi = cache.products.findIndex(p => p.code === op.code);
+      if (pi >= 0) {
+        const restored = parseInt(cache.products[pi].qty || 0) + parseInt(op.qty || 1);
+        cache.products[pi].qty = restored;
+        await dbUpdate('products', cache.products[pi].id, { qty: restored });
+      }
+    }
+    // Mark order as warehouse_confirmed so button disappears
+    await dbUpdate('orders', id, { warehouse_confirmed: true });
+    const i = cache.orders.findIndex(x => x.id === id);
+    if (i >= 0) cache.orders[i].warehouse_confirmed = true;
+    showToast('Stock restored to inventory ✓');
+    closeModal();
+    renderAll();
   } catch (e) { showToast('Error: ' + e.message); }
 }
 
@@ -359,7 +371,13 @@ ${feedbackUrl}
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
       <button class="btn btn-primary" onclick="saveDetail('${id}')">Save Changes</button>
       ${o.status === 'Delivered' ? `<a href="${waLink}" target="_blank" class="btn btn-wa">WhatsApp Feedback</a>` : ''}
-      <button class="btn btn-ghost" onclick="openFeedback('${o.code}')">Add Manual Feedback</button>
+      ${o.status === 'Delivered' ? `<button class="btn btn-ghost" onclick="openFeedback('${o.code}')">Add Manual Feedback</button>` : ''}
+      ${o.status === 'Cancelled' && !o.warehouse_confirmed ? `
+        <button class="btn" style="background:#7c3aed;color:#fff;display:flex;align-items:center;gap:8px" onclick="confirmWarehouse('${id}')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          Confirm Received in Warehouse
+        </button>` : ''}
+      ${o.status === 'Cancelled' && o.warehouse_confirmed ? `<span style="color:#16a34a;font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Stock Returned to Inventory</span>` : ''}
     </div>`;
   showModal('tpl-detail');
 }
