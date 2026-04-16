@@ -40,7 +40,8 @@ function renderHome() {
   const delivered = orders.filter(o => o.status === 'Delivered').length;
   const inTransit = orders.filter(o => ['In Transit', 'Processing'].includes(o.status)).length;
   const fbs = cache.feedbacks;
-  const satPct = fbs.length ? Math.round(fbs.filter(f => f.general === 'Satisfied').length / fbs.length * 100) : 0;
+  const isSatisfied = f => f.general === 'Satisfied' || f.general === 'راضي';
+  const satPct = fbs.length ? Math.round(fbs.filter(isSatisfied).length / fbs.length * 100) : 0;
 
   document.getElementById('home-stats').innerHTML = `
     <div class="stat-card orange"><div class="stat-val">${total}</div><div class="stat-label">Total Orders</div></div>
@@ -53,15 +54,15 @@ function renderHome() {
   hf.innerHTML = fbs.map(f => `
     <div class="fb-card">
       <div style="display:flex;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:6px">
-        <strong style="font-size:13px">${f.order_code || '—'}</strong>
-        <span class="badge ${f.general === 'Satisfied' ? 'b-success' : 'b-danger'}">${f.general}</span>
+        <strong style="font-size:13px">${f.order_code || f.orderCode || '—'}</strong>
+        <span class="badge ${(f.general === 'Satisfied' || f.general === 'راضي') ? 'b-success' : 'b-danger'}">${f.general}</span>
       </div>
       <div class="fb-pills">
         <span class="badge b-gray">Service: ${f.service}</span>
         <span class="badge b-gray">Quality: ${f.quality}</span>
         <span class="badge b-gray">Delivery: ${f.delivery}</span>
         <span class="badge b-gray">Packing: ${f.packing}</span>
-        <span class="badge ${f.recommend === 'Yes' ? 'b-success' : 'b-danger'}">Recommend: ${f.recommend}</span>
+        <span class="badge ${(f.recommend === 'Yes' || f.recommend === 'أنصح') ? 'b-success' : 'b-danger'}">Recommend: ${f.recommend}</span>
       </div>
       ${f.comment ? `<div style="font-size:13px;color:var(--muted);font-style:italic;margin-top:6px">"${f.comment}"</div>` : ''}
     </div>`).join('');
