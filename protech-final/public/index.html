@@ -174,6 +174,8 @@
 <div class="modal-overlay" id="overlay" style="display:none" onclick="overlayClick(event)"></div>
 
 <!-- MODAL TEMPLATES -->
+<!-- REPLACE the entire tpl-product div in your index.html with this -->
+
 <div id="tpl-product" style="display:none">
   <div class="modal">
     <span class="modal-handle"></span>
@@ -181,18 +183,92 @@
       <span class="modal-title" id="m-product-title">Add Product</span>
       <button class="close-btn" onclick="closeModal()">✕</button>
     </div>
+
+    <!-- Row 1: Code + Name -->
     <div class="form-row">
       <div class="form-group"><label>Product Code</label><input id="p-code" placeholder="PRD-001"></div>
       <div class="form-group"><label>Product Name</label><input id="p-name" placeholder="Wrench Set"></div>
     </div>
+
+    <!-- Row 2: Qty + Buy Price -->
     <div class="form-row">
       <div class="form-group"><label>Quantity</label><input id="p-qty" type="number" min="0" placeholder="0"></div>
       <div class="form-group"><label>Buying Price (EGP)</label><input id="p-price" type="number" min="0" step="0.01" placeholder="0.00"></div>
     </div>
+
+    <!-- Row 3: Sell Price + Old Price -->
+    <div class="form-row">
+      <div class="form-group"><label>Selling Price (EGP)</label><input id="p-sell-price" type="number" min="0" step="0.01" placeholder="0.00"></div>
+      <div class="form-group"><label>Old / Compare Price (EGP) <span style="font-weight:400;color:#aaa;font-size:11px">optional</span></label><input id="p-old-price" type="number" min="0" step="0.01" placeholder="0.00"></div>
+    </div>
+
+    <!-- Row 4: Category + Brand -->
+    <div class="form-row">
+      <div class="form-group">
+        <label>Category</label>
+        <select id="p-category">
+          <option value="">— No Category —</option>
+          <option value="electric">Electric Tools</option>
+          <option value="battery">Battery Tools</option>
+          <option value="hand">Hand Tools</option>
+          <option value="measuring">Measuring Tools</option>
+          <option value="safety">Safety Tools</option>
+          <option value="car">Car Tools</option>
+          <option value="garden">Gardening Tools</option>
+          <option value="new">New Arrivals</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Brand</label>
+        <select id="p-brand">
+          <option value="">— No Brand —</option>
+          <option value="Total">Total</option>
+          <option value="Wadfow">Wadfow</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Description -->
+    <div class="form-group">
+      <label>Product Description <span style="font-weight:400;color:#aaa;font-size:11px">optional</span></label>
+      <textarea id="p-description" rows="3" placeholder="Describe the product, specs, uses..." style="width:100%;padding:10px;border:1px solid #e0e0e0;border-radius:8px;font-family:inherit;font-size:14px;resize:vertical"></textarea>
+    </div>
+
+    <!-- Daily Offer Toggle -->
+    <div style="background:#fff8f5;border:1.5px solid #F26A21;border-radius:10px;padding:16px;margin-bottom:14px">
+      <label style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:0">
+        <div onclick="toggleOfferPrice()" id="offer-toggle-track"
+          style="width:46px;height:24px;border-radius:999px;background:#ccc;position:relative;cursor:pointer;transition:background .2s;flex-shrink:0">
+          <div id="offer-toggle-knob" style="position:absolute;top:2px;left:2px;width:20px;height:20px;background:#fff;border-radius:50%;transition:left .2s"></div>
+        </div>
+        <div>
+          <div style="font-weight:700;font-size:14px">🔥 Daily Offer — عرض اليوم</div>
+          <div style="font-size:12px;color:#888;margin-top:2px">Show this product in the Daily Offers section on the store with a discounted price</div>
+        </div>
+        <input type="checkbox" id="p-is-offer" style="display:none" onchange="toggleOfferPrice()">
+      </label>
+
+      <div id="p-offer-row" style="display:none;margin-top:14px">
+        <label style="display:block;font-weight:700;font-size:13px;margin-bottom:6px">Offer Price (EGP) *</label>
+        <input id="p-offer-price" type="number" min="0" step="0.01" placeholder="Enter discounted price"
+          style="width:100%;padding:10px 14px;border:2px solid #F26A21;border-radius:8px;font-family:inherit;font-size:14px;outline:none">
+        <div id="p-offer-discount" style="font-size:12px;color:#F26A21;font-weight:600;margin-top:6px"></div>
+      </div>
+    </div>
+
+    <!-- Checkboxes -->
+    <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:16px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px;font-weight:600">
+        <input type="checkbox" id="p-is-published" checked style="width:16px;height:16px">
+        Published (visible in store)
+      </label>
+    </div>
+
     <input type="hidden" id="p-idx" value="-1">
     <button class="btn btn-primary" style="width:100%;margin-top:4px" onclick="saveProduct()">Save Product</button>
   </div>
 </div>
+
 
 <div id="tpl-order" style="display:none">
   <div class="modal">
