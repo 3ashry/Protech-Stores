@@ -597,6 +597,35 @@ function showModal(tplId) {
   overlay.innerHTML = tpl.innerHTML;
   overlay.style.display = 'flex';
   document.body.style.overflow = 'hidden';
+
+  // Re-wire offer checkbox after modal renders
+  const offerCb = overlay.querySelector('#p-is-offer');
+  if (offerCb) {
+    offerCb.onchange = function() {
+      const row = overlay.querySelector('#p-offer-row');
+      if (row) row.style.display = this.checked ? 'block' : 'none';
+    };
+  }
+
+  // Re-wire offer price preview
+  const offerPrice = overlay.querySelector('#p-offer-price');
+  if (offerPrice) {
+    offerPrice.oninput = function() {
+      const price = parseFloat(overlay.querySelector('#p-price')?.value || 0);
+      const offer = parseFloat(this.value || 0);
+      const prev = overlay.querySelector('#p-offer-preview');
+      if (!prev) return;
+      if (offer > 0 && price > 0 && offer < price) {
+        prev.style.color = '#F26A21';
+        prev.textContent = `Save ${Math.round((1 - offer/price)*100)}% off EGP ${fmt(price)}`;
+      } else if (offer >= price && price > 0) {
+        prev.style.color = '#e53e3e';
+        prev.textContent = 'Offer price must be less than original price';
+      } else {
+        prev.textContent = '';
+      }
+    };
+  }
 }
 
 function closeModal() {
