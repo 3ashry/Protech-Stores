@@ -69,6 +69,18 @@ function renderHome() {
 }
 
 // ── INVENTORY ──
+const CATEGORIES = [
+  { id: 'electric',  label: 'Electric Tools' },
+  { id: 'battery',   label: 'Battery Tools' },
+  { id: 'hand',      label: 'Hand Tools' },
+  { id: 'measuring', label: 'Measuring Tools' },
+  { id: 'safety',    label: 'Safety Tools' },
+  { id: 'car',       label: 'Car Tools' },
+  { id: 'garden',    label: 'Gardening Tools' },
+  { id: 'new',       label: 'New Arrivals' },
+];
+const BRANDS = ['Total', 'Wadfow'];
+
 function renderInventory() {
   const ps = cache.products;
   const oos = ps.filter(p => parseInt(p.qty || 0) === 0).length;
@@ -81,17 +93,29 @@ function renderInventory() {
     <div class="stat-card blue"><div class="stat-val">${low}</div><div class="stat-label">Low Stock ≤5</div></div>
     <div class="stat-card green"><div class="stat-val">EGP ${fmt(totalVal)}</div><div class="stat-label">Inventory Value</div></div>`;
 
-  document.getElementById('inv-tbody').innerHTML = ps.length ? ps.map(p => `
+  document.getElementById('inv-tbody').innerHTML = ps.length ? ps.map(p => {
+    const cat = CATEGORIES.find(c => c.id === p.category);
+    const isOffer = p.is_offer && p.offer_price;
+    return `
     <tr>
       <td><span class="badge b-orange">${p.code}</span></td>
-      <td><strong>${p.name}</strong></td>
+      <td>
+        <strong>${p.name}</strong>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">
+          ${cat ? `<span class="badge b-info" style="font-size:10px">${cat.label}</span>` : ''}
+          ${p.brand ? `<span class="badge b-gray" style="font-size:10px">${p.brand}</span>` : ''}
+          ${isOffer ? `<span class="badge b-danger" style="font-size:10px">🔥 Offer: EGP ${fmt(p.offer_price)}</span>` : ''}
+          ${!p.is_published ? `<span class="badge b-gray" style="font-size:10px">Hidden</span>` : ''}
+        </div>
+      </td>
       <td><span class="badge ${parseInt(p.qty || 0) === 0 ? 'b-danger' : parseInt(p.qty || 0) <= 5 ? 'b-warning' : 'b-success'}">${p.qty}</span></td>
       <td>EGP ${fmt(p.price)}</td>
       <td><div class="actions">
         <button class="btn btn-ghost btn-xs" onclick="editProduct('${p.id}')">Edit</button>
         <button class="btn btn-danger btn-xs" onclick="delProduct('${p.id}')">Remove</button>
       </div></td>
-    </tr>`).join('') : '<tr><td colspan="5"><div class="empty"><div class="empty-icon">📦</div>No products yet. Add your first product.</div></td></tr>';
+    </tr>`;
+  }).join('') : '<tr><td colspan="5"><div class="empty"><div class="empty-icon">📦</div>No products yet. Add your first product.</div></td></tr>';
 }
 
 // ── PRODUCT CRUD ──
@@ -100,6 +124,14 @@ function openAddProduct() {
   document.getElementById('p-name').value = '';
   document.getElementById('p-qty').value = '';
   document.getElementById('p-price').value = '';
+  document.getElementById('p-sell-price').value = '';
+  document.getElementById('p-category').value = '';
+  document.getElementById('p-brand').value = '';
+  document.getElementById('p-description').value = '';
+  document.getElementById('p-is-offer').checked = false;
+  document.getElementById('p-offer-price').value = '';
+  document.getElementById('p-is-published').checked = true;
+  document.getElementById('p-offer-row').style.display = 'none';
   document.getElementById('p-idx').value = '';
   document.getElementById('m-product-title').textContent = 'Add Product';
   showModal('tpl-product');
@@ -112,9 +144,22 @@ function editProduct(id) {
   document.getElementById('p-name').value = p.name;
   document.getElementById('p-qty').value = p.qty;
   document.getElementById('p-price').value = p.price;
+  document.getElementById('p-sell-price').value = p.sell_price || '';
+  document.getElementById('p-category').value = p.category || '';
+  document.getElementById('p-brand').value = p.brand || '';
+  document.getElementById('p-description').value = p.description || '';
+  document.getElementById('p-is-offer').checked = !!p.is_offer;
+  document.getElementById('p-offer-price').value = p.offer_price || '';
+  document.getElementById('p-is-published').checked = p.is_published !== false;
+  document.getElementById('p-offer-row').style.display = p.is_offer ? 'block' : 'none';
   document.getElementById('p-idx').value = id;
   document.getElementById('m-product-title').textContent = 'Edit Product';
   showModal('tpl-product');
+}
+
+function toggleOfferPrice() {
+  const cb = document.getElementById('p-is-offer');
+  document.getElementById('p-offer-row').style.display = cb.checked ? 'block' : 'none';
 }
 
 async function saveProduct() {
@@ -122,17 +167,28 @@ async function saveProduct() {
   const name = document.getElementById('p-name').value.trim();
   const qty = parseInt(document.getElementById('p-qty').value || 0);
   const price = parseFloat(document.getElementById('p-price').value || 0);
+  const sell_price = parseFloat(document.getElementById('p-sell-price').value || 0) || null;
+  const category = document.getElementById('p-category').value || null;
+  const brand = document.getElementById('p-brand').value || null;
+  const description = document.getElementById('p-description').value.trim() || null;
+  const is_offer = document.getElementById('p-is-offer').checked;
+  const offer_price = is_offer ? (parseFloat(document.getElementById('p-offer-price').value || 0) || null) : null;
+  const is_published = document.getElementById('p-is-published').checked;
+
   if (!code || !name) { showToast('Please fill in code and name'); return; }
+  if (is_offer && !offer_price) { showToast('Please enter the offer price'); return; }
 
   const id = document.getElementById('p-idx').value;
+  const payload = { code, name, qty, price, sell_price, category, brand, description, is_offer, offer_price, is_published };
+
   try {
     if (id) {
-      await dbUpdate('products', id, { code, name, qty, price });
+      await dbUpdate('products', id, payload);
       const i = cache.products.findIndex(x => x.id === id);
-      if (i >= 0) cache.products[i] = { ...cache.products[i], code, name, qty, price };
+      if (i >= 0) cache.products[i] = { ...cache.products[i], ...payload };
       showToast('Product updated ✓');
     } else {
-      const data = { id: genId(), code, name, qty, price, created_at: new Date().toISOString() };
+      const data = { id: genId(), ...payload, images: [], created_at: new Date().toISOString() };
       await dbInsert('products', data);
       cache.products.push(data);
       showToast('Product added ✓');
@@ -215,7 +271,6 @@ function renderPRows() {
       </div>
     </div>`).join('');
   calcTotal();
-  // Update total when shipping changes
   const shipInput = document.getElementById('o-shipest');
   if (shipInput) shipInput.oninput = calcTotal;
 }
@@ -235,7 +290,6 @@ async function saveOrder() {
   if (!customer_name || !phone) { showToast('Please enter customer name and phone'); return; }
   if (!phoneOk(phone)) { showToast('Invalid Egyptian phone number (e.g. 01208198008)'); return; }
 
-  // Check stock availability before saving
   for (const r of oPRows) {
     if (!r.code) continue;
     const prod = cache.products.find(p => p.code === r.code);
@@ -252,7 +306,6 @@ async function saveOrder() {
   const id = document.getElementById('o-idx').value;
   try {
     if (id) {
-      // Editing existing order — restore old quantities then deduct new ones
       const oldOrder = cache.orders.find(x => x.id === id);
       if (oldOrder && oldOrder.products) {
         for (const op of oldOrder.products) {
@@ -271,11 +324,14 @@ async function saveOrder() {
       if (i >= 0) cache.orders[i] = { ...cache.orders[i], ...upd };
       showToast('Order updated ✓');
     } else {
-      const data = { id: genId(), code: genCode('ORD'), customer_name, phone, ship_code, est_shipping, products: oPRows, total, status: 'Processing', date: today(), actual_shipping: 0, cancel_reason: '', created_at: new Date().toISOString() };
+      const data = {
+        id: genId(), code: genCode('ORD'), customer_name, phone, ship_code, est_shipping,
+        products: oPRows, total, status: 'Processing', date: today(),
+        actual_shipping: 0, cancel_reason: '', created_at: new Date().toISOString()
+      };
       await dbInsert('orders', data);
       cache.orders.unshift(data);
       showToast('Order created ✓');
-      // Send WhatsApp confirmation to customer
       const orderTotal = total + est_shipping;
       const waPhone = phone.startsWith('0') ? '2' + phone : phone;
       const waMsg = encodeURIComponent(
@@ -284,7 +340,6 @@ async function saveOrder() {
       window.open('https://wa.me/' + waPhone + '?text=' + waMsg, '_blank');
     }
 
-    // Deduct ordered quantities from inventory
     for (const r of oPRows) {
       if (!r.code) continue;
       const pi = cache.products.findIndex(p => p.code === r.code);
@@ -313,7 +368,6 @@ async function confirmWarehouse(id) {
   const order = cache.orders.find(x => x.id === id);
   if (!order) return;
   try {
-    // Add quantities back to inventory
     for (const op of (order.products || [])) {
       const pi = cache.products.findIndex(p => p.code === op.code);
       if (pi >= 0) {
@@ -322,7 +376,6 @@ async function confirmWarehouse(id) {
         await dbUpdate('products', cache.products[pi].id, { qty: restored });
       }
     }
-    // Mark order as warehouse_confirmed so button disappears
     await dbUpdate('orders', id, { warehouse_confirmed: true });
     const i = cache.orders.findIndex(x => x.id === id);
     if (i >= 0) cache.orders[i].warehouse_confirmed = true;
@@ -342,13 +395,7 @@ function viewOrder(id) {
     return `<tr><td>${pr?.name || p.code}</td><td style="text-align:center">${p.qty}</td><td>EGP ${fmt(p.sell_price)}</td><td>EGP ${fmt(line)}</td></tr>`;
   }).join('');
   const feedbackUrl = `${window.location.origin}/feedback.html?order=${o.code}`;
-  const waText = encodeURIComponent(`أهلاً ${o.customer_name} 😊
-شكراً لتسوقك من بروتيك! 🔧
-
-نرجو منك تقييم تجربتك معنا من خلال الرابط ده:
-${feedbackUrl}
-
-رأيك يهمنا ويساعدنا نتحسن أكتر 🙏`);
+  const waText = encodeURIComponent(`أهلاً ${o.customer_name} 😊\nشكراً لتسوقك من بروتيك! 🔧\n\nنرجو منك تقييم تجربتك معنا من خلال الرابط ده:\n${feedbackUrl}\n\nرأيك يهمنا ويساعدنا نتحسن أكتر 🙏`);
   const waPhone = o.phone.startsWith('0') ? '2' + o.phone : o.phone;
   const waLink = `https://wa.me/${waPhone}?text=${waText}`;
 
@@ -536,7 +583,6 @@ function showModal(tplId) {
   const overlay = document.getElementById('overlay');
   overlay.innerHTML = tpl.innerHTML;
   overlay.style.display = 'flex';
-  // Prevent body scroll on mobile
   document.body.style.overflow = 'hidden';
 }
 
