@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
+<meta charset="UTFf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -9,6 +9,43 @@
 <title>Protech Orders</title>
 <link rel="stylesheet" href="css/app.css">
 <link rel="manifest" href="manifest.json">
+  <style>
+  /* Fix checkboxes and toggles in modals */
+  .modal input[type="checkbox"] {
+    appearance: auto !important;
+    -webkit-appearance: checkbox !important;
+    width: 16px !important;
+    height: 16px !important;
+    min-width: 16px !important;
+    min-height: 16px !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    position: relative !important;
+    display: inline-block !important;
+    cursor: pointer !important;
+    accent-color: #F26A21;
+  }
+
+  .modal input[type="checkbox"]:checked {
+    accent-color: #F26A21 !important;
+  }
+
+  /* Fix category checkbox labels */
+  .modal label {
+    display: flex !important;
+    align-items: center !important;
+    cursor: pointer !important;
+  }
+
+  /* Make checked category boxes highlight */
+  .modal .p-cat-label input[type="checkbox"]:checked + span,
+  .modal label:has(input[type="checkbox"]:checked) {
+    border-color: #F26A21 !important;
+    background: #fff5f0 !important;
+    color: #C04E0F !important;
+    font-weight: 700 !important;
+  }
+</style>
 </head>
 <body>
 
