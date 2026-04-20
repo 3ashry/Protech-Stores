@@ -75,6 +75,54 @@ const CAT_LABELS = {
   garden: 'Gardening Tools', new: 'New Arrivals'
 };
 
+
+// ── IMAGE UPLOAD ──
+const SB_URL_IMG = 'https://wljxplbcfoorqpoflcdz.supabase.co';
+const SB_KEY_IMG = 'sb_publishable_zsHh-eOarHI7BSGtuP6WWQ_PQ4ACoHG';
+
+async function uploadProductImage(file, productId) {
+  const ext = file.name.split('.').pop();
+  const path = `products/${productId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+  const res = await fetch(`${SB_URL_IMG}/storage/v1/object/protech-media/${path}`, {
+    method: 'POST',
+    headers: { apikey: SB_KEY_IMG, Authorization: 'Bearer ' + SB_KEY_IMG, 'Content-Type': file.type, 'x-upsert': 'true' },
+    body: file
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return `${SB_URL_IMG}/storage/v1/object/public/protech-media/${path}`;
+}
+
+function renderImagePreviews(images) {
+  const container = document.getElementById('p-image-previews');
+  if (!container) return;
+  container.innerHTML = images.map((url, i) => `
+    <div style="position:relative;width:80px;height:80px;border-radius:8px;overflow:hidden;border:2px solid ${i===0?'#F26A21':'#e0e0e0'}">
+      <img src="${url}" style="width:100%;height:100%;object-fit:cover">
+      ${i===0?'<div style="position:absolute;bottom:0;left:0;right:0;background:#F26A21;color:#fff;font-size:10px;font-weight:700;text-align:center;padding:2px">Main</div>':''}
+      <button onclick="removeProductImage(${i})" style="position:absolute;top:2px;right:2px;width:20px;height:20px;background:rgba(200,0,0,.8);color:#fff;border:0;border-radius:50%;font-size:11px;cursor:pointer;display:grid;place-items:center">✕</button>
+    </div>`).join('');
+}
+
+let currentProductImages = [];
+
+
+async function handleProductImageUpload(files) {
+  if (!files || !files.length) return;
+  showToast('Uploading images...');
+  const id = document.getElementById('p-idx').value || ('new-' + Date.now());
+  try {
+    const urls = await Promise.all(Array.from(files).map(f => uploadProductImage(f, id)));
+    currentProductImages = [...currentProductImages, ...urls];
+    renderImagePreviews(currentProductImages);
+    showToast('Images uploaded ✓');
+  } catch(e) { showToast('Upload failed: ' + e.message); }
+}
+
+function removeProductImage(idx) {
+  currentProductImages = currentProductImages.filter((_, i) => i !== idx);
+  renderImagePreviews(currentProductImages);
+}
+
 // ── INVENTORY ──
 function renderInventory() {
   const ps = cache.products;
@@ -143,6 +191,7 @@ function updateDiscountPreview() {
 
 // ── PRODUCT CRUD ──
 function openAddProduct() {
+  currentProductImages = [];
   document.getElementById('p-code').value = '';
   document.getElementById('p-name').value = '';
   document.getElementById('p-qty').value = '';
@@ -157,11 +206,13 @@ function openAddProduct() {
   document.getElementById('p-idx').value = '';
   document.getElementById('m-product-title').textContent = 'Add Product';
   showModal('tpl-product');
+  setTimeout(() => renderImagePreviews([]), 50);
 }
 
 function editProduct(id) {
   const p = cache.products.find(x => x.id === id);
   if (!p) return;
+  currentProductImages = Array.isArray(p.images) ? [...p.images] : [];
   document.getElementById('p-code').value = p.code;
   document.getElementById('p-name').value = p.name;
   document.getElementById('p-qty').value = p.qty;
@@ -172,12 +223,12 @@ function editProduct(id) {
   document.getElementById('p-offer-price').value = p.offer_price || '';
   document.getElementById('p-offer-row').style.display = p.is_offer ? 'block' : 'none';
   document.getElementById('p-is-published').checked = p.is_published !== false;
-  // Handle categories — support both old string and new array
   const cats = Array.isArray(p.categories) ? p.categories : (p.category ? [p.category] : []);
   document.querySelectorAll('.p-cat-cb').forEach(cb => { cb.checked = cats.includes(cb.value); });
   document.getElementById('p-idx').value = id;
   document.getElementById('m-product-title').textContent = 'Edit Product';
   showModal('tpl-product');
+  setTimeout(() => renderImagePreviews(currentProductImages), 50);
 }
 
 async function saveProduct() {
@@ -198,7 +249,7 @@ async function saveProduct() {
   if (is_offer && !offer_price) { showToast('Please enter the discounted price'); return; }
 
   const id = document.getElementById('p-idx').value;
-  const payload = { code, name, qty, price, brand, description, is_offer, offer_price, is_published, categories, category };
+  const payload = { code, name, qty, price, brand, description, is_offer, offer_price, is_published, categories, category, images: currentProductImages };
 
   try {
     if (id) {
@@ -597,35 +648,6 @@ function showModal(tplId) {
   overlay.innerHTML = tpl.innerHTML;
   overlay.style.display = 'flex';
   document.body.style.overflow = 'hidden';
-
-  // Re-wire offer checkbox after modal renders
-  const offerCb = overlay.querySelector('#p-is-offer');
-  if (offerCb) {
-    offerCb.onchange = function() {
-      const row = overlay.querySelector('#p-offer-row');
-      if (row) row.style.display = this.checked ? 'block' : 'none';
-    };
-  }
-
-  // Re-wire offer price preview
-  const offerPrice = overlay.querySelector('#p-offer-price');
-  if (offerPrice) {
-    offerPrice.oninput = function() {
-      const price = parseFloat(overlay.querySelector('#p-price')?.value || 0);
-      const offer = parseFloat(this.value || 0);
-      const prev = overlay.querySelector('#p-offer-preview');
-      if (!prev) return;
-      if (offer > 0 && price > 0 && offer < price) {
-        prev.style.color = '#F26A21';
-        prev.textContent = `Save ${Math.round((1 - offer/price)*100)}% off EGP ${fmt(price)}`;
-      } else if (offer >= price && price > 0) {
-        prev.style.color = '#e53e3e';
-        prev.textContent = 'Offer price must be less than original price';
-      } else {
-        prev.textContent = '';
-      }
-    };
-  }
 }
 
 function closeModal() {
