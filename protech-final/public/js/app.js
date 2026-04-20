@@ -258,7 +258,7 @@ async function saveProduct() {
       if (i >= 0) cache.products[i] = { ...cache.products[i], ...payload };
       showToast('Product updated ✓');
     } else {
-      const data = { id: genId(), ...payload, images: [], created_at: new Date().toISOString() };
+      const data = { id: genId(), ...payload, created_at: new Date().toISOString() };
       await dbInsert('products', data);
       cache.products.push(data);
       showToast('Product added ✓');
