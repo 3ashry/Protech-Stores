@@ -659,7 +659,6 @@ document.getElementById('o-phone').value = o.phone;
 document.getElementById('o-shipcode').value = o.ship_code || '';
 document.getElementById('o-shipest').value = o.est_shipping || '';
 document.getElementById('o-idx').value = id;
-document.getElementById('o-editing-order-id').value = id;
 document.getElementById('m-order-title').textContent = 'Edit Order — ' + o.customer_name;
 renderPRows();
 showModal('tpl-order');
