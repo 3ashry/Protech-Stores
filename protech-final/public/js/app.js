@@ -22,6 +22,298 @@ function go(id) {
   document.querySelectorAll('.bnav-btn').forEach((t, i) => t.classList.toggle('active', SCREENS[i] === id));
   renderAll();
 }
+// ═══════════════════════════════════════════════════════════════════
+//  PROTECH ADMIN — Order Actions (WhatsApp Message + PDF Invoice)
+//  Paste these functions into app.js BEFORE your renderOrders() call
+// ═══════════════════════════════════════════════════════════════════
+
+// ── 1. Build the WhatsApp message text ──────────────────────────────
+function buildWhatsAppMessage(order) {
+  const products = Array.isArray(order.products)
+    ? order.products
+        .map(p => `• ${p.name} × ${p.qty || 1} — ${((p.price || 0) * (p.qty || 1)).toLocaleString('ar-EG')} ج.م`)
+        .join('\n')
+    : 'لا توجد منتجات';
+
+  const shipping = order.est_shipping ?? 80;
+  const total = order.total ?? 0;
+
+  const message =
+`مرحباً ${order.customer_name} 👋
+
+شكراً لطلبك من *بروتيك* 🛠️
+تم تأكيد طلبك وجاري التجهيز.
+
+📦 *تفاصيل الطلب:*
+${products}
+
+🚚 رسوم الشحن: ${shipping.toLocaleString('ar-EG')} ج.م
+💰 *الإجمالي الكلي: ${total.toLocaleString('ar-EG')} ج.م*
+
+📬 *كود الشحن: ${order.ship_code || 'سيتم إرساله قريباً'}*
+
+سيتم التواصل معك فور شحن طلبك.
+بروتيك — الشغل عليك والعدة علينا 🧡
+protechstores.com`;
+
+  return encodeURIComponent(message);
+}
+
+// ── 2. Generate and print PDF Invoice ───────────────────────────────
+function generateInvoicePDF(order) {
+  const products = Array.isArray(order.products)
+    ? order.products
+        .map(p => `
+          <tr>
+            <td>${p.name || '—'}</td>
+            <td style="text-align:center">${p.qty || 1}</td>
+            <td style="text-align:center">${(p.price || 0).toLocaleString('ar-EG')} ج.م</td>
+            <td style="text-align:center">${((p.price || 0) * (p.qty || 1)).toLocaleString('ar-EG')} ج.م</td>
+          </tr>`)
+        .join('')
+    : '<tr><td colspan="4" style="text-align:center">لا توجد منتجات</td></tr>';
+
+  const orderDate = order.created_at || order.date
+    ? new Date(order.created_at || order.date).toLocaleDateString('ar-EG', {
+        year: 'numeric', month: 'long', day: 'numeric'
+      })
+    : '—';
+
+  const invoiceHTML = `<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+  <meta charset="UTF-8"/>
+  <title>فاتورة — ${order.code || order.id}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      padding: 40px;
+      color: #222;
+      direction: rtl;
+      background: #fff;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      padding-bottom: 20px;
+      border-bottom: 4px solid #f97316;
+      margin-bottom: 28px;
+    }
+    .brand-name {
+      font-size: 32px;
+      font-weight: 900;
+      color: #f97316;
+      letter-spacing: -1px;
+    }
+    .brand-tagline { font-size: 12px; color: #888; margin-top: 4px; }
+    .invoice-meta { text-align: left; font-size: 13px; line-height: 1.8; }
+    .invoice-meta .label { color: #888; font-size: 11px; }
+    .invoice-meta .value { font-weight: bold; color: #222; }
+    .section-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #f97316;
+      margin-bottom: 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #fee2c8;
+    }
+    .info-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px 24px;
+      background: #fff8f3;
+      border: 1px solid #fed7aa;
+      border-radius: 10px;
+      padding: 16px 20px;
+      margin-bottom: 28px;
+      font-size: 14px;
+    }
+    .info-item { line-height: 1.6; }
+    .info-label { color: #888; font-size: 11px; }
+    .info-value { font-weight: 600; }
+    .ship-code { color: #f97316; font-size: 16px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin-bottom: 24px;
+    }
+    thead th {
+      background: #f97316;
+      color: white;
+      padding: 10px 12px;
+      text-align: center;
+      font-weight: 600;
+    }
+    thead th:first-child { text-align: right; }
+    tbody td {
+      padding: 9px 12px;
+      border-bottom: 1px solid #f0f0f0;
+    }
+    tbody tr:nth-child(even) { background: #fafafa; }
+    .totals-section {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 40px;
+    }
+    .totals-table { min-width: 280px; font-size: 14px; }
+    .totals-table td { padding: 7px 12px; }
+    .totals-table .grand-total td {
+      background: #f97316;
+      color: white;
+      font-size: 16px;
+      font-weight: 700;
+      border-radius: 0;
+    }
+    .footer {
+      text-align: center;
+      color: #aaa;
+      font-size: 11px;
+      border-top: 1px solid #eee;
+      padding-top: 16px;
+    }
+    @media print {
+      body { padding: 20px; }
+      .no-print { display: none !important; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Print Button (hidden on print) -->
+  <div class="no-print" style="margin-bottom:20px;text-align:left">
+    <button onclick="window.print()"
+      style="background:#f97316;color:white;padding:10px 24px;border:none;border-radius:8px;font-size:14px;cursor:pointer;font-weight:bold">
+      🖨️ طباعة / حفظ PDF
+    </button>
+  </div>
+
+  <!-- Header -->
+  <div class="header">
+    <div>
+      <div class="brand-name">🛠️ بروتيك</div>
+      <div class="brand-tagline">الشغل عليك والعدة علينا</div>
+    </div>
+    <div class="invoice-meta">
+      <div class="label">رقم الفاتورة</div>
+      <div class="value">#${order.code || order.id}</div>
+      <div class="label" style="margin-top:6px">تاريخ الطلب</div>
+      <div class="value">${orderDate}</div>
+    </div>
+  </div>
+
+  <!-- Customer Info -->
+  <div class="section-title">بيانات العميل والشحن</div>
+  <div class="info-grid">
+    <div class="info-item">
+      <div class="info-label">اسم العميل</div>
+      <div class="info-value">${order.customer_name || '—'}</div>
+    </div>
+    <div class="info-item">
+      <div class="info-label">رقم الهاتف</div>
+      <div class="info-value">${order.phone || '—'}</div>
+    </div>
+    <div class="info-item">
+      <div class="info-label">كود الشحن</div>
+      <div class="info-value ship-code">${order.ship_code || 'لم يُحدَّد بعد'}</div>
+    </div>
+    <div class="info-item">
+      <div class="info-label">حالة الطلب</div>
+      <div class="info-value">${order.status || 'جديد'}</div>
+    </div>
+    ${order.notes ? `
+    <div class="info-item" style="grid-column:1/-1">
+      <div class="info-label">ملاحظات</div>
+      <div class="info-value">${order.notes}</div>
+    </div>` : ''}
+  </div>
+
+  <!-- Products Table -->
+  <div class="section-title">المنتجات المطلوبة</div>
+  <table>
+    <thead>
+      <tr>
+        <th style="text-align:right">المنتج</th>
+        <th>الكمية</th>
+        <th>سعر الوحدة</th>
+        <th>الإجمالي</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${products}
+    </tbody>
+  </table>
+
+  <!-- Totals -->
+  <div class="totals-section">
+    <table class="totals-table">
+      <tr>
+        <td style="color:#888">رسوم الشحن</td>
+        <td style="text-align:left;font-weight:600">${(order.est_shipping ?? 80).toLocaleString('ar-EG')} ج.م</td>
+      </tr>
+      <tr class="grand-total">
+        <td>💰 الإجمالي الكلي</td>
+        <td style="text-align:left">${(order.total ?? 0).toLocaleString('ar-EG')} ج.م</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    بروتيك | protechstores.com | واتساب: 201091011380+<br/>
+    شكراً لثقتك بنا 🧡
+  </div>
+
+</body>
+</html>`;
+
+  const win = window.open('', '_blank', 'width=850,height=900');
+  if (win) {
+    win.document.write(invoiceHTML);
+    win.document.close();
+  } else {
+    alert('يرجى السماح بالنوافذ المنبثقة لطباعة الفاتورة');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  HOW TO USE IN YOUR renderOrders() FUNCTION
+//  Find where you build the HTML string for each order card and
+//  add the following HTML block inside each order card:
+// ═══════════════════════════════════════════════════════════════════
+//
+//  Step 1: Store the order object on the button using data attribute
+//  Step 2: Add the buttons HTML to the order card
+//
+//  EXAMPLE — inside your renderOrders map/forEach:
+//
+//    const orderDataAttr = JSON.stringify(order).replace(/'/g, "\\'");
+//
+//    const actionsHTML = `
+//      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;border-top:1px solid #f0f0f0;padding-top:12px">
+//        <a
+//          href="https://wa.me/2${(order.phone||'').replace(/^0/,'')}?text=${buildWhatsAppMessage(order)}"
+//          target="_blank"
+//          style="display:inline-flex;align-items:center;gap:6px;background:#25D366;color:white;
+//                 padding:9px 18px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:13px"
+//        >
+//          📲 إرسال واتساب
+//        </a>
+//        <button
+//          onclick='generateInvoicePDF(${JSON.stringify(order).replace(/\\/g,"\\\\").replace(/'/g,"\\'")})'
+//          style="display:inline-flex;align-items:center;gap:6px;background:#f97316;color:white;
+//                 padding:9px 18px;border-radius:8px;border:none;cursor:pointer;font-weight:bold;font-size:13px"
+//        >
+//          🧾 فاتورة PDF
+//        </button>
+//      </div>
+//    `;
+//
+//  Then append actionsHTML to your order card HTML string.
+// ═══════════════════════════════════════════════════════════════════
+
 
 // ── RENDER ALL ──
 function renderAll() {
