@@ -11,6 +11,60 @@ function showToast(msg) {
   t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 2800);
 }
+function updateSendShipBtn(orderId) {
+  const shipCode = document.getElementById('o-shipcode')?.value?.trim();
+  const existing = document.getElementById('send-ship-btn');
+  if (existing) existing.remove();
+  if (!shipCode) return;
+
+  const o = cache.orders.find(x => x.id === orderId);
+  if (!o) return;
+
+  const products = Array.isArray(o.products)
+    ? o.products.map(p => `• ${p.name || p.code} × ${p.qty || 1} — ${((p.sell_price || p.price || 0) * (p.qty || 1)).toLocaleString('ar-EG')} ج.م`).join('\n')
+    : '';
+
+  const shipping = o.est_shipping || 80;
+  const total = o.total || 0;
+
+  const msg = encodeURIComponent(
+`مرحباً ${o.customer_name} 👋
+
+شكراً لطلبك من *بروتيك* 🛠️
+تم تجهيز طلبك وجاري الشحن.
+
+📦 *تفاصيل الطلب:*
+${products}
+
+🚚 رسوم الشحن: ${shipping} ج.م
+💰 *الإجمالي الكلي: ${total} ج.م*
+
+📬 *كود الشحن: ${shipCode}*
+🔍 تتبع شحنتك: https://bosta.co/en-eg/tracking-shipments
+
+بروتيك — الشغل عليك والعدة علينا 🧡
+protechstores.com`
+  );
+
+  const waPhone = (o.phone || '').startsWith('0') ? '2' + o.phone : o.phone;
+  const waLink = `https://wa.me/${waPhone}?text=${msg}`;
+
+  const btn = document.createElement('div');
+  btn.id = 'send-ship-btn';
+  btn.style.cssText = 'margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;';
+  btn.innerHTML = `
+    <a href="${waLink}" target="_blank"
+      style="display:inline-flex;align-items:center;gap:8px;background:#25D366;color:white;padding:11px 20px;border-radius:8px;text-decoration:none;font-weight:700;font-size:14px;">
+      📲 إرسال كود الشحن عبر واتساب
+    </a>
+    <button onclick="generateInvoicePDF(${JSON.stringify({...o, ship_code: document.getElementById('o-shipcode').value.trim()}).replace(/'/g, "\\'")})"
+      style="display:inline-flex;align-items:center;gap:8px;background:#f97316;color:white;padding:11px 20px;border-radius:8px;border:none;cursor:pointer;font-weight:700;font-size:14px;">
+      🧾 طباعة الفاتورة PDF
+    </button>`;
+
+  const shipGroup = document.getElementById('o-shipcode')?.closest('.form-group');
+  if (shipGroup) shipGroup.after(btn);
+}
 
 // ── NAVIGATION ──
 const SCREENS = ['home', 'inventory', 'orders', 'returns', 'financials', 'invoices'];
@@ -601,12 +655,24 @@ function editOrder(id) {
   if (!o) return;
   oPRows = (o.products || [{ code: '', qty: 1, sell_price: '' }]).map(p => ({ ...p }));
   document.getElementById('o-name').value = o.customer_name;
-  document.getElementById('o-phone').value = o.phone;
-  document.getElementById('o-shipcode').value = o.ship_code || '';
-  document.getElementById('o-shipest').value = o.est_shipping || '';
-  document.getElementById('o-idx').value = id;
-  document.getElementById('m-order-title').textContent = 'Edit Order';
-  renderPRows(); showModal('tpl-order');
+document.getElementById('o-phone').value = o.phone;
+document.getElementById('o-shipcode').value = o.ship_code || '';
+document.getElementById('o-shipest').value = o.est_shipping || '';
+document.getElementById('o-idx').value = id;
+document.getElementById('o-editing-order-id').value = id;
+document.getElementById('m-order-title').textContent = 'Edit Order — ' + o.customer_name;
+renderPRows();
+showModal('tpl-order');
+setTimeout(() => {
+  const shipInput = document.getElementById('o-shipcode');
+  if (shipInput) {
+    shipInput.style.border = '2px solid #F26A21';
+    shipInput.style.background = '#fff8f3';
+    shipInput.focus();
+    shipInput.oninput = () => updateSendShipBtn(id);
+  }
+  updateSendShipBtn(id);
+}, 80);
 }
 
 function addProdRow() { oPRows.push({ code: '', qty: 1, sell_price: '' }); renderPRows(); }
@@ -691,11 +757,6 @@ async function saveOrder() {
       await dbInsert('orders', data);
       cache.orders.unshift(data);
       showToast('Order created ✓');
-      const waPhone = phone.startsWith('0') ? '2' + phone : phone;
-      const waMsg = encodeURIComponent(
-        `أهلاً ${customer_name} 👋\n\nطلبك اتأكد مع بروتيك! 🔧\n\n📦 تفاصيل طلبك:\n• رقم الطلب: ${data.code}\n• شركة الشحن: بوسطة\n• كود التتبع: ${ship_code || 'سيتم إرساله قريباً'}\n• إجمالي الطلب: ${Math.round(total + est_shipping)} جنيه\n\n🔍 تقدر تتابع شحنتك من هنا:\nhttps://bosta.co/en-eg/tracking-shipments\n\nشكراً لثقتك فينا! 💙`
-      );
-      window.open('https://wa.me/' + waPhone + '?text=' + waMsg, '_blank');
     }
 
     for (const r of oPRows) {
