@@ -655,25 +655,23 @@ function editOrder(id) {
   if (!o) return;
   oPRows = (o.products || [{ code: '', qty: 1, sell_price: '' }]).map(p => ({ ...p }));
   showModal('tpl-order');
-setTimeout(() => {
-  showModal('tpl-order');
-setTimeout(() => {
-  document.getElementById('o-name').value = o.customer_name;
-  document.getElementById('o-phone').value = o.phone;
-  document.getElementById('o-shipcode').value = o.ship_code || '';
-  document.getElementById('o-shipest').value = o.est_shipping || '';
-  document.getElementById('o-idx').value = id;
-  document.getElementById('m-order-title').textContent = 'Edit Order — ' + o.customer_name;
-  renderPRows();
-  const shipInput = document.getElementById('o-shipcode');
-  if (shipInput) {
-    shipInput.style.border = '2px solid #F26A21';
-    shipInput.style.background = '#fff8f3';
-    shipInput.focus();
-    shipInput.oninput = () => updateSendShipBtn(id);
-  }
-  updateSendShipBtn(id);
-}, 80);
+  setTimeout(() => {
+    document.getElementById('o-name').value = o.customer_name;
+    document.getElementById('o-phone').value = o.phone;
+    document.getElementById('o-shipcode').value = o.ship_code || '';
+    document.getElementById('o-shipest').value = o.est_shipping || '';
+    document.getElementById('o-idx').value = id;
+    document.getElementById('m-order-title').textContent = 'Edit Order — ' + o.customer_name;
+    renderPRows();
+    const shipInput = document.getElementById('o-shipcode');
+    if (shipInput) {
+      shipInput.style.border = '2px solid #F26A21';
+      shipInput.style.background = '#fff8f3';
+      shipInput.focus();
+      shipInput.oninput = () => updateSendShipBtn(id);
+    }
+    updateSendShipBtn(id);
+  }, 80);
 }
 
 function addProdRow() { oPRows.push({ code: '', qty: 1, sell_price: '' }); renderPRows(); }
