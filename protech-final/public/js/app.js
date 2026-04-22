@@ -418,7 +418,8 @@ function renderHome() {
 const CAT_LABELS = {
   electric: 'Electric Tools', battery: 'Battery Tools', hand: 'Hand Tools',
   measuring: 'Measuring Tools', safety: 'Safety Tools', car: 'Car Tools',
-  garden: 'Gardening Tools', new: 'New Arrivals'
+  garden: 'Gardening Tools', new: 'New Arrivals',
+  sets: 'Tool Sets & Combos',
 };
 
 
