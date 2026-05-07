@@ -10,6 +10,11 @@
       notifyButton: { enable: false },
       allowLocalhostAsSecureOrigin: true,
     });
+    // Force prompt after login
+    const permission = await OneSignal.Notifications.permission;
+    if (!permission) {
+      await OneSignal.Notifications.requestPermission();
+    }
   });
 </script>
 <meta charset="UTFf-8">
