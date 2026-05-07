@@ -1,37 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
-<script>
-  window.OneSignalDeferred = window.OneSignalDeferred || [];
-  OneSignalDeferred.push(async function(OneSignal) {
-    await OneSignal.init({
-      appId: "ffdfd9c4-f089-4d84-b38a-17b869d0e0ea",
-      notifyButton: { enable: true },
-      allowLocalhostAsSecureOrigin: true,
-      promptOptions: {
-        slidedown: {
-          prompts: [
-            {
-              type: "push",
-              autoPrompt: true,
-              text: {
-                actionMessage: "Allow notifications for new orders",
-                acceptButton: "Allow",
-                cancelButton: "No Thanks",
-              },
-              delay: {
-                pageViews: 1,
-                timeDelay: 2,
-              },
-            },
-          ],
-        },
-      },
-    });
-  });
-</script>
-<meta charset="UTFf-8">
+<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -463,6 +433,31 @@
       .catch(err => console.log("SW error:", err));
   }
 </script>
+  <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+<script>
+  window.OneSignalDeferred = window.OneSignalDeferred || [];
+  OneSignalDeferred.push(async function(OneSignal) {
+    await OneSignal.init({
+      appId: "ffdfd9c4-f089-4d84-b38a-17b869d0e0ea",
+      notifyButton: { enable: false },
+      allowLocalhostAsSecureOrigin: true,
+    });
+    // Request permission after 2 seconds
+    setTimeout(async () => {
+      try {
+        await OneSignal.Notifications.requestPermission();
+      } catch(e) {}
+    }, 2000);
+  });
+</script>
+<script>
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/service-worker.js")
+      .then(reg => console.log("SW registered"))
+      .catch(err => console.log("SW error:", err));
+  }
+</script>
+</body>
 </body>
 </html>
 
