@@ -19,8 +19,13 @@ function doLogin() {
     sessionStorage.setItem('pt_auth', '1');
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app').style.display = 'block';
-    showToast('Welcome back, Protech! 🔧');
     loadAll();
+    showToast('Welcome back, Protech! 🔧');
+    setTimeout(() => {
+      if (window.OneSignal) {
+        OneSignal.Notifications.requestPermission();
+      }
+    }, 3000);
   } else {
     errEl.style.display = 'block';
     errEl.textContent = 'Incorrect username or password.';
@@ -44,6 +49,12 @@ if (sessionStorage.getItem('pt_auth') === '1') {
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = 'block';
   loadAll();
+  // Request push permission after page loads
+  setTimeout(() => {
+    if (window.OneSignal) {
+      OneSignal.Notifications.requestPermission();
+    }
+  }, 3000);
 }
 
 // Allow Enter key on login
