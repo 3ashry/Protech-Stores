@@ -1054,5 +1054,4 @@ function genId() {
 
 if (sessionStorage.getItem('pt_auth') === '1') {
   requestNotificationPermission();
-  loadAll();
 }
