@@ -19,7 +19,12 @@ function playNotificationSound() {
     });
   } catch(e) {}
 }
-
+// Add this function anywhere in app.js:
+function printInvoice(id) {
+  const o = cache.orders.find(x => x.id === id);
+  if (!o) return;
+  generateInvoicePDF(o);
+}
 function requestNotificationPermission() {
   if ("Notification" in window && Notification.permission === "default") {
     Notification.requestPermission();
