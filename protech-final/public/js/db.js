@@ -21,6 +21,7 @@ function doLogin() {
     document.getElementById('app').style.display = 'block';
     loadAll();
     showToast('Welcome back, Protech! 🔧');
+    try { const a = new Audio('/cash.mp3'); a.volume = 0; a.play().catch(()=>{}); } catch(e) {}
     setTimeout(() => {
       if (window.OneSignal) {
         OneSignal.Notifications.requestPermission();
@@ -49,6 +50,7 @@ if (sessionStorage.getItem('pt_auth') === '1') {
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = 'block';
   loadAll();
+  try { const a = new Audio('/cash.mp3'); a.volume = 0; a.play().catch(()=>{}); } catch(e) {}
   // Request push permission after page loads
   setTimeout(() => {
     if (window.OneSignal) {
