@@ -7,14 +7,28 @@
   OneSignalDeferred.push(async function(OneSignal) {
     await OneSignal.init({
       appId: "ffdfd9c4-f089-4d84-b38a-17b869d0e0ea",
-      notifyButton: { enable: false },
+      notifyButton: { enable: true },
       allowLocalhostAsSecureOrigin: true,
+      promptOptions: {
+        slidedown: {
+          prompts: [
+            {
+              type: "push",
+              autoPrompt: true,
+              text: {
+                actionMessage: "Allow notifications for new orders",
+                acceptButton: "Allow",
+                cancelButton: "No Thanks",
+              },
+              delay: {
+                pageViews: 1,
+                timeDelay: 2,
+              },
+            },
+          ],
+        },
+      },
     });
-    // Force prompt after login
-    const permission = await OneSignal.Notifications.permission;
-    if (!permission) {
-      await OneSignal.Notifications.requestPermission();
-    }
   });
 </script>
 <meta charset="UTFf-8">
