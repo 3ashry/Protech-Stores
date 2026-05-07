@@ -1,11 +1,11 @@
 {
-  "name": "Protech Orders",
-  "short_name": "Protech",
-  "description": "Protech Order Management System",
+  "name": "Protech Admin",
+  "short_name": "بروتيك",
+  "description": "لوحة تحكم بروتيك",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#2D2926",
-  "theme_color": "#2D2926",
+  "background_color": "#1a1614",
+  "theme_color": "#F26A21",
   "orientation": "portrait-primary",
   "icons": [
     {
