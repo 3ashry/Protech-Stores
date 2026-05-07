@@ -31,6 +31,7 @@ function doLogin() {
       </div>
     `);
     showToast('Welcome back, Protech! 🔧');
+    loadAll();
   } else {
     errEl.style.display = 'block';
     errEl.textContent = 'Incorrect username or password.';
