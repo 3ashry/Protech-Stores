@@ -144,6 +144,9 @@ let cache = { products: [], orders: [], expenses: [], feedbacks: [] };
 
 async function loadAll() {
   try {
+    // Show loading indicator
+    document.querySelectorAll('.stat-val').forEach(el => el.textContent = '...');
+
     const [products, orders, expenses, feedbacks] = await Promise.all([
       dbFetch('products', { order: 'created_at.asc' }),
       dbFetch('orders', { order: 'created_at.desc' }),
@@ -159,4 +162,24 @@ async function loadAll() {
     showToast('Connection error — check your internet');
   }
   renderAll();
+
+  // Auto-refresh every 30 seconds to catch new orders
+  if (!window._autoRefreshStarted) {
+    window._autoRefreshStarted = true;
+    setInterval(async () => {
+      try {
+        const [products, orders, expenses, feedbacks] = await Promise.all([
+          dbFetch('products', { order: 'created_at.asc' }),
+          dbFetch('orders', { order: 'created_at.desc' }),
+          dbFetch('expenses', { order: 'created_at.desc' }),
+          dbFetch('feedbacks', { order: 'created_at.desc' })
+        ]);
+        cache.products = products || [];
+        cache.orders = orders || [];
+        cache.expenses = expenses || [];
+        cache.feedbacks = feedbacks || [];
+        renderAll();
+      } catch(e) {}
+    }, 30000);
+  }
 }
