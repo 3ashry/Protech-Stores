@@ -43,6 +43,7 @@ if (sessionStorage.getItem('pt_auth') === '1') {
   isLoggedIn = true;
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = 'block';
+  loadAll();
 }
 
 // Allow Enter key on login
