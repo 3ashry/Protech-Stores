@@ -41,7 +41,18 @@ function doLogout() {
 if (sessionStorage.getItem('pt_auth') === '1') {
   isLoggedIn = true;
   document.getElementById('login-screen').style.display = 'none';
-  document.getElementById('app').style.display = 'block';
+  document.getElementById('app').style.display = 'none'; // hide until data loads
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="loading-screen" style="
+      position:fixed;inset:0;background:#1a1614;z-index:9999;
+      display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
+    ">
+      <div style="font-size:48px">🛠️</div>
+      <div style="color:#F26A21;font-weight:700;font-size:1.1rem;font-family:Cairo,sans-serif;">جاري التحميل...</div>
+      <div style="width:48px;height:48px;border:4px solid #333;border-top-color:#F26A21;border-radius:50%;animation:spin .8s linear infinite;"></div>
+      <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+    </div>
+  `);
 }
 
 // Allow Enter key on login
