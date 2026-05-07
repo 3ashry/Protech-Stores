@@ -165,9 +165,6 @@ let cache = { products: [], orders: [], expenses: [], feedbacks: [] };
 
 async function loadAll() {
   try {
-    // Show loading indicator
-    document.querySelectorAll('.stat-val').forEach(el => el.textContent = '...');
-
     const [products, orders, expenses, feedbacks] = await Promise.all([
       dbFetch('products', { order: 'created_at.asc' }),
       dbFetch('orders', { order: 'created_at.desc' }),
@@ -182,9 +179,15 @@ async function loadAll() {
     console.warn('DB load error:', e);
     showToast('Connection error — check your internet');
   }
+
   renderAll();
 
-  // Auto-refresh every 30 seconds to catch new orders
+  // Remove loading screen
+  const screen = document.getElementById('loading-screen');
+  if (screen) screen.remove();
+  document.getElementById('app').style.display = 'block';
+
+  // Auto-refresh every 30 seconds
   if (!window._autoRefreshStarted) {
     window._autoRefreshStarted = true;
     setInterval(async () => {
