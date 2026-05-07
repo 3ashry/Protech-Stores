@@ -179,8 +179,40 @@ async function loadAll() {
         cache.orders = orders || [];
         cache.expenses = expenses || [];
         cache.feedbacks = feedbacks || [];
+        // Check for new orders and notify
+        const prevCount = parseInt(sessionStorage.getItem("protech_order_count") || "0");
+        if (orders && orders.length > prevCount && prevCount !== 0) {
+          const newestOrder = orders[0];
+          sendPushNotification(
+            newestOrder.customer_name,
+            newestOrder.total,
+            newestOrder.code
+          );
+        }
         renderAll();
       } catch(e) {}
     }, 30000);
+  }
+}
+
+async function sendPushNotification(customerName, total, orderCode) {
+  try {
+    await fetch('https://api.onesignal.com/notifications', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Key os_v2_app_77p5trhqrfgyjm4kc64gtuha5j64fi6bbmougwm4ubdbxxnoxqdpa6tlva53wfzwkestkao5eof6tiqveqyu6ds4khiy7ufd2ni3voi'
+      },
+      body: JSON.stringify({
+        app_id: 'ffdfd9c4-f089-4d84-b38a-17b869d0e0ea',
+        included_segments: ['Total Subscriptions'],
+        headings: { en: '🛒 New Order — Protech' },
+        contents: { en: `New order from ${customerName} — EGP ${total} — #${orderCode}` },
+        url: 'https://protech-stores.vercel.app',
+        chrome_web_icon: 'https://protech-stores.vercel.app/favicon.ico',
+      })
+    });
+  } catch(e) {
+    console.warn('Push notification failed:', e);
   }
 }
