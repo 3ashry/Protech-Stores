@@ -1054,9 +1054,5 @@ function genId() {
 
 if (sessionStorage.getItem('pt_auth') === '1') {
   requestNotificationPermission();
-  loadAll().then(() => {
-    const screen = document.getElementById('loading-screen');
-    if (screen) screen.remove();
-    document.getElementById('app').style.display = 'block';
-  });
+  loadAll();
 }
