@@ -647,21 +647,20 @@ async function delProduct(id) {
 
 // ── ORDERS ──
 function renderOrders() {
+  const prevCount = parseInt(sessionStorage.getItem("protech_order_count") || "0");
+  const newCount = cache.orders.length;
+  if (newCount > prevCount && prevCount !== 0) {
+    playNotificationSound();
+    showToast("🛒 طلب جديد وصل!");
+    if (Notification.permission === "granted") {
+      new Notification("بروتيك — طلب جديد! 🛒", {
+        body: `لديك ${newCount - prevCount} طلب جديد`,
+        icon: "/favicon.png",
+      });
+    }
+  }
+  sessionStorage.setItem("protech_order_count", newCount);
   const smap = { 'Processing': 'b-info', 'In Transit': 'b-warning', 'Delivered': 'b-success', 'Cancelled': 'b-danger', 'Returned': 'b-purple' };
-  document.getElementById('orders-tbody').innerHTML = cache.orders.length ? cache.orders.map(o => `
-    <tr>
-      <td><span class="badge b-orange">${o.code}</span></td>
-      <td><strong>${o.customer_name}</strong></td>
-      <td>${o.phone}</td>
-      <td>EGP ${fmt(o.total)}</td>
-      <td><span class="badge ${smap[o.status] || 'b-gray'}">${o.status}</span></td>
-      <td><div class="actions">
-        <button class="btn btn-ghost btn-xs" onclick="viewOrder('${o.id}')">View</button>
-        <button class="btn btn-dark btn-xs" onclick="editOrder('${o.id}')">Edit</button>
-        <button class="btn btn-danger btn-xs" onclick="delOrder('${o.id}')">Delete</button>
-      </div></td>
-    </tr>`).join('') : '<tr><td colspan="6"><div class="empty"><div class="empty-icon">🛒</div>No orders yet</div></td></tr>';
-}
 
 let oPRows = [];
 
@@ -1040,5 +1039,6 @@ function genId() {
 }
 
 if (sessionStorage.getItem('pt_auth') === '1') {
+  requestNotificationPermission();
   loadAll();
 }
