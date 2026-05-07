@@ -197,20 +197,10 @@ async function loadAll() {
 
 async function sendPushNotification(customerName, total, orderCode) {
   try {
-    await fetch('https://api.onesignal.com/notifications', {
+    await fetch('/api/notify', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Key os_v2_app_77p5trhqrfgyjm4kc64gtuha5j64fi6bbmougwm4ubdbxxnoxqdpa6tlva53wfzwkestkao5eof6tiqveqyu6ds4khiy7ufd2ni3voi'
-      },
-      body: JSON.stringify({
-        app_id: 'ffdfd9c4-f089-4d84-b38a-17b869d0e0ea',
-        included_segments: ['Total Subscriptions'],
-        headings: { en: '🛒 New Order — Protech' },
-        contents: { en: `New order from ${customerName} — EGP ${total} — #${orderCode}` },
-        url: 'https://protech-stores.vercel.app',
-        chrome_web_icon: 'https://protech-stores.vercel.app/favicon.ico',
-      })
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customerName, total, orderCode })
     });
   } catch(e) {
     console.warn('Push notification failed:', e);
