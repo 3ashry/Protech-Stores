@@ -1,8 +1,20 @@
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
   
-  const { customerName, total, orderCode } = req.body;
+  let customerName, total, orderCode;
   
+  // Handle Supabase webhook format
+  if (req.body.record) {
+    customerName = req.body.record.customer_name;
+    total = req.body.record.total;
+    orderCode = req.body.record.code;
+  } else {
+    // Handle direct call from app
+    customerName = req.body.customerName;
+    total = req.body.total;
+    orderCode = req.body.orderCode;
+  }
+
   try {
     const response = await fetch('https://api.onesignal.com/notifications', {
       method: 'POST',
