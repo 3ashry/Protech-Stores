@@ -4,8 +4,17 @@
       "runtime": "nodejs18.x"
     }
   },
-  "rewrites": [
-    { "source": "/(.*)", "destination": "/protech-final/public/$1" }
+  "routes": [
+    { "src": "/api/(.*)", "dest": "/api/$1" },
+    { "src": "/css/(.*)", "dest": "/protech-final/public/css/$1" },
+    { "src": "/js/(.*)", "dest": "/protech-final/public/js/$1" },
+    { "src": "/manifest.json", "dest": "/protech-final/public/manifest.json" },
+    { "src": "/service-worker.js", "dest": "/protech-final/public/service-worker.js" },
+    { "src": "/OneSignalSDKWorker.js", "dest": "/protech-final/public/OneSignalSDKWorker.js" },
+    { "src": "/favicon.ico", "dest": "/protech-final/public/favicon.ico" },
+    { "src": "/favicon.png", "dest": "/protech-final/public/favicon.png" },
+    { "src": "/cash.mp3", "dest": "/protech-final/public/cash.mp3" },
+    { "src": "/(.*)", "dest": "/protech-final/public/index.html" }
   ],
   "headers": [
     {
