@@ -3,13 +3,11 @@ export default async function handler(req, res) {
   
   let customerName, total, orderCode;
   
-  // Handle Supabase webhook format
   if (req.body.record) {
     customerName = req.body.record.customer_name;
     total = req.body.record.total;
     orderCode = req.body.record.code;
   } else {
-    // Handle direct call from app
     customerName = req.body.customerName;
     total = req.body.total;
     orderCode = req.body.orderCode;
@@ -25,10 +23,9 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         app_id: 'ffdfd9c4-f089-4d84-b38a-17b869d0e0ea',
         included_segments: ['Total Subscriptions'],
-        headings: { en: '🛒 New Order — Protech' },
-        contents: { en: `New order from ${customerName} — EGP ${total} — #${orderCode}` },
+        headings: { en: '🛒 طلب جديد — بروتيك' },
+        contents: { en: `طلب جديد من ${customerName} — ${total} جنيه — #${orderCode}` },
         url: 'https://protech-stores.vercel.app',
-        chrome_web_icon: 'https://protech-stores.vercel.app/favicon.ico',
       })
     });
     const data = await response.json();
