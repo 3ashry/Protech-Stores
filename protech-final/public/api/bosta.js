@@ -108,7 +108,9 @@ export default async function handler(req, res) {
     },
     dropOffAddress: {
       cityCode,
+      zone: city,        // Customer's governorate used as zone
       firstLine: address,
+      secondLine: address,
     },
     receiver: {
       firstName,
