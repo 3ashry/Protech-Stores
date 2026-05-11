@@ -1,79 +1,73 @@
 // protech-final/public/api/bosta.js
 // Vercel Serverless Function — Create Bosta shipment after order is placed
-// City codes verified from live Bosta API /cities response
 
-const BOSTA_API_KEY = 'f53060d7b770cde18e78d50d910bb710798f1db40916714b3f77039f23973631'; // ⚠️ Regenerate before going live
+const BOSTA_API_KEY = 'f53060d7b770cde18e78d50d910bb710798f1db40916714b3f77039f23973631';
 const BOSTA_BASE_URL = 'https://app.bosta.co/api/v2';
 
 const SUPABASE_URL = 'https://wljxplbcfoorqpoflcdz.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_zsHh-eOarHI7BSGtuP6WWQ_PQ4ACoHG';
 
-// CORS headers — required because the store is on a different domain
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
-// Arabic city name → Bosta city code
-// 100% verified from live Bosta /cities API response
 const CITY_MAP = {
-  'القاهرة':       'EG-01',
-  'القاهره':       'EG-01',
-  'الإسكندرية':   'EG-02',
-  'الاسكندريه':   'EG-02',
-  'الإسكندريه':   'EG-02',
+  'القاهرة':        'EG-01',
+  'القاهره':        'EG-01',
+  'الإسكندرية':    'EG-02',
+  'الاسكندريه':    'EG-02',
+  'الإسكندريه':    'EG-02',
   'الساحل الشمالي':'EG-03',
-  'البحيرة':      'EG-04',
-  'البحيره':      'EG-04',
-  'الدقهلية':     'EG-05',
-  'الدقهليه':     'EG-05',
-  'القليوبية':    'EG-06',
-  'القليوبيه':    'EG-06',
-  'الغربية':      'EG-07',
-  'الغربيه':      'EG-07',
-  'كفر الشيخ':    'EG-08',
-  'المنوفية':     'EG-09',
-  'المنوفيه':     'EG-09',
-  'الشرقية':      'EG-10',
-  'الشرقيه':      'EG-10',
-  'الإسماعيلية':  'EG-11',
-  'الاسماعيليه':  'EG-11',
-  'الإسماعيليه':  'EG-11',
-  'السويس':       'EG-12',
-  'بورسعيد':      'EG-13',
-  'بور سعيد':     'EG-13',
-  'دمياط':        'EG-14',
-  'الفيوم':       'EG-15',
-  'بني سويف':     'EG-16',
-  'أسيوط':        'EG-17',
-  'اسيوط':        'EG-17',
-  'سوهاج':        'EG-18',
-  'المنيا':       'EG-19',
-  'قنا':          'EG-20',
-  'أسوان':        'EG-21',
-  'اسوان':        'EG-21',
-  'الأقصر':       'EG-22',
-  'الاقصر':       'EG-22',
-  'البحر الأحمر': 'EG-23',
-  'البحر الاحمر': 'EG-23',
-  'الوادي الجديد':'EG-24',
-  'الجيزة':       'EG-25',
-  'الجيزه':       'EG-25',
-  'جنوب سيناء':   'EG-26',
-  'شمال سيناء':   'EG-27',
-  'مرسي مطروح':   'EG-28',
-  'مطروح':        'EG-28',
+  'البحيرة':       'EG-04',
+  'البحيره':       'EG-04',
+  'الدقهلية':      'EG-05',
+  'الدقهليه':      'EG-05',
+  'القليوبية':     'EG-06',
+  'القليوبيه':     'EG-06',
+  'الغربية':       'EG-07',
+  'الغربيه':       'EG-07',
+  'كفر الشيخ':     'EG-08',
+  'المنوفية':      'EG-09',
+  'المنوفيه':      'EG-09',
+  'الشرقية':       'EG-10',
+  'الشرقيه':       'EG-10',
+  'الإسماعيلية':   'EG-11',
+  'الاسماعيليه':   'EG-11',
+  'الإسماعيليه':   'EG-11',
+  'السويس':        'EG-12',
+  'بورسعيد':       'EG-13',
+  'بور سعيد':      'EG-13',
+  'دمياط':         'EG-14',
+  'الفيوم':        'EG-15',
+  'بني سويف':      'EG-16',
+  'أسيوط':         'EG-17',
+  'اسيوط':         'EG-17',
+  'سوهاج':         'EG-18',
+  'المنيا':        'EG-19',
+  'قنا':           'EG-20',
+  'أسوان':         'EG-21',
+  'اسوان':         'EG-21',
+  'الأقصر':        'EG-22',
+  'الاقصر':        'EG-22',
+  'البحر الأحمر':  'EG-23',
+  'البحر الاحمر':  'EG-23',
+  'الوادي الجديد': 'EG-24',
+  'الجيزة':        'EG-25',
+  'الجيزه':        'EG-25',
+  'جنوب سيناء':    'EG-26',
+  'شمال سيناء':    'EG-27',
+  'مرسي مطروح':    'EG-28',
+  'مطروح':         'EG-28',
 };
 
 export default async function handler(req, res) {
-  // Handle CORS preflight (OPTIONS) — this was causing the 405 error
   if (req.method === 'OPTIONS') {
     res.writeHead(204, CORS_HEADERS);
     return res.end();
   }
 
-  // Set CORS headers on every response
   Object.entries(CORS_HEADERS).forEach(([k, v]) => res.setHeader(k, v));
 
   if (req.method !== 'POST') return res.status(405).end();
@@ -102,8 +96,16 @@ export default async function handler(req, res) {
   }
 
   const bostaPayload = {
-    type: 10,
-    cod: total,
+    type: 10,           // SEND with COD
+    cod: total,         // Cash to collect on delivery
+    specs: {
+      packageType: 'Parcel',
+      size: 'SMALL',
+      packageDetails: {
+        itemsCount: 1,
+        description: 'أدوات',
+      },
+    },
     dropOffAddress: {
       cityCode,
       firstLine: address,
@@ -113,6 +115,7 @@ export default async function handler(req, res) {
       lastName,
       phone: formattedPhone,
     },
+    businessReference: orderId,  // Links Bosta shipment back to our order
     notes: notes || '',
   };
 
@@ -121,7 +124,7 @@ export default async function handler(req, res) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${BOSTA_API_KEY}`,
+        'Authorization': BOSTA_API_KEY,  // No "Bearer" prefix — Bosta uses raw key
       },
       body: JSON.stringify(bostaPayload),
     });
