@@ -2,7 +2,7 @@
 // Vercel Serverless Function — Create Bosta shipment after order is placed
 // City codes verified from live Bosta API /cities response
 
-const BOSTA_API_KEY = 'c52664c4064cdf74c0ffe71740215ab5199624add765ebcae3cd06f394cbac02'; // ⚠️ Regenerate before going live
+const BOSTA_API_KEY = 'f53060d7b770cde18e78d50d910bb710798f1db40916714b3f77039f23973631'; // ⚠️ Regenerate before going live
 const BOSTA_BASE_URL = 'https://app.bosta.co/api/v2';
 
 const SUPABASE_URL = 'https://wljxplbcfoorqpoflcdz.supabase.co';
