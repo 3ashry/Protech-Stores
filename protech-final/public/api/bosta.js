@@ -62,6 +62,38 @@ const CITY_MAP = {
   'مطروح':         'EG-28',
 };
 
+// Shipping rates from Bosta dashboard (توصيل — حجم صغير و متوسط)
+const SHIPPING_RATES = {
+  'EG-01': 134.5,  // القاهرة
+  'EG-25': 134.5,  // الجيزة
+  'EG-02': 141.4,  // الإسكندرية
+  'EG-04': 141.4,  // البحيرة
+  'EG-05': 149.3,  // الدقهلية
+  'EG-06': 149.3,  // القليوبية
+  'EG-07': 149.3,  // الغربية
+  'EG-08': 149.3,  // كفر الشيخ
+  'EG-09': 149.3,  // المنوفية
+  'EG-10': 149.3,  // الشرقية
+  'EG-14': 149.3,  // دمياط
+  'EG-11': 149.3,  // الإسماعيلية
+  'EG-13': 149.3,  // بورسعيد
+  'EG-12': 149.3,  // السويس
+  'EG-15': 166.4,  // الفيوم
+  'EG-16': 166.4,  // بني سويف
+  'EG-19': 166.4,  // المنيا
+  'EG-17': 166.4,  // أسيوط
+  'EG-18': 166.4,  // سوهاج
+  'EG-20': 184.7,  // قنا
+  'EG-22': 184.7,  // الأقصر
+  'EG-21': 184.7,  // أسوان
+  'EG-23': 184.7,  // البحر الأحمر
+  'EG-28': 184.7,  // مطروح
+  'EG-03': 189.2,  // الساحل الشمالي
+  'EG-27': 207.5,  // شمال سيناء
+  'EG-26': 207.5,  // جنوب سيناء
+  'EG-24': 207.5,  // الوادي الجديد
+};
+
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, CORS_HEADERS);
@@ -144,11 +176,8 @@ export default async function handler(req, res) {
       bostaData?.message?.trackingNumber ||
       null;
 
-    const shippingCost =
-      bostaData?.deliveryFee ||
-      bostaData?.data?.deliveryFee ||
-      bostaData?.message?.deliveryFee ||
-      80;
+    // Use our local pricing table (Bosta doesn't return deliveryFee in create response)
+    const shippingCost = SHIPPING_RATES[cityCode] || 149.3;
 
     if (!trackingNumber) {
       console.error('No tracking number:', JSON.stringify(bostaData));
