@@ -62,6 +62,56 @@ const CITY_MAP = {
   'مطروح':         'EG-28',
 };
 
+// Arabic city name → English zone name (Bosta expects English for zone field)
+const ZONE_MAP = {
+  'القاهرة':        'Cairo',
+  'القاهره':        'Cairo',
+  'الإسكندرية':    'Alexandria',
+  'الاسكندريه':    'Alexandria',
+  'الإسكندريه':    'Alexandria',
+  'الساحل الشمالي':'North Coast',
+  'البحيرة':       'Behira',
+  'البحيره':       'Behira',
+  'الدقهلية':      'Dakahlia',
+  'الدقهليه':      'Dakahlia',
+  'القليوبية':     'El Kalioubia',
+  'القليوبيه':     'El Kalioubia',
+  'الغربية':       'Gharbia',
+  'الغربيه':       'Gharbia',
+  'كفر الشيخ':     'Kafr Alsheikh',
+  'المنوفية':      'Monufia',
+  'المنوفيه':      'Monufia',
+  'الشرقية':       'Sharqia',
+  'الشرقيه':       'Sharqia',
+  'الإسماعيلية':   'Ismailia',
+  'الاسماعيليه':   'Ismailia',
+  'الإسماعيليه':   'Ismailia',
+  'السويس':        'Suez',
+  'بورسعيد':       'Port Said',
+  'بور سعيد':      'Port Said',
+  'دمياط':         'Damietta',
+  'الفيوم':        'Fayoum',
+  'بني سويف':      'Bani Suif',
+  'أسيوط':         'Assuit',
+  'اسيوط':         'Assuit',
+  'سوهاج':         'Sohag',
+  'المنيا':        'Menya',
+  'قنا':           'Qena',
+  'أسوان':         'Aswan',
+  'اسوان':         'Aswan',
+  'الأقصر':        'Luxor',
+  'الاقصر':        'Luxor',
+  'البحر الأحمر':  'Red Sea',
+  'البحر الاحمر':  'Red Sea',
+  'الوادي الجديد': 'New Valley',
+  'الجيزة':        'Giza',
+  'الجيزه':        'Giza',
+  'جنوب سيناء':    'South Sinai',
+  'شمال سيناء':    'North Sinai',
+  'مرسي مطروح':    'Matrouh',
+  'مطروح':         'Matrouh',
+};
+
 // Shipping rates from Bosta dashboard (توصيل — حجم صغير و متوسط)
 const SHIPPING_RATES = {
   'EG-01': 134.5,  // القاهرة
@@ -127,9 +177,13 @@ export default async function handler(req, res) {
     formattedPhone = '+2' + formattedPhone;
   }
 
+  // Calculate real shipping cost before building payload
+  const shippingCost = SHIPPING_RATES[cityCode] || 149.3;
+  const grandTotal = total + shippingCost;  // products + shipping = what customer pays
+
   const bostaPayload = {
     type: 10,           // SEND with COD
-    cod: total,         // Cash to collect on delivery
+    cod: grandTotal,    // Cash to collect = products total + shipping
     specs: {
       packageType: 'Parcel',
       size: 'SMALL',
@@ -140,7 +194,7 @@ export default async function handler(req, res) {
     },
     dropOffAddress: {
       cityCode,
-      zone: city,        // Customer's governorate used as zone
+      zone: ZONE_MAP[city] || city,  // English zone name for Bosta
       firstLine: address,
       secondLine: address,
     },
@@ -175,9 +229,6 @@ export default async function handler(req, res) {
       bostaData?.data?.trackingNumber ||
       bostaData?.message?.trackingNumber ||
       null;
-
-    // Use our local pricing table (Bosta doesn't return deliveryFee in create response)
-    const shippingCost = SHIPPING_RATES[cityCode] || 149.3;
 
     if (!trackingNumber) {
       console.error('No tracking number:', JSON.stringify(bostaData));
