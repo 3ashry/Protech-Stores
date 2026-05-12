@@ -208,6 +208,8 @@ export default async function handler(req, res) {
   };
 
   try {
+    console.log('Bosta payload:', JSON.stringify(bostaPayload));
+
     const bostaRes = await fetch(`${BOSTA_BASE_URL}/deliveries`, {
       method: 'POST',
       headers: {
