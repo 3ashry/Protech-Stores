@@ -183,7 +183,7 @@ export default async function handler(req, res) {
 
   const bostaPayload = {
     type: 10,           // SEND with COD
-    cod: total + shippingCost,  // Total cash to collect from customer
+    cod: total ,  // Total cash to collect from customer
     specs: {
       packageType: 'Parcel',
       size: 'SMALL',
