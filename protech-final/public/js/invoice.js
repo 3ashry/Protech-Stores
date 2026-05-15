@@ -37,7 +37,7 @@ function printInvoice(id) {
   // and recomputing from line items keeps the invoice consistent with what's displayed.
   const grandTotal = subtotal + shipCost;
 
-  // ── Render product rows (NO fake SHIP-001 line) ───────────────────────────
+  // ── Render product rows (NO fake  line) ───────────────────────────
   const productsRows = items.map((it, i) => `
     <tr style="background:${i % 2 === 0 ? '#fff' : '#fafafa'}">
       <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px">${it.code}</td>
