@@ -178,7 +178,7 @@ export default async function handler(req, res) {
   }
 
   // Calculate real shipping cost before building payload
- const baseRate = SHIPPING_RATES[cityCode] || 149.3;
+const baseRate = SHIPPING_RATES[cityCode] || 149.3;
 const codFee = total * 0.01;
 const shippingCost = Math.ceil((baseRate + codFee) * 1.14);
 
