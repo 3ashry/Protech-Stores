@@ -184,7 +184,7 @@ const shippingCost = Math.ceil((baseRate + codFee) * 1.14);
 
   const bostaPayload = {
     type: 10,           // SEND with COD
-    cod: grandTotal,    // Cash to collect = products total + shipping
+    cod: total,         // Cash to collect (products total — Bosta adds their own fees)    // Cash to collect = products total + shipping
     specs: {
       packageType: 'Parcel',
       size: 'SMALL',
