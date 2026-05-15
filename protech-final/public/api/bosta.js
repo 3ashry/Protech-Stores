@@ -112,36 +112,37 @@ const ZONE_MAP = {
   'مطروح':         'Matrouh',
 };
 
-// Shipping rates from Bosta dashboard (توصيل — حجم صغير و متوسط)
+// Shipping base rates — توصيل حجم صغير و متوسط (correct توصيل column from Bosta dashboard)
+// Final charge = Math.ceil(baseRate * 1.16) which covers COD fee (1.48%) + VAT (14%)
 const SHIPPING_RATES = {
-  'EG-01': 134.5,  // القاهرة
-  'EG-25': 134.5,  // الجيزة
-  'EG-02': 141.4,  // الإسكندرية
-  'EG-04': 141.4,  // البحيرة
-  'EG-05': 149.3,  // الدقهلية
-  'EG-06': 149.3,  // القليوبية
-  'EG-07': 149.3,  // الغربية
-  'EG-08': 149.3,  // كفر الشيخ
-  'EG-09': 149.3,  // المنوفية
-  'EG-10': 149.3,  // الشرقية
-  'EG-14': 149.3,  // دمياط
-  'EG-11': 149.3,  // الإسماعيلية
-  'EG-13': 149.3,  // بورسعيد
-  'EG-12': 149.3,  // السويس
-  'EG-15': 166.4,  // الفيوم
-  'EG-16': 166.4,  // بني سويف
-  'EG-19': 166.4,  // المنيا
-  'EG-17': 166.4,  // أسيوط
-  'EG-18': 166.4,  // سوهاج
-  'EG-20': 184.7,  // قنا
-  'EG-22': 184.7,  // الأقصر
-  'EG-21': 184.7,  // أسوان
-  'EG-23': 184.7,  // البحر الأحمر
-  'EG-28': 184.7,  // مطروح
-  'EG-03': 189.2,  // الساحل الشمالي
-  'EG-27': 207.5,  // شمال سيناء
-  'EG-26': 207.5,  // جنوب سيناء
-  'EG-24': 207.5,  // الوادي الجديد
+  'EG-01': 118,  // القاهرة
+  'EG-25': 118,  // الجيزة
+  'EG-02': 124,  // الإسكندرية
+  'EG-04': 124,  // البحيرة
+  'EG-05': 131,  // الدقهلية
+  'EG-06': 131,  // القليوبية
+  'EG-07': 131,  // الغربية
+  'EG-08': 131,  // كفر الشيخ
+  'EG-09': 131,  // المنوفية
+  'EG-10': 131,  // الشرقية
+  'EG-14': 131,  // دمياط
+  'EG-11': 131,  // الإسماعيلية
+  'EG-13': 131,  // بورسعيد
+  'EG-12': 131,  // السويس
+  'EG-15': 146,  // الفيوم
+  'EG-16': 146,  // بني سويف
+  'EG-19': 146,  // المنيا
+  'EG-17': 146,  // أسيوط
+  'EG-18': 146,  // سوهاج
+  'EG-20': 163,  // قنا
+  'EG-22': 163,  // الأقصر
+  'EG-21': 163,  // أسوان
+  'EG-23': 163,  // البحر الأحمر
+  'EG-28': 163,  // مطروح
+  'EG-03': 167,  // الساحل الشمالي
+  'EG-27': 184,  // شمال سيناء
+  'EG-26': 184,  // جنوب سيناء
+  'EG-24': 184,  // الوادي الجديد
 };
 
 export default async function handler(req, res) {
@@ -177,14 +178,12 @@ export default async function handler(req, res) {
     formattedPhone = '+2' + formattedPhone;
   }
 
-  // Calculate real shipping cost before building payload
-const baseRate = SHIPPING_RATES[cityCode] || 149.3;
-const codFee = total * 0.01;
-const shippingCost = Math.ceil((baseRate + codFee) * 1.14);
+  // Calculate shipping: base rate * 1.16 (covers ~1.48% COD fee + 14% VAT)
+  const shippingCost = Math.ceil((SHIPPING_RATES[cityCode] || 131) * 1.16);
 
   const bostaPayload = {
     type: 10,           // SEND with COD
-    cod: total,         // Cash to collect (products total — Bosta adds their own fees)    // Cash to collect = products total + shipping
+    cod: total + shippingCost,  // Total cash to collect from customer
     specs: {
       packageType: 'Parcel',
       size: 'SMALL',
