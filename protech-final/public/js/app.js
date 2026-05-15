@@ -853,8 +853,9 @@ function viewOrder(id) {
   const statuses = ['Processing', 'In Transit', 'Delivered', 'Cancelled', 'Returned'];
   const prHtml = (o.products || []).map(p => {
     const pr = cache.products.find(pp => pp.code === p.code);
-    const line = parseFloat(p.sell_price || 0) * parseInt(p.qty || 1);
-    return `<tr><td>${pr?.name || p.code}</td><td style="text-align:center">${p.qty}</td><td>EGP ${fmt(p.sell_price)}</td><td>EGP ${fmt(line)}</td></tr>`;
+    const unitPrice = parseFloat(p.sell_price ?? p.price ?? 0);
+    const line = unitPrice * parseInt(p.qty || 1);
+    return `<tr><td>${pr?.name || p.name || p.code}</td><td style="text-align:center">${p.qty}</td><td>EGP ${fmt(unitPrice)}</td><td>EGP ${fmt(line)}</td></tr>`;
   }).join('');
   const feedbackUrl = `${window.location.origin}/feedback.html?order=${o.code}`;
   const waText = encodeURIComponent(`أهلاً ${o.customer_name} 😊\nشكراً لتسوقك من بروتيك! 🔧\n\nنرجو منك تقييم تجربتك:\n${feedbackUrl}\n\nرأيك يهمنا 🙏`);
