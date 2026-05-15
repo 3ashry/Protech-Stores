@@ -3,33 +3,49 @@ function printInvoice(id) {
   if (!o) return;
 
   const logoSrc = document.querySelector('.topbar-logo img')?.src || '';
-  const shipCost = parseFloat(o.actual_shipping || 0) || parseFloat(o.est_shipping || 0);
-  const grandTotal = parseFloat(o.total || 0) + shipCost;
 
-  const productsRows = (o.products || []).map((p, i) => {
+  // ── Read line items correctly ─────────────────────────────────────────────
+  // Customer orders save items as { id, code, name, qty, price }
+  // Manual admin orders save items as { code, qty, sell_price }
+  // Fall back through both, then to the product cache as a last resort.
+  const items = (o.products || []).map(p => {
     const pr = cache.products.find(pp => pp.code === p.code);
-    const name = pr?.name || p.code;
+    const unit = parseFloat(
+      p.sell_price != null && p.sell_price !== '' ? p.sell_price :
+      p.price      != null && p.price      !== '' ? p.price      :
+      pr?.price ?? 0
+    );
     const qty = parseInt(p.qty || 1);
-    const unit = parseFloat(p.sell_price || 0);
-    const line = unit * qty;
-    return `
-      <tr style="background:${i % 2 === 0 ? '#fff' : '#fafafa'}">
-        <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px">${p.code || ''}</td>
-        <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px">${name}</td>
-        <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px;text-align:center">${qty}</td>
-        <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px;text-align:center">${Math.round(unit)}</td>
-        <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px;text-align:center;font-weight:700;color:#F26522">${Math.round(line)}</td>
-      </tr>`;
-  }).join('');
+    return {
+      code: p.code || '',
+      name: p.name || pr?.name || p.code || '—',
+      qty,
+      unit,
+      line: unit * qty,
+    };
+  });
 
-  const shippingRow = shipCost > 0 ? `
-    <tr style="background:#fff8f5">
-      <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px">SHIP-001</td>
-      <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px;color:#F26522">شحن</td>
-      <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px;text-align:center">1</td>
-      <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px;text-align:center">${Math.round(shipCost)}</td>
-      <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px;text-align:center;font-weight:700;color:#F26522">${Math.round(shipCost)}</td>
-    </tr>` : '';
+  // ── Compute totals ────────────────────────────────────────────────────────
+  // Shipping: prefer the admin-entered actual_shipping, fall back to estimate.
+  const shipCost = parseFloat(o.actual_shipping || 0) || parseFloat(o.est_shipping || 0) || 0;
+
+  // Subtotal = products only, no shipping.
+  const subtotal = items.reduce((s, it) => s + it.line, 0);
+
+  // Grand total = subtotal + shipping (shipping added ONCE).
+  // We do NOT use o.total here because the store already baked shipping into it,
+  // and recomputing from line items keeps the invoice consistent with what's displayed.
+  const grandTotal = subtotal + shipCost;
+
+  // ── Render product rows (NO fake SHIP-001 line) ───────────────────────────
+  const productsRows = items.map((it, i) => `
+    <tr style="background:${i % 2 === 0 ? '#fff' : '#fafafa'}">
+      <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px">${it.code}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px">${it.name}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px;text-align:center">${it.qty}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px;text-align:center">${Math.round(it.unit)}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px;text-align:center;font-weight:700;color:#F26522">${Math.round(it.line)}</td>
+    </tr>`).join('');
 
   const html = `<!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -107,6 +123,20 @@ function printInvoice(id) {
     border-bottom: 2px solid #F26522;
   }
   th:nth-child(3), th:nth-child(4), th:nth-child(5) { text-align: center; }
+  .totals-section {
+    padding: 0;
+    border-top: 1px solid #f0ebe7;
+  }
+  .totals-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 16px;
+    font-size: 12px;
+    color: #6b6b6b;
+  }
+  .totals-row .label { font-weight: 600; }
+  .totals-row .value { font-weight: 700; color: #2D2926; }
   .total-row {
     display: flex;
     justify-content: space-between;
@@ -114,7 +144,6 @@ function printInvoice(id) {
     padding: 12px 16px;
     border-top: 2px solid #F26522;
     background: #fff8f5;
-    margin-top: 0;
   }
   .total-label {
     font-size: 14px;
@@ -182,25 +211,25 @@ function printInvoice(id) {
     <div>
       <div class="info-group">
         <div class="info-label">العميل</div>
-        <div class="info-value">${o.customer_name}</div>
+        <div class="info-value">${o.customer_name || '—'}</div>
       </div>
       <div class="info-group">
         <div class="info-label">عنوان الشحن</div>
-        <div class="info-value">القاهره عين شمس</div>
+        <div class="info-value">${o.address || '—'}</div>
       </div>
       <div class="info-group">
         <div class="info-label">تليفون العميل</div>
-        <div class="info-value">${o.phone}</div>
+        <div class="info-value">${o.phone || '—'}</div>
       </div>
     </div>
     <div style="text-align:left">
       <div class="info-group">
         <div class="info-label">رقم الفاتوره</div>
-        <div class="info-value">${o.code}</div>
+        <div class="info-value">${o.code || '—'}</div>
       </div>
       <div class="info-group">
         <div class="info-label">تاريخ الاصدار</div>
-        <div class="info-value">${o.date}</div>
+        <div class="info-value">${o.date || '—'}</div>
       </div>
       <div class="info-group">
         <div class="info-label">كود الشحن</div>
@@ -221,9 +250,19 @@ function printInvoice(id) {
     </thead>
     <tbody>
       ${productsRows}
-      ${shippingRow}
     </tbody>
   </table>
+
+  <div class="totals-section">
+    <div class="totals-row">
+      <span class="label">المجموع الفرعي</span>
+      <span class="value">جم ${Math.round(subtotal)}</span>
+    </div>
+    <div class="totals-row">
+      <span class="label">رسوم الشحن</span>
+      <span class="value">${shipCost > 0 ? 'جم ' + Math.round(shipCost) : 'مجاني'}</span>
+    </div>
+  </div>
 
   <div class="total-row">
     <div class="total-label">الاجمالي</div>
