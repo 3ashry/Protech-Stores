@@ -112,8 +112,8 @@ const ZONE_MAP = {
   'مطروح':         'Matrouh',
 };
 
-// Shipping base rates — توصيل حجم صغير و متوسط (correct توصيل column from Bosta dashboard)
-// Final charge = Math.ceil(baseRate * 1.16) which covers COD fee (1.48%) + VAT (14%)
+// Base shipping rates from Bosta dashboard — توصيل column, smallest size
+// Final cost = base + 1% COD fee on amount above 2000 + 14% VAT on (base + fee)
 const SHIPPING_RATES = {
   'EG-01': 118,  // القاهرة
   'EG-25': 118,  // الجيزة
@@ -134,15 +134,15 @@ const SHIPPING_RATES = {
   'EG-19': 146,  // المنيا
   'EG-17': 146,  // أسيوط
   'EG-18': 146,  // سوهاج
-  'EG-20': 163,  // قنا
-  'EG-22': 163,  // الأقصر
-  'EG-21': 163,  // أسوان
-  'EG-23': 163,  // البحر الأحمر
-  'EG-28': 163,  // مطروح
-  'EG-03': 167,  // الساحل الشمالي
-  'EG-27': 184,  // شمال سيناء
-  'EG-26': 184,  // جنوب سيناء
-  'EG-24': 184,  // الوادي الجديد
+  'EG-20': 162,  // قنا
+  'EG-22': 162,  // الأقصر
+  'EG-21': 162,  // أسوان
+  'EG-23': 162,  // البحر الأحمر
+  'EG-28': 162,  // مطروح
+  'EG-03': 166,  // الساحل الشمالي
+  'EG-27': 182,  // شمال سيناء
+  'EG-26': 182,  // جنوب سيناء
+  'EG-24': 182,  // الوادي الجديد
 };
 
 export default async function handler(req, res) {
@@ -178,12 +178,20 @@ export default async function handler(req, res) {
     formattedPhone = '+2' + formattedPhone;
   }
 
-  // Calculate shipping: base rate * 1.16 (covers ~1.48% COD fee + 14% VAT)
-  const shippingCost = Math.ceil((SHIPPING_RATES[cityCode] || 131) * 1.16);
+  // Real Bosta formula (matches dashboard breakdown):
+  //   COD            = customer's total (which already = subtotal + shipping)
+  //   cod_fee        = max(0, COD - 2000) × 0.01
+  //   vat            = (base_rate + cod_fee) × 0.14
+  //   shipping_total = base_rate + cod_fee + vat
+  const baseRate = SHIPPING_RATES[cityCode] || 131;
+  const COD = total;
+  const codFee = Math.max(0, COD - 2000) * 0.01;
+  const vat = (baseRate + codFee) * 0.14;
+  const shippingCost = Math.ceil(baseRate + codFee + vat);
 
   const bostaPayload = {
     type: 10,           // SEND with COD
-    cod: total ,  // Total cash to collect from customer
+    cod: total,         // Customer pays exactly this — same number shown at checkout
     specs: {
       packageType: 'Parcel',
       size: 'SMALL',
@@ -220,6 +228,9 @@ export default async function handler(req, res) {
     });
 
     const bostaData = await bostaRes.json();
+
+    // Log full response so we can spot any extra fields (real shipping fee, etc.)
+    console.log('Bosta response:', JSON.stringify(bostaData));
 
     if (!bostaRes.ok) {
       console.error('Bosta error:', JSON.stringify(bostaData));
