@@ -868,8 +868,11 @@ function viewOrder(id) {
       <div><div class="detail-label">Date</div>${o.date}</div>
       <div><div class="detail-label">Customer</div><strong>${o.customer_name}</strong></div>
       <div><div class="detail-label">Phone</div>${o.phone}</div>
+      <div><div class="detail-label">City</div><strong>${o.city || '—'}</strong></div>
+      <div><div class="detail-label">Address</div>${o.address || '—'}</div>
       <div><div class="detail-label">Shipping Code</div>${o.ship_code || '—'}</div>
       <div><div class="detail-label">Est. Shipping</div>EGP ${fmt(o.est_shipping || 0)}</div>
+      ${o.notes ? `<div style="grid-column:1/-1"><div class="detail-label">Notes</div>${o.notes}</div>` : ''}
     </div>
     <div class="table-wrap" style="margin-bottom:14px">
       <table>
