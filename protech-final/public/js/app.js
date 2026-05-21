@@ -578,43 +578,47 @@ function updateDiscountPreview() {
 // ── PRODUCT CRUD ──
 function openAddProduct() {
   currentProductImages = [];
-  document.getElementById('p-code').value = '';
-  document.getElementById('p-name').value = '';
-  document.getElementById('p-qty').value = '';
-  document.getElementById('p-price').value = '';
-  document.getElementById('p-brand').value = '';
-  document.getElementById('p-description').value = '';
-  document.getElementById('p-is-offer').checked = false;
-  document.getElementById('p-offer-price').value = '';
-  document.getElementById('p-offer-row').style.display = 'none';
-  document.getElementById('p-is-published').checked = true;
-  document.querySelectorAll('.p-cat-cb').forEach(cb => cb.checked = false);
-  document.getElementById('p-idx').value = '';
-  document.getElementById('m-product-title').textContent = 'Add Product';
   showModal('tpl-product');
-  setTimeout(() => renderImagePreviews([]), 50);
+  setTimeout(() => {
+    document.getElementById('p-code').value = '';
+    document.getElementById('p-name').value = '';
+    document.getElementById('p-qty').value = '';
+    document.getElementById('p-price').value = '';
+    document.getElementById('p-brand').value = '';
+    document.getElementById('p-description').value = '';
+    document.getElementById('p-is-offer').checked = false;
+    document.getElementById('p-offer-price').value = '';
+    document.getElementById('p-offer-row').style.display = 'none';
+    document.getElementById('p-is-published').checked = true;
+    document.querySelectorAll('.p-cat-cb').forEach(cb => cb.checked = false);
+    document.getElementById('p-idx').value = '';
+    document.getElementById('m-product-title').textContent = 'Add Product';
+    renderImagePreviews([]);
+  }, 80);
 }
 
 function editProduct(id) {
   const p = cache.products.find(x => x.id === id);
   if (!p) return;
   currentProductImages = Array.isArray(p.images) ? [...p.images] : [];
-  document.getElementById('p-code').value = p.code;
-  document.getElementById('p-name').value = p.name;
-  document.getElementById('p-qty').value = p.qty;
-  document.getElementById('p-price').value = p.price;
-  document.getElementById('p-brand').value = p.brand || '';
-  document.getElementById('p-description').value = p.description || '';
-  document.getElementById('p-is-offer').checked = !!p.is_offer;
-  document.getElementById('p-offer-price').value = p.offer_price || '';
-  document.getElementById('p-offer-row').style.display = p.is_offer ? 'block' : 'none';
-  document.getElementById('p-is-published').checked = p.is_published !== false;
-  const cats = Array.isArray(p.categories) ? p.categories : (p.category ? [p.category] : []);
-  document.querySelectorAll('.p-cat-cb').forEach(cb => { cb.checked = cats.includes(cb.value); });
-  document.getElementById('p-idx').value = id;
-  document.getElementById('m-product-title').textContent = 'Edit Product';
   showModal('tpl-product');
-  setTimeout(() => renderImagePreviews(currentProductImages), 50);
+  setTimeout(() => {
+    document.getElementById('p-code').value = p.code;
+    document.getElementById('p-name').value = p.name;
+    document.getElementById('p-qty').value = p.qty;
+    document.getElementById('p-price').value = p.price;
+    document.getElementById('p-brand').value = p.brand || '';
+    document.getElementById('p-description').value = p.description || '';
+    document.getElementById('p-is-offer').checked = !!p.is_offer;
+    document.getElementById('p-offer-price').value = p.offer_price || '';
+    document.getElementById('p-offer-row').style.display = p.is_offer ? 'block' : 'none';
+    document.getElementById('p-is-published').checked = p.is_published !== false;
+    const cats = Array.isArray(p.categories) ? p.categories : (p.category ? [p.category] : []);
+    document.querySelectorAll('.p-cat-cb').forEach(cb => { cb.checked = cats.includes(cb.value); });
+    document.getElementById('p-idx').value = id;
+    document.getElementById('m-product-title').textContent = 'Edit Product';
+    renderImagePreviews(currentProductImages);
+  }, 80);
 }
 
 async function saveProduct() {
