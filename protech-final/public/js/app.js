@@ -477,9 +477,16 @@ function renderImagePreviews(images) {
   container.innerHTML = images.map((url, i) => `
     <div style="position:relative;width:80px;height:80px;border-radius:8px;overflow:hidden;border:2px solid ${i===0?'#F26A21':'#e0e0e0'}">
       <img src="${url}" style="width:100%;height:100%;object-fit:cover">
-      ${i===0?'<div style="position:absolute;bottom:0;left:0;right:0;background:#F26A21;color:#fff;font-size:10px;font-weight:700;text-align:center;padding:2px">Main</div>':''}
+      ${i===0?'<div style="position:absolute;bottom:0;left:0;right:0;background:#F26A21;color:#fff;font-size:10px;font-weight:700;text-align:center;padding:2px">Main</div>':`<button onclick="setMainProductImage(${i})" style="position:absolute;bottom:2px;left:2px;background:rgba(0,0,0,.6);color:#fff;border:0;border-radius:5px;font-size:9px;font-weight:700;padding:2px 5px;cursor:pointer">Set Main</button>`}
       <button onclick="removeProductImage(${i})" style="position:absolute;top:2px;right:2px;width:20px;height:20px;background:rgba(200,0,0,.8);color:#fff;border:0;border-radius:50%;font-size:11px;cursor:pointer;display:grid;place-items:center">✕</button>
     </div>`).join('');
+}
+
+function setMainProductImage(idx) {
+  if (idx <= 0 || idx >= currentProductImages.length) return;
+  const [chosen] = currentProductImages.splice(idx, 1);
+  currentProductImages.unshift(chosen);
+  renderImagePreviews(currentProductImages);
 }
 
 let currentProductImages = [];
