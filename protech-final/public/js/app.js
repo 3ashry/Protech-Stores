@@ -451,7 +451,7 @@ const CAT_LABELS = {
   electric: 'Electric Tools', battery: 'Battery Tools', hand: 'Hand Tools',
   measuring: 'Measuring Tools', safety: 'Safety Tools', car: 'Car Tools',
   garden: 'Gardening Tools', new: 'New Arrivals',
-  sets: 'Tool Sets & Combos',
+  sets: 'Tool Sets & Combos', accessories: 'Accessories',
 };
 
 
@@ -539,6 +539,7 @@ function renderInventory() {
         </div>
       </td>
       <td><span class="badge ${parseInt(p.qty || 0) === 0 ? 'b-danger' : parseInt(p.qty || 0) <= 5 ? 'b-warning' : 'b-success'}">${p.qty}</span></td>
+      <td>EGP ${fmt(p.buy_price || 0)}</td>
       <td>EGP ${fmt(p.price)}</td>
       <td><div class="actions">
         <button class="btn btn-ghost btn-xs" onclick="editProduct('${p.id}')">Edit</button>
@@ -584,6 +585,7 @@ function openAddProduct() {
     document.getElementById('p-name').value = '';
     document.getElementById('p-qty').value = '';
     document.getElementById('p-price').value = '';
+    document.getElementById('p-buy-price').value = '';
     document.getElementById('p-brand').value = '';
     document.getElementById('p-description').value = '';
     document.getElementById('p-is-offer').checked = false;
@@ -607,6 +609,7 @@ function editProduct(id) {
     document.getElementById('p-name').value = p.name;
     document.getElementById('p-qty').value = p.qty;
     document.getElementById('p-price').value = p.price;
+    document.getElementById('p-buy-price').value = p.buy_price || '';
     document.getElementById('p-brand').value = p.brand || '';
     document.getElementById('p-description').value = p.description || '';
     document.getElementById('p-is-offer').checked = !!p.is_offer;
@@ -626,6 +629,7 @@ async function saveProduct() {
   const name = document.getElementById('p-name').value.trim();
   const qty = parseInt(document.getElementById('p-qty').value || 0);
   const price = parseFloat(document.getElementById('p-price').value || 0);
+  const buy_price = parseFloat(document.getElementById('p-buy-price').value || 0);
   const brand = document.getElementById('p-brand').value || null;
   const description = document.getElementById('p-description').value.trim() || null;
   const is_offer = document.getElementById('p-is-offer').checked;
@@ -639,8 +643,7 @@ async function saveProduct() {
   if (is_offer && !offer_price) { showToast('Please enter the discounted price'); return; }
 
   const id = document.getElementById('p-idx').value;
-  const payload = { code, name, qty, price, brand, description, is_offer, offer_price, is_published, categories, category, images: currentProductImages };
-
+const payload = { code, name, qty, price, buy_price, brand, description, is_offer, offer_price, is_published, categories, category, images: currentProductImages };
   try {
     if (id) {
       await dbUpdate('products', id, payload);
@@ -1075,6 +1078,148 @@ function overlayClick(e) {
 
 function genId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+// ── EXCEL DOWNLOADS (SheetJS) ──────────────────────────────────────────
+
+function downloadInventoryExcel() {
+  const rows = cache.products.map(p => {
+    const cats = Array.isArray(p.categories) ? p.categories.map(c => CAT_LABELS[c] || c).join(', ') : (CAT_LABELS[p.category] || p.category || '');
+    return {
+      'Product Code': p.code || '',
+      'Product Name': p.name || '',
+      'Brand': p.brand || '',
+      'Categories': cats,
+      'Quantity': parseInt(p.qty || 0),
+      'Buy Price (EGP)': parseFloat(p.buy_price || 0),
+      'Sell Price (EGP)': parseFloat(p.price || 0),
+      'Offer Price (EGP)': p.is_offer ? parseFloat(p.offer_price || 0) : '',
+      'Published': p.is_published !== false ? 'Yes' : 'No',
+    };
+  });
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = [{ wch: 14 }, { wch: 40 }, { wch: 12 }, { wch: 30 }, { wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 10 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
+  XLSX.writeFile(wb, `Protech_Inventory_${new Date().toISOString().slice(0,10)}.xlsx`);
+  showToast('Inventory Excel downloaded ✓');
+}
+
+function downloadOrdersExcel() {
+  const now = new Date();
+  const monthName = now.toLocaleString('en', { month: 'long', year: 'numeric' });
+  const rows = cache.orders.map(o => {
+    const products = Array.isArray(o.products)
+      ? o.products.map(p => `${p.name || p.code} ×${p.qty || 1} @${p.sell_price || p.price || 0}`).join(' | ')
+      : '';
+    return {
+      'Order Code': o.code || '',
+      'Date': o.date || '',
+      'Shipping Code': o.ship_code || '',
+      'Customer Name': o.customer_name || '',
+      'Phone': o.phone || '',
+      'City': o.city || '',
+      'Status': o.status || '',
+      'Products': products,
+      'Subtotal (EGP)': parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0),
+      'Shipping (EGP)': parseFloat(o.est_shipping || 0),
+      'Total (EGP)': parseFloat(o.total || 0),
+    };
+  });
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 50 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Orders');
+  XLSX.writeFile(wb, `Protech_Orders_${monthName.replace(' ', '_')}.xlsx`);
+  showToast('Orders Excel downloaded ✓');
+}
+
+function downloadReturnsExcel() {
+  const rets = cache.orders.filter(o => o.status === 'Cancelled');
+  const rows = rets.map(o => {
+    const products = Array.isArray(o.products)
+      ? o.products.map(p => `${p.name || p.code} ×${p.qty || 1} @${p.sell_price || p.price || 0}`).join(' | ')
+      : '';
+    return {
+      'Order Code': o.code || '',
+      'Date': o.date || '',
+      'Shipping Code': o.ship_code || '',
+      'Customer Name': o.customer_name || '',
+      'Phone': o.phone || '',
+      'City': o.city || '',
+      'Cancel Reason': o.cancel_reason || '',
+      'Products': products,
+      'Order Total (EGP)': parseFloat(o.total || 0),
+      'Est. Shipping (EGP)': parseFloat(o.est_shipping || 0),
+      'Actual Shipping (EGP)': parseFloat(o.actual_shipping || 0),
+      'Warehouse Confirmed': o.warehouse_confirmed ? 'Yes' : 'No',
+    };
+  });
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 30 }, { wch: 50 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 16 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Returns');
+  XLSX.writeFile(wb, `Protech_Returns_${new Date().toISOString().slice(0,10)}.xlsx`);
+  showToast('Returns Excel downloaded ✓');
+}
+
+function downloadFinancialsExcel() {
+  const orders = cache.orders;
+  const delivered = orders.filter(o => o.status === 'Delivered');
+  const cancelled = orders.filter(o => o.status === 'Cancelled');
+  const totalCollected = delivered.reduce((a, o) => a + parseFloat(o.total || 0) + parseFloat(o.actual_shipping || 0), 0);
+  const totalActualShip = delivered.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
+  const netFromBosta = totalCollected - totalActualShip;
+  const retShipCost = cancelled.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
+  const buyingCost = orders.reduce((a, o) => a + (o.products || []).reduce((b, p) => {
+    const pr = cache.products.find(pp => pp.code === p.code);
+    return b + parseFloat(pr?.buy_price || pr?.price || 0) * parseInt(p.qty || 1);
+  }, 0), 0);
+  const totalExp = cache.expenses.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const netProfit = netFromBosta - retShipCost - buyingCost - totalExp;
+
+  // Sheet 1: P&L Summary
+  const summaryRows = [
+    { 'Item': 'Total collected (orders + shipping)', 'Amount (EGP)': totalCollected },
+    { 'Item': 'Total actual shipping cost', 'Amount (EGP)': -totalActualShip },
+    { 'Item': 'Net amount from Bosta', 'Amount (EGP)': netFromBosta },
+    { 'Item': '', 'Amount (EGP)': '' },
+    { 'Item': 'Return shipping cost', 'Amount (EGP)': -retShipCost },
+    { 'Item': 'Total buying cost of all orders', 'Amount (EGP)': -buyingCost },
+    { 'Item': 'Total extra expenses', 'Amount (EGP)': -totalExp },
+    { 'Item': '', 'Amount (EGP)': '' },
+    { 'Item': netProfit >= 0 ? '🟢 NET PROFIT' : '🔴 NET LOSS', 'Amount (EGP)': netProfit },
+  ];
+  const ws1 = XLSX.utils.json_to_sheet(summaryRows);
+  ws1['!cols'] = [{ wch: 40 }, { wch: 18 }];
+
+  // Sheet 2: Expenses
+  const expRows = cache.expenses.map(e => ({
+    'Category': e.category || '',
+    'Description': e.description || '',
+    'Amount (EGP)': parseFloat(e.amount || 0),
+    'Date': e.date || '',
+  }));
+  const ws2 = XLSX.utils.json_to_sheet(expRows);
+  ws2['!cols'] = [{ wch: 20 }, { wch: 30 }, { wch: 14 }, { wch: 14 }];
+
+  // Sheet 3: Delivered orders breakdown
+  const delRows = delivered.map(o => ({
+    'Order Code': o.code || '',
+    'Customer': o.customer_name || '',
+    'Order Total (EGP)': parseFloat(o.total || 0),
+    'Est. Shipping': parseFloat(o.est_shipping || 0),
+    'Actual Shipping': parseFloat(o.actual_shipping || 0),
+    'Date': o.date || '',
+  }));
+  const ws3 = XLSX.utils.json_to_sheet(delRows);
+  ws3['!cols'] = [{ wch: 14 }, { wch: 22 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws1, 'P&L Summary');
+  XLSX.utils.book_append_sheet(wb, ws2, 'Expenses');
+  XLSX.utils.book_append_sheet(wb, ws3, 'Delivered Orders');
+  XLSX.writeFile(wb, `Protech_Financials_${new Date().toISOString().slice(0,10)}.xlsx`);
+  showToast('Financials Excel downloaded ✓');
 }
 
 if (sessionStorage.getItem('pt_auth') === '1') {
