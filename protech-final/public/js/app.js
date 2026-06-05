@@ -514,7 +514,7 @@ function renderInventory() {
   const ps = cache.products;
   const oos = ps.filter(p => parseInt(p.qty || 0) === 0).length;
   const low = ps.filter(p => parseInt(p.qty || 0) > 0 && parseInt(p.qty || 0) <= 5).length;
-  const totalVal = ps.reduce((a, p) => a + parseFloat(p.price || 0) * parseInt(p.qty || 0), 0);
+  const totalVal = ps.reduce((a, p) => a + parseFloat(p.buy_price || p.price || 0) * parseInt(p.qty || 0), 0);
 
   document.getElementById('inv-stats').innerHTML = `
     <div class="stat-card orange"><div class="stat-val">${ps.length}</div><div class="stat-label">Total Products</div></div>
