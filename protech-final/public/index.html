@@ -131,6 +131,7 @@ src="https://www.facebook.com/tr?id=1542197524280890&ev=PageView&noscript=1"
     <div class="page-header">
       <div class="page-title">Inventory <span>Management</span></div>
       <button class="btn btn-primary" onclick="openAddProduct()">+ Add Product</button>
+      <button class="btn btn-ghost btn-sm" onclick="downloadInventoryExcel()" style="margin-inline-start:8px">📥 Excel</button>
     </div>
     <div class="stat-grid" id="inv-stats"></div>
     <div class="card">
@@ -149,6 +150,7 @@ src="https://www.facebook.com/tr?id=1542197524280890&ev=PageView&noscript=1"
     <div class="page-header">
       <div class="page-title">Orders <span>Management</span></div>
       <button class="btn btn-primary" onclick="openCreateOrder()">+ New Order</button>
+      <button class="btn btn-ghost btn-sm" onclick="downloadOrdersExcel()" style="margin-inline-start:8px">📥 Excel</button>
     </div>
     <div class="card">
       <div class="card-header"><span class="card-title">All Orders</span></div>
@@ -163,7 +165,10 @@ src="https://www.facebook.com/tr?id=1542197524280890&ev=PageView&noscript=1"
 
   <!-- RETURNS -->
   <div class="screen" id="screen-returns">
-    <div class="page-header"><div class="page-title">Returns <span>& Cancellations</span></div></div>
+    <div class="page-header">
+      <div class="page-title">Returns <span>& Cancellations</span></div>
+      <button class="btn btn-ghost btn-sm" onclick="downloadReturnsExcel()">📥 Excel</button>
+    </div>
     <div class="stat-grid" id="ret-stats"></div>
     <div class="card">
       <div class="card-header"><span class="card-title">Cancelled Orders</span></div>
@@ -181,6 +186,7 @@ src="https://www.facebook.com/tr?id=1542197524280890&ev=PageView&noscript=1"
     <div class="page-header">
       <div class="page-title">Financials <span>& P&L</span></div>
       <button class="btn btn-primary btn-sm" onclick="openExpense()">+ Add Expense</button>
+      <button class="btn btn-ghost btn-sm" onclick="downloadFinancialsExcel()" style="margin-inline-start:8px">📥 Excel</button>
     </div>
     <div class="card">
       <div class="card-header"><span class="card-title">Revenue Summary</span></div>
@@ -251,10 +257,17 @@ src="https://www.facebook.com/tr?id=1542197524280890&ev=PageView&noscript=1"
       <div class="form-group"><label>Product Name</label><input id="p-name" placeholder="Wrench Set"></div>
     </div>
 
-    <!-- Row 2: Qty + Price -->
+    <!-- Row 2: Qty + Sell Price -->
     <div class="form-row">
       <div class="form-group"><label>Quantity</label><input id="p-qty" type="number" min="0" placeholder="0"></div>
-      <div class="form-group"><label>Price (EGP)</label><input id="p-price" type="number" min="0" step="0.01" placeholder="0.00"></div>
+      <div class="form-group"><label>Sell Price (EGP)</label><input id="p-price" type="number" min="0" step="0.01" placeholder="0.00"></div>
+    </div>
+
+    <!-- Row 3: Buy Price -->
+    <div class="form-group">
+      <label>Buy Price (EGP) <span style="font-weight:400;color:#aaa;font-size:11px">cost price — not shown to customers</span></label>
+      <input id="p-buy-price" type="number" min="0" step="0.01" placeholder="0.00"
+        style="width:100%;padding:10px 12px;border:1px solid #e0e0e0;border-radius:8px;font-family:inherit;font-size:14px">
     </div>
 
     <!-- Brand -->
@@ -291,6 +304,12 @@ src="https://www.facebook.com/tr?id=1542197524280890&ev=PageView&noscript=1"
         </label>
         <label style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid #e0e0e0;border-radius:6px;cursor:pointer;font-size:13px">
           <input type="checkbox" value="garden" class="p-cat-cb" style="width:15px;height:15px"> Gardening Tools
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid #e0e0e0;border-radius:6px;cursor:pointer;font-size:13px">
+          <input type="checkbox" value="sets" class="p-cat-cb" style="width:15px;height:15px"> Tool Sets & Combos
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid #e0e0e0;border-radius:6px;cursor:pointer;font-size:13px">
+          <input type="checkbox" value="accessories" class="p-cat-cb" style="width:15px;height:15px"> Accessories
         </label>
         <label style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid #e0e0e0;border-radius:6px;cursor:pointer;font-size:13px">
           <input type="checkbox" value="new" class="p-cat-cb" style="width:15px;height:15px"> New Arrivals
@@ -437,6 +456,7 @@ src="https://www.facebook.com/tr?id=1542197524280890&ev=PageView&noscript=1"
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="js/db.js"></script>
 <script src="js/app.js"></script>
 <script src="js/invoice.js"></script>
