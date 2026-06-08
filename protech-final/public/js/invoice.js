@@ -64,11 +64,12 @@ function printInvoice(id) {
   }
   .page {
     width: 148mm;
-    min-height: 210mm;
     margin: 0 auto;
     background: #fff;
     position: relative;
-    padding-bottom: 60mm;
+    display: flex;
+    flex-direction: column;
+    min-height: 210mm;
   }
   .top-border { height: 4px; background: #F26522; }
   .header {
@@ -156,15 +157,12 @@ function printInvoice(id) {
     color: #F26522;
   }
   .footer {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
     background: #2D2926;
     padding: 14px 18px;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    margin-top: auto;
   }
   .footer-slogan {
     font-size: 13px;
@@ -186,7 +184,8 @@ function printInvoice(id) {
   .bottom-border { height: 4px; background: #F26522; }
   @media print {
     body { margin: 0; }
-    .page { margin: 0; width: 100%; }
+    .page { margin: 0; width: 100%; min-height: auto; }
+    .footer { break-inside: avoid; }
     .no-print { display: none; }
   }
 </style>
