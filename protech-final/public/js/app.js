@@ -954,9 +954,9 @@ function renderFinancials() {
   const totalActualShip = delivered.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
   const netFromBosta = totalCollected - totalActualShip;
   const retShipCost = cancelled.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
-  const buyingCost = orders.reduce((a, o) => a + (o.products || []).reduce((b, p) => {
+  const buyingCost = orders.filter(o => !(o.status === 'Cancelled' && o.warehouse_confirmed)).reduce((a, o) => a + (o.products || []).reduce((b, p) => {
     const pr = cache.products.find(pp => pp.code === p.code);
-    return b + parseFloat(pr?.price || 0) * parseInt(p.qty || 1);
+    return b + parseFloat(pr?.buy_price || pr?.price || 0) * parseInt(p.qty || 1);
   }, 0), 0);
   const totalExp = cache.expenses.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
   const netProfit = netFromBosta - retShipCost - buyingCost - totalExp;
@@ -1170,7 +1170,7 @@ function downloadFinancialsExcel() {
   const totalActualShip = delivered.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
   const netFromBosta = totalCollected - totalActualShip;
   const retShipCost = cancelled.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
-  const buyingCost = orders.reduce((a, o) => a + (o.products || []).reduce((b, p) => {
+  const buyingCost = orders.filter(o => !(o.status === 'Cancelled' && o.warehouse_confirmed)).reduce((a, o) => a + (o.products || []).reduce((b, p) => {
     const pr = cache.products.find(pp => pp.code === p.code);
     return b + parseFloat(pr?.buy_price || pr?.price || 0) * parseInt(p.qty || 1);
   }, 0), 0);
