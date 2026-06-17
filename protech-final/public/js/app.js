@@ -1247,7 +1247,13 @@ async function loadAnalytics() {
       url += `&created_at=gte.${since.toISOString()}`;
     }
     const res = await fetch(url, { headers: { apikey: ANALYTICS_SB_KEY, Authorization: 'Bearer ' + ANALYTICS_SB_KEY } });
-    analyticsCache.events = await res.json();
+    const data = await res.json();
+    if (!res.ok || !Array.isArray(data)) {
+      analyticsCache.events = [];
+      showToast('Analytics: ' + (data?.message || 'table not found — run the SQL migration'));
+    } else {
+      analyticsCache.events = data;
+    }
     analyticsCache.loaded = true;
   } catch (e) {
     analyticsCache.events = [];
