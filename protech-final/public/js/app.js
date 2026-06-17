@@ -99,10 +99,11 @@ protechstores.com`
 }
 
 // ── NAVIGATION ──
-const SCREENS = ['home', 'inventory', 'orders', 'returns', 'financials', 'invoices'];
+const SCREENS = ['home', 'inventory', 'orders', 'returns', 'financials', 'invoices', 'analytics'];
 function go(id) {
+  if (id === 'analytics' && !analyticsCache.loaded) loadAnalytics();
   SCREENS.forEach(s => {
-    document.getElementById('screen-' + s).classList.toggle('active', s === id);
+    document.getElementById('screen-' + s)?.classList.toggle('active', s === id);
   });
   document.querySelectorAll('#top-nav .nav-tab').forEach((t, i) => t.classList.toggle('active', SCREENS[i] === id));
   document.querySelectorAll('.bnav-btn').forEach((t, i) => t.classList.toggle('active', SCREENS[i] === id));
@@ -409,6 +410,7 @@ function renderAll() {
   renderReturns();
   renderFinancials();
   renderInvoices();
+  renderAnalytics();
 }
 
 // ── HOME ──
@@ -1225,3 +1227,197 @@ function downloadFinancialsExcel() {
 if (sessionStorage.getItem('pt_auth') === '1') {
   requestNotificationPermission();
 }
+// ═══════════════════════════════════════════════════════════════════
+//  ANALYTICS — Customer funnel (product views → checkout → orders)
+// ═══════════════════════════════════════════════════════════════════
+const ANALYTICS_SB_URL = 'https://wljxplbcfoorqpoflcdz.supabase.co';
+const ANALYTICS_SB_KEY = 'sb_publishable_zsHh-eOarHI7BSGtuP6WWQ_PQ4ACoHG';
+let analyticsCache = { events: [], loaded: false, loading: false };
+let analyticsRange = 7; // days back; null = all time
+
+async function loadAnalytics() {
+  analyticsCache.loading = true;
+  renderAnalytics();
+  try {
+    let url = `${ANALYTICS_SB_URL}/rest/v1/analytics_events?select=*&order=created_at.desc&limit=10000`;
+    if (analyticsRange !== null) {
+      const since = new Date();
+      since.setDate(since.getDate() - analyticsRange);
+      since.setHours(0, 0, 0, 0);
+      url += `&created_at=gte.${since.toISOString()}`;
+    }
+    const res = await fetch(url, { headers: { apikey: ANALYTICS_SB_KEY, Authorization: 'Bearer ' + ANALYTICS_SB_KEY } });
+    analyticsCache.events = await res.json();
+    analyticsCache.loaded = true;
+  } catch (e) {
+    analyticsCache.events = [];
+    showToast('Analytics load failed: ' + e.message);
+  }
+  analyticsCache.loading = false;
+  renderAnalytics();
+}
+
+function setAnalyticsRange(days) {
+  analyticsRange = days;
+  loadAnalytics();
+}
+
+function renderAnalytics() {
+  const el = document.getElementById('screen-analytics');
+  if (!el) return;
+
+  const ev = analyticsCache.events || [];
+  const pv = ev.filter(e => e.event_type === 'product_view');
+  const cv = ev.filter(e => e.event_type === 'checkout_view');
+  const oc = ev.filter(e => e.event_type === 'order_confirmed');
+  const uniq = arr => new Set(arr.map(e => e.session_id)).size;
+  const upv = uniq(pv), ucv = uniq(cv), uoc = uniq(oc);
+
+  const checkoutRate = upv ? Math.round(ucv / upv * 100) : 0;
+  const convRate = ucv ? Math.round(uoc / ucv * 100) : 0;
+  const overall = upv ? Math.round(uoc / upv * 100) : 0;
+
+  // Top products by unique viewers
+  const map = {};
+  pv.forEach(e => {
+    const k = e.product_code || e.product_id; if (!k) return;
+    if (!map[k]) map[k] = { code: e.product_code, name: e.product_name, views: 0, sessions: new Set() };
+    map[k].views++; map[k].sessions.add(e.session_id);
+  });
+  const top = Object.values(map).map(p => ({ ...p, u: p.sessions.size })).sort((a, b) => b.u - a.u).slice(0, 15);
+
+  // Daily trend (last 14 days present in data)
+  const daily = {};
+  ev.forEach(e => {
+    const d = (e.created_at || '').slice(0, 10); if (!d) return;
+    if (!daily[d]) daily[d] = { pv: 0, cv: 0, oc: 0 };
+    if (e.event_type === 'product_view') daily[d].pv++;
+    else if (e.event_type === 'checkout_view') daily[d].cv++;
+    else if (e.event_type === 'order_confirmed') daily[d].oc++;
+  });
+  const days = Object.entries(daily).sort((a, b) => a[0].localeCompare(b[0])).slice(-14);
+  const maxD = Math.max(1, ...days.map(([, d]) => Math.max(d.pv, d.cv, d.oc)));
+
+  const ranges = [{ l: 'Today', d: 0 }, { l: '7 Days', d: 7 }, { l: '30 Days', d: 30 }, { l: 'All Time', d: null }];
+  const rangeBtns = ranges.map(r =>
+    `<button class="btn ${analyticsRange === r.d ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="setAnalyticsRange(${r.d})">${r.l}</button>`
+  ).join('');
+
+  const funnelBar = (label, val, color) => {
+    const pct = upv ? Math.round(val / upv * 100) : 0;
+    return `
+      <div style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+          <span style="color:var(--muted)">${label}</span><strong style="color:${color}">${val}</strong>
+        </div>
+        <div style="height:26px;background:#eee;border-radius:6px;overflow:hidden">
+          <div style="height:100%;width:${Math.max(pct, val > 0 ? 3 : 0)}%;background:${color};border-radius:6px;display:flex;align-items:center;padding-left:8px;color:#fff;font-size:12px;font-weight:700">${pct > 12 ? pct + '%' : ''}</div>
+        </div>
+      </div>`;
+  };
+
+  const trendChart = days.length ? `
+    <div style="display:flex;gap:14px;font-size:12px;margin-bottom:12px">
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#3B82F6;margin-right:4px"></span>Views</span>
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#F59E0B;margin-right:4px"></span>Checkout</span>
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#16a34a;margin-right:4px"></span>Orders</span>
+    </div>
+    <div style="display:flex;align-items:flex-end;gap:4px;height:150px;overflow-x:auto">
+      ${days.map(([day, d]) => `
+        <div style="flex:1;min-width:30px;display:flex;flex-direction:column;align-items:center;gap:3px">
+          <div style="display:flex;gap:2px;align-items:flex-end;height:120px;width:100%">
+            <div title="Views: ${d.pv}" style="flex:1;height:${Math.round(d.pv / maxD * 100)}%;background:#3B82F6;border-radius:3px 3px 0 0;min-height:${d.pv ? 3 : 0}px"></div>
+            <div title="Checkout: ${d.cv}" style="flex:1;height:${Math.round(d.cv / maxD * 100)}%;background:#F59E0B;border-radius:3px 3px 0 0;min-height:${d.cv ? 3 : 0}px"></div>
+            <div title="Orders: ${d.oc}" style="flex:1;height:${Math.round(d.oc / maxD * 100)}%;background:#16a34a;border-radius:3px 3px 0 0;min-height:${d.oc ? 3 : 0}px"></div>
+          </div>
+          <span style="font-size:9px;color:var(--muted);white-space:nowrap">${day.slice(5)}</span>
+        </div>`).join('')}
+    </div>` : '<div class="empty">No daily data in this range</div>';
+
+  const topRows = top.length ? top.map((p, i) => `
+    <tr>
+      <td style="color:var(--muted)">${i + 1}</td>
+      <td><strong>${p.name || '—'}</strong></td>
+      <td><span class="badge b-orange">${p.code || '—'}</span></td>
+      <td style="text-align:center"><span class="badge b-info">${p.u}</span></td>
+      <td style="text-align:center;color:var(--muted)">${p.views}</td>
+    </tr>`).join('') : '<tr><td colspan="5"><div class="empty"><div class="empty-icon">👁</div>No product views yet</div></td></tr>';
+
+  el.innerHTML = `
+    <div style="padding:20px 16px;max-width:1100px;margin:0 auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:18px">
+        <h2 style="margin:0;font-size:20px">📊 Analytics ${analyticsCache.loading ? '<span style="font-size:13px;color:var(--muted)">loading…</span>' : ''}</h2>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">${rangeBtns}
+          <button class="btn btn-ghost btn-sm" onclick="loadAnalytics()">↻ Refresh</button>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:22px">
+        <div class="stat-card blue"><div class="stat-val">${upv}</div><div class="stat-label">Product Viewers</div></div>
+        <div class="stat-card orange"><div class="stat-val">${ucv}</div><div class="stat-label">Reached Checkout</div></div>
+        <div class="stat-card green"><div class="stat-val">${uoc}</div><div class="stat-label">Orders Confirmed</div></div>
+        <div class="stat-card ${overall >= 2 ? 'green' : 'red'}"><div class="stat-val">${overall}%</div><div class="stat-label">View → Order</div></div>
+      </div>
+
+      <div style="background:#fff;border:1px solid #eee;border-radius:12px;padding:20px;margin-bottom:20px">
+        <h3 style="margin:0 0 16px;font-size:15px">Conversion Funnel</h3>
+        ${funnelBar('Product Viewers', upv, '#3B82F6')}
+        <div style="text-align:center;color:var(--muted);font-size:11px;margin:2px 0">▼ ${checkoutRate}% proceed to checkout</div>
+        ${funnelBar('Reached Checkout', ucv, '#F59E0B')}
+        <div style="text-align:center;color:var(--muted);font-size:11px;margin:2px 0">▼ ${convRate}% complete the order</div>
+        ${funnelBar('Orders Confirmed', uoc, '#16a34a')}
+      </div>
+
+      <div style="background:#fff;border:1px solid #eee;border-radius:12px;padding:20px;margin-bottom:20px">
+        <h3 style="margin:0 0 16px;font-size:15px">Daily Trend</h3>
+        ${trendChart}
+      </div>
+
+      <div style="background:#fff;border:1px solid #eee;border-radius:12px;padding:20px">
+        <h3 style="margin:0 0 16px;font-size:15px">Most Viewed Products</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>Product</th><th>Code</th><th style="text-align:center">Unique Viewers</th><th style="text-align:center">Total Views</th></tr></thead>
+            <tbody>${topRows}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>`;
+}
+
+// Inject the Analytics screen + nav buttons at runtime (no index.html edit needed)
+function injectAnalyticsUI() {
+  if (document.getElementById('screen-analytics')) return;
+  const home = document.getElementById('screen-home');
+  if (!home) return;
+
+  const scr = document.createElement('div');
+  scr.id = 'screen-analytics';
+  scr.className = home.className.replace('active', '').trim();
+  home.parentElement.appendChild(scr);
+
+  const topNav = document.getElementById('top-nav');
+  if (topNav) {
+    const sample = topNav.querySelector('.nav-tab');
+    const tab = sample ? sample.cloneNode(false) : document.createElement('button');
+    if (sample) tab.className = sample.className.replace('active', '').trim();
+    tab.textContent = '📊 Analytics';
+    tab.onclick = () => go('analytics');
+    topNav.appendChild(tab);
+  }
+
+  const bnavSample = document.querySelector('.bnav-btn');
+  if (bnavSample && bnavSample.parentElement) {
+    const b = bnavSample.cloneNode(false);
+    b.className = bnavSample.className.replace('active', '').trim();
+    b.innerHTML = '<span style="font-size:18px">📊</span><span>Stats</span>';
+    b.onclick = () => go('analytics');
+    bnavSample.parentElement.appendChild(b);
+  }
+}
+
+(function initAnalytics() {
+  const run = () => { injectAnalyticsUI(); loadAnalytics(); };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
+  else run();
+})();
