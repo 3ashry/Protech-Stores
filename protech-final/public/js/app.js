@@ -689,7 +689,7 @@ function renderOrders() {
   const smap = { 'Processing': 'b-info', 'In Transit': 'b-warning', 'Delivered': 'b-success', 'Cancelled': 'b-danger', 'Returned': 'b-purple' };
   document.getElementById('orders-tbody').innerHTML = cache.orders.length ? cache.orders.map(o => `
     <tr>
-      <td><span class="badge b-orange">${o.code}</span></td>
+      <td><span class="badge b-orange">${o.code}</span> ${orderProgressBadge(o)}</td>
       <td><strong>${o.customer_name}</strong></td>
       <td>${o.phone}</td>
       <td>EGP ${fmt(o.total)}</td>
@@ -1674,4 +1674,23 @@ function renderOrderTracker(orderId) {
   const host = document.getElementById('order-tracker-' + orderId);
   const o = cache.orders.find(x => x.id === orderId);
   if (host && o) host.innerHTML = orderTrackerHTML(o);
+}
+// Small inline progress indicator for the orders table row
+function orderProgressBadge(o) {
+  const c = !!o.confirm_sent;
+  const d = o.status === 'Delivered';
+  const f = !!o.feedback_sent;
+  const done = [c, d, f].filter(Boolean).length;
+
+  if (done === 3) {
+    return `<span title="All steps complete: confirmed, delivered, feedback sent"
+      style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:#16a34a;color:#fff;font-size:12px;font-weight:800;vertical-align:middle;margin-right:4px">✓</span>`;
+  }
+
+  // Partial: 3 mini dots showing which steps are done
+  const dot = (on, label) =>
+    `<span title="${label}" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${on ? '#16a34a' : '#d1d5db'};margin:0 1px"></span>`;
+  return `<span style="display:inline-flex;align-items:center;gap:1px;vertical-align:middle;margin-right:4px">
+    ${dot(c, 'Confirmation sent')}${dot(d, 'Delivered')}${dot(f, 'Feedback sent')}
+  </span>`;
 }
