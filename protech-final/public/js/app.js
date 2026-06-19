@@ -1427,3 +1427,182 @@ function injectAnalyticsUI() {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
   else run();
 })();
+// ═══════════════════════════════════════════════════════════════════
+//  SUPPLIER ACCOUNT — Elashry (money owed for goods + payments made)
+// ═══════════════════════════════════════════════════════════════════
+const SUPPLIER_SB_URL = 'https://wljxplbcfoorqpoflcdz.supabase.co';
+const SUPPLIER_SB_KEY = 'sb_publishable_zsHh-eOarHI7BSGtuP6WWQ_PQ4ACoHG';
+let supplierCache = { payments: [], loaded: false, loading: false };
+
+async function loadSupplierPayments() {
+  supplierCache.loading = true;
+  renderSupplierAccount();
+  try {
+    const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/supplier_payments?select=*&order=created_at.desc`, {
+      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + SUPPLIER_SB_KEY }
+    });
+    const data = await res.json();
+    if (!res.ok || !Array.isArray(data)) {
+      supplierCache.payments = [];
+      showToast('Supplier: ' + (data?.message || 'table not found — run the SQL migration'));
+    } else {
+      supplierCache.payments = data;
+    }
+    supplierCache.loaded = true;
+  } catch (e) {
+    supplierCache.payments = [];
+    showToast('Supplier load failed: ' + e.message);
+  }
+  supplierCache.loading = false;
+  renderSupplierAccount();
+}
+
+// Owed = buy-price cost of goods across ALL orders (no exclusions)
+function computeSupplierOwed() {
+  const orders = (typeof cache !== 'undefined' && cache.orders) ? cache.orders : [];
+  const products = (typeof cache !== 'undefined' && cache.products) ? cache.products : [];
+  let owed = 0;
+  orders.forEach(o => {
+    (o.products || []).forEach(p => {
+      const pr = products.find(pp => pp.code === p.code);
+      const bp = parseFloat(pr?.buy_price || pr?.price || 0);
+      owed += bp * parseInt(p.qty || 1);
+    });
+  });
+  return owed;
+}
+
+function renderSupplierAccount() {
+  const host = document.getElementById('supplier-account');
+  if (!host) return;
+
+  const owed = computeSupplierOwed();
+  const paid = supplierCache.payments.reduce((a, p) => a + parseFloat(p.amount || 0), 0);
+  const remaining = owed - paid;
+  const settled = remaining <= 0;
+
+  const rows = supplierCache.payments.length
+    ? supplierCache.payments.map(p => `
+        <tr>
+          <td>${p.date || '—'}</td>
+          <td><strong>EGP ${fmt(p.amount)}</strong></td>
+          <td>${p.note || '—'}</td>
+          <td><button class="btn btn-danger btn-xs" onclick="delSupplierPayment('${p.id}')">✕</button></td>
+        </tr>`).join('')
+    : '<tr><td colspan="4"><div class="empty">No payments to Elashry recorded yet</div></td></tr>';
+
+  host.innerHTML = `
+    <div style="margin-top:28px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+        <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:8px">
+          🏭 Supplier Account — Elashry
+          ${supplierCache.loading ? '<span style="font-size:12px;color:var(--muted)">loading…</span>' : ''}
+        </h3>
+        <button class="btn btn-primary btn-sm" onclick="openSupplierPayment()">+ Record Payment</button>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px">
+        <div class="stat-card orange"><div class="stat-val">EGP ${fmt(owed)}</div><div class="stat-label">Total Cost of Goods Taken</div></div>
+        <div class="stat-card blue"><div class="stat-val">EGP ${fmt(paid)}</div><div class="stat-label">Total Paid to Elashry</div></div>
+        <div class="stat-card ${settled ? 'green' : 'red'}"><div class="stat-val">EGP ${fmt(Math.abs(remaining))}</div><div class="stat-label">${settled ? (remaining < 0 ? 'Overpaid / Credit' : 'Fully Settled') : 'Remaining to Pay'}</div></div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Date</th><th>Amount</th><th>Note</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:8px">
+        Owed = buy-price × qty across all orders (including cancelled). This is a separate liability tracker and does not affect Net Profit above.
+      </div>
+    </div>`;
+}
+
+function openSupplierPayment() {
+  const overlay = document.getElementById('overlay');
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:14px;max-width:440px;width:92%;padding:24px;max-height:90vh;overflow:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px">
+        <h3 style="margin:0;font-size:17px">🏭 Record Payment to Elashry</h3>
+        <button class="btn btn-ghost btn-xs" onclick="closeModal()">✕</button>
+      </div>
+      <div class="form-group">
+        <label>Amount Paid (EGP) *</label>
+        <input type="number" id="sp-amt" min="0" placeholder="0" inputmode="decimal">
+      </div>
+      <div class="form-group">
+        <label>Date</label>
+        <input type="text" id="sp-date" value="${today()}">
+      </div>
+      <div class="form-group">
+        <label>Note (optional)</label>
+        <input type="text" id="sp-note" placeholder="e.g. cash for June batch">
+      </div>
+      <div style="display:flex;gap:10px;margin-top:8px">
+        <button class="btn btn-primary" style="flex:1" onclick="saveSupplierPayment()">Save Payment</button>
+        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      </div>
+    </div>`;
+  overlay.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+  setTimeout(() => document.getElementById('sp-amt')?.focus(), 60);
+}
+
+async function saveSupplierPayment() {
+  const amount = parseFloat(document.getElementById('sp-amt').value || 0);
+  const note = document.getElementById('sp-note').value.trim();
+  const date = document.getElementById('sp-date').value.trim() || today();
+  if (!amount || amount <= 0) { showToast('Please enter a valid amount'); return; }
+  const data = { id: genId(), amount, note, date, created_at: new Date().toISOString() };
+  try {
+    const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/supplier_payments`, {
+      method: 'POST',
+      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + SUPPLIER_SB_KEY, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error(await res.text());
+    supplierCache.payments.unshift(data);
+    showToast('Payment to Elashry recorded ✓');
+    closeModal();
+    renderSupplierAccount();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+async function delSupplierPayment(id) {
+  if (!confirm('Delete this payment record?')) return;
+  try {
+    const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/supplier_payments?id=eq.${id}`, {
+      method: 'DELETE',
+      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + SUPPLIER_SB_KEY, Prefer: 'return=minimal' }
+    });
+    if (!res.ok) throw new Error(await res.text());
+    supplierCache.payments = supplierCache.payments.filter(p => p.id !== id);
+    showToast('Payment deleted');
+    renderSupplierAccount();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+// Inject the supplier section into the Financials screen + auto-render with it
+function injectSupplierUI() {
+  if (document.getElementById('supplier-account')) return;
+  const fin = document.getElementById('screen-financials');
+  if (!fin) return;
+  const div = document.createElement('div');
+  div.id = 'supplier-account';
+  fin.appendChild(div);
+}
+
+(function initSupplier() {
+  const run = () => {
+    injectSupplierUI();
+    if (typeof renderFinancials === 'function' && !renderFinancials.__supplierPatched) {
+      const orig = renderFinancials;
+      renderFinancials = function () { orig.apply(this, arguments); renderSupplierAccount(); };
+      renderFinancials.__supplierPatched = true;
+    }
+    loadSupplierPayments();
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
+  else run();
+})();
