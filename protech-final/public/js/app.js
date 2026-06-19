@@ -85,7 +85,7 @@ protechstores.com`
   btn.id = 'send-ship-btn';
   btn.style.cssText = 'margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;';
   btn.innerHTML = `
-    <a href="${waLink}" target="_blank"
+    <a href="${waLink}" target="_blank" onclick="markConfirmSent('${orderId}')"
       style="display:inline-flex;align-items:center;gap:8px;background:#25D366;color:white;padding:11px 20px;border-radius:8px;text-decoration:none;font-weight:700;font-size:14px;">
       📲 إرسال كود الشحن عبر واتساب
     </a>
@@ -879,6 +879,9 @@ function viewOrder(id) {
   const waLink = `https://wa.me/${waPhone}?text=${waText}`;
 
   document.getElementById('m-detail-body').innerHTML = `
+    <div id="order-tracker-${id}" style="background:#fafafa;border:1px solid #eee;border-radius:10px;padding:14px;margin-bottom:16px;display:flex;justify-content:center">
+      ${orderTrackerHTML(o)}
+    </div>
     <div class="detail-grid">
       <div><div class="detail-label">Order Code</div><strong>${o.code}</strong></div>
       <div><div class="detail-label">Date</div>${o.date}</div>
@@ -906,7 +909,7 @@ function viewOrder(id) {
     </div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
       <button class="btn btn-primary" onclick="saveDetail('${id}')">Save Changes</button>
-      ${o.status === 'Delivered' ? `<a href="${waLink}" target="_blank" class="btn btn-wa">WhatsApp Feedback</a>` : ''}
+      ${o.status === 'Delivered' ? `<a href="${waLink}" target="_blank" class="btn btn-wa" onclick="markFeedbackSent('${id}')">WhatsApp Feedback</a>` : ''}
       ${o.status === 'Delivered' ? `<button class="btn btn-ghost" onclick="openFeedback('${o.code}')">Add Manual Feedback</button>` : ''}
       ${o.status === 'Cancelled' && !o.warehouse_confirmed ? `
         <button class="btn" style="background:#7c3aed;color:#fff;display:flex;align-items:center;gap:8px" onclick="confirmWarehouse('${id}')">
