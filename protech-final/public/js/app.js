@@ -1606,3 +1606,69 @@ function injectSupplierUI() {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
   else run();
 })();
+// ═══════════════════════════════════════════════════════════════════
+//  ORDER PROGRESS TRACKER — 3 ticks per order
+//  1) Confirmation sent (WhatsApp)  2) Delivered  3) Feedback sent (WhatsApp)
+// ═══════════════════════════════════════════════════════════════════
+const TRACK_SB_URL = 'https://wljxplbcfoorqpoflcdz.supabase.co';
+const TRACK_SB_KEY = 'sb_publishable_zsHh-eOarHI7BSGtuP6WWQ_PQ4ACoHG';
+
+// Mark a tracking flag true/false in DB + cache, then refresh views
+async function setOrderFlag(orderId, field, value) {
+  try {
+    const res = await fetch(`${TRACK_SB_URL}/rest/v1/orders?id=eq.${orderId}`, {
+      method: 'PATCH',
+      headers: { apikey: TRACK_SB_KEY, Authorization: 'Bearer ' + TRACK_SB_KEY, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify({ [field]: value })
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const i = cache.orders.findIndex(x => x.id === orderId);
+    if (i >= 0) cache.orders[i][field] = value;
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+// Called by the WhatsApp confirmation button — auto-marks confirm_sent
+async function markConfirmSent(orderId) {
+  await setOrderFlag(orderId, 'confirm_sent', true);
+  showToast('Confirmation marked as sent ✓');
+  renderOrderTracker(orderId);
+}
+
+// Called by the WhatsApp feedback button — auto-marks feedback_sent
+async function markFeedbackSent(orderId) {
+  await setOrderFlag(orderId, 'feedback_sent', true);
+  showToast('Feedback marked as sent ✓');
+  renderOrderTracker(orderId);
+}
+
+// Build the 3-tick HTML for one order
+function orderTrackerHTML(o) {
+  const delivered = o.status === 'Delivered';
+  const steps = [
+    { on: !!o.confirm_sent, label: 'Confirmation Sent', icon: '📲' },
+    { on: delivered,        label: 'Delivered',         icon: '🚚' },
+    { on: !!o.feedback_sent, label: 'Feedback Sent',     icon: '⭐' },
+  ];
+  return `
+    <div style="display:flex;align-items:center;gap:0;flex-wrap:wrap;margin:4px 0">
+      ${steps.map((s, i) => `
+        <div style="display:flex;align-items:center;gap:6px">
+          <div title="${s.label}" style="display:flex;flex-direction:column;align-items:center;gap:3px;min-width:70px">
+            <div style="width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-size:14px;font-weight:800;
+              background:${s.on ? '#16a34a' : '#e5e7eb'};color:${s.on ? '#fff' : '#9ca3af'};
+              border:2px solid ${s.on ? '#16a34a' : '#e5e7eb'};transition:all .2s">
+              ${s.on ? '✓' : s.icon}
+            </div>
+            <span style="font-size:10px;font-weight:600;color:${s.on ? '#16a34a' : '#9ca3af'};text-align:center;white-space:nowrap">${s.label}</span>
+          </div>
+          ${i < steps.length - 1 ? `<div style="width:24px;height:3px;background:${steps[i + 1].on ? '#16a34a' : '#e5e7eb'};margin:0 2px;margin-bottom:18px;border-radius:2px"></div>` : ''}
+        </div>`).join('')}
+    </div>`;
+}
+
+// Re-render just the tracker inside the open order detail (if present)
+function renderOrderTracker(orderId) {
+  const host = document.getElementById('order-tracker-' + orderId);
+  const o = cache.orders.find(x => x.id === orderId);
+  if (host && o) host.innerHTML = orderTrackerHTML(o);
+}
