@@ -89,13 +89,25 @@ create policy "supplier_admin_all" on supplier_payments for all to authenticated
 In Supabase → Storage → `protech-media` → Policies: allow public **read**, but restrict
 **insert/update/delete** to `authenticated` only (otherwise anyone can overwrite your images).
 
-## 5. Replace the client-side login with Supabase Auth
+## 5. Real login (Supabase Auth) — ALREADY IMPLEMENTED IN CODE ✅
 
-Both the dashboard (`db.js` `ADMIN_USER`/`ADMIN_PASS`) and the storefront admin password
-(`protech2024`) are checked in the browser — anyone can read them in the page source, and
-they protect nothing because the data API is open. Create a Supabase Auth user for yourself
-and have the apps sign in with it; then the RLS `authenticated` policies above protect
-everything. Ask me and I'll wire this up.
+The hardcoded passwords are gone. The dashboard (`db.js`) and the storefront admin
+(`App.jsx`) now sign in with **Supabase Auth** (email + password) and use the returned
+JWT for all writes, so the RLS `authenticated` policies above protect everything.
+
+**Do the activation in THIS ORDER (or you can lock yourself out):**
+
+1. **Create your login user FIRST.** Supabase → Authentication → Providers → enable **Email**.
+   Then Authentication → Users → **Add user** → enter your email + a strong password →
+   tick **Auto Confirm User**.
+2. **Then deploy the new code** (merge the `claude/clever-pascal-8lmsrd` branch to `main`
+   in both repos). Now both apps require that email/password to enter admin. Logging in
+   still has full access at this point (RLS not applied yet), so verify you can sign in.
+3. **Then run the RLS SQL** from step 4. After this, only your authenticated login can
+   read/write the sensitive data; the public can only browse products and place orders.
+
+> If anything goes wrong, you can roll back by reverting the branch merge — the previous
+> commit still works. Don't run the RLS SQL until you've confirmed login works.
 
 ### Order tracking by phone
 The storefront's "track my order by phone" did an open `select` on `orders` (anyone could

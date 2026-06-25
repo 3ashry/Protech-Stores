@@ -2,62 +2,100 @@
 const SUPABASE_URL = 'https://wljxplbcfoorqpoflcdz.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_zsHh-eOarHI7BSGtuP6WWQ_PQ4ACoHG';
 
-// ── ADMIN CREDENTIALS ──
-// ⚠️ IMPORTANT: Replace CHANGE_THIS_PASSWORD with your real password before uploading
-const ADMIN_USER = 'mahmoudelashry4597@gmail.com';
-const ADMIN_PASS = 'CHANGE_THIS_PASSWORD';
-
-// ── AUTH ──f
+// ── AUTH (real Supabase Auth — no hardcoded password) ──
+// Create your login user in Supabase → Authentication → Users (email + password).
+// The dashboard signs in with it and uses the returned JWT for all DB access,
+// so Row Level Security can restrict everything to authenticated admins.
 let isLoggedIn = false;
+let accessToken = sessionStorage.getItem('pt_access') || null;
+let refreshToken = localStorage.getItem('pt_refresh') || null;
 
-function doLogin() {
-  const user = document.getElementById('l-user').value.trim();
-  const pass = document.getElementById('l-pass').value;
-  const errEl = document.getElementById('login-error');
-  if (user === ADMIN_USER && pass === ADMIN_PASS) {
-    isLoggedIn = true;
-    sessionStorage.setItem('pt_auth', '1');
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('app').style.display = 'block';
-    loadAll();
-    showToast('Welcome back, Protech! 🔧');
-    try { const a = new Audio('/cash.mp3'); a.volume = 0; a.play().catch(()=>{}); } catch(e) {}
-    setTimeout(() => {
-      if (window.OneSignal) {
-        OneSignal.Notifications.requestPermission();
-      }
-    }, 3000);
-  } else {
-    errEl.style.display = 'block';
-    errEl.textContent = 'Incorrect username or password.';
-    document.getElementById('l-pass').value = '';
-  }
+function setSession(d) {
+  accessToken = d.access_token;
+  refreshToken = d.refresh_token;
+  sessionStorage.setItem('pt_access', accessToken);
+  localStorage.setItem('pt_refresh', refreshToken);
+  sessionStorage.setItem('pt_auth', '1');
 }
 
-function doLogout() {
-  if (!confirm('Are you sure you want to log out?')) return;
-  isLoggedIn = false;
+function clearSession() {
+  accessToken = null; refreshToken = null;
+  sessionStorage.removeItem('pt_access');
+  localStorage.removeItem('pt_refresh');
   sessionStorage.removeItem('pt_auth');
-  document.getElementById('app').style.display = 'none';
-  document.getElementById('login-screen').style.display = 'flex';
-  document.getElementById('l-pass').value = '';
 }
 
-// Check if already logged in this session
-// Check if already logged in this session
-if (sessionStorage.getItem('pt_auth') === '1') {
+async function refreshSession() {
+  if (!refreshToken) return false;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+      method: 'POST',
+      headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken })
+    });
+    if (!res.ok) { clearSession(); return false; }
+    const d = await res.json();
+    if (!d.access_token) { clearSession(); return false; }
+    setSession(d);
+    return true;
+  } catch { return false; }
+}
+
+function showApp() {
   isLoggedIn = true;
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = 'block';
   loadAll();
   try { const a = new Audio('/cash.mp3'); a.volume = 0; a.play().catch(()=>{}); } catch(e) {}
-  // Request push permission after page loads
-  setTimeout(() => {
-    if (window.OneSignal) {
-      OneSignal.Notifications.requestPermission();
-    }
-  }, 3000);
+  setTimeout(() => { if (window.OneSignal) OneSignal.Notifications.requestPermission(); }, 3000);
 }
+
+async function doLogin() {
+  const email = document.getElementById('l-user').value.trim();
+  const pass = document.getElementById('l-pass').value;
+  const errEl = document.getElementById('login-error');
+  try {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+      method: 'POST',
+      headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: pass })
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok || !d.access_token) throw new Error('bad credentials');
+    setSession(d);
+    showApp();
+    showToast('Welcome back, Protech! 🔧');
+  } catch {
+    errEl.style.display = 'block';
+    errEl.textContent = 'Incorrect email or password.';
+    document.getElementById('l-pass').value = '';
+  }
+}
+
+async function doLogout() {
+  if (!confirm('Are you sure you want to log out?')) return;
+  try {
+    await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
+      method: 'POST',
+      headers: { apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + (accessToken || SUPABASE_ANON_KEY) }
+    });
+  } catch (e) {}
+  clearSession();
+  isLoggedIn = false;
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('l-pass').value = '';
+}
+
+// Restore an existing session on load by refreshing the stored token.
+(async () => {
+  if (refreshToken && await refreshSession()) {
+    showApp();
+  }
+})();
+
+// Keep the access token fresh (Supabase access tokens expire ~1h).
+setInterval(() => { if (refreshToken) refreshSession(); }, 45 * 60 * 1000);
 
 // Allow Enter key on login
 document.addEventListener('DOMContentLoaded', () => {
@@ -79,7 +117,9 @@ const USE_SUPABASE = SUPABASE_URL !== 'YOUR_SUPABASE_URL';
 function sbHeaders(extra = {}) {
   return {
     'apikey': SUPABASE_ANON_KEY,
-    'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
+    // Use the signed-in admin's JWT when available so RLS sees an authenticated user;
+    // fall back to the publishable key (used only for reads before login / if RLS is open).
+    'Authorization': 'Bearer ' + (accessToken || SUPABASE_ANON_KEY),
     'Content-Type': 'application/json',
     'Accept': 'application/json',
     ...extra

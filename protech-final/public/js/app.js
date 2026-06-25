@@ -467,7 +467,7 @@ async function uploadProductImage(file, productId) {
   const path = `products/${productId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
   const res = await fetch(`${SB_URL_IMG}/storage/v1/object/protech-media/${path}`, {
     method: 'POST',
-    headers: { apikey: SB_KEY_IMG, Authorization: 'Bearer ' + SB_KEY_IMG, 'Content-Type': file.type, 'x-upsert': 'true' },
+    headers: { apikey: SB_KEY_IMG, Authorization: 'Bearer ' + (accessToken || SB_KEY_IMG), 'Content-Type': file.type, 'x-upsert': 'true' },
     body: file
   });
   if (!res.ok) throw new Error(await res.text());
@@ -1250,7 +1250,7 @@ async function loadAnalytics() {
       since.setHours(0, 0, 0, 0);
       url += `&created_at=gte.${since.toISOString()}`;
     }
-    const res = await fetch(url, { headers: { apikey: ANALYTICS_SB_KEY, Authorization: 'Bearer ' + ANALYTICS_SB_KEY } });
+    const res = await fetch(url, { headers: { apikey: ANALYTICS_SB_KEY, Authorization: 'Bearer ' + (accessToken || ANALYTICS_SB_KEY) } });
     const data = await res.json();
     if (!res.ok || !Array.isArray(data)) {
       analyticsCache.events = [];
@@ -1443,7 +1443,7 @@ async function loadSupplierPayments() {
   renderSupplierAccount();
   try {
     const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/supplier_payments?select=*&order=created_at.desc`, {
-      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + SUPPLIER_SB_KEY }
+      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY) }
     });
     const data = await res.json();
     if (!res.ok || !Array.isArray(data)) {
@@ -1562,7 +1562,7 @@ async function saveSupplierPayment() {
   try {
     const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/supplier_payments`, {
       method: 'POST',
-      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + SUPPLIER_SB_KEY, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
       body: JSON.stringify(data)
     });
     if (!res.ok) throw new Error(await res.text());
@@ -1578,7 +1578,7 @@ async function delSupplierPayment(id) {
   try {
     const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/supplier_payments?id=eq.${encodeURIComponent(id)}`, {
       method: 'DELETE',
-      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + SUPPLIER_SB_KEY, Prefer: 'return=minimal' }
+      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), Prefer: 'return=minimal' }
     });
     if (!res.ok) throw new Error(await res.text());
     supplierCache.payments = supplierCache.payments.filter(p => p.id !== id);
@@ -1622,7 +1622,7 @@ async function setOrderFlag(orderId, field, value) {
   try {
     const res = await fetch(`${TRACK_SB_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
       method: 'PATCH',
-      headers: { apikey: TRACK_SB_KEY, Authorization: 'Bearer ' + TRACK_SB_KEY, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      headers: { apikey: TRACK_SB_KEY, Authorization: 'Bearer ' + (accessToken || TRACK_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
       body: JSON.stringify({ [field]: value })
     });
     if (!res.ok) throw new Error(await res.text());
