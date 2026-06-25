@@ -47,7 +47,6 @@ function showApp() {
   document.getElementById('app').style.display = 'block';
   loadAll();
   try { const a = new Audio('/cash.mp3'); a.volume = 0; a.play().catch(()=>{}); } catch(e) {}
-  setTimeout(() => { if (window.OneSignal) OneSignal.Notifications.requestPermission(); }, 3000);
 }
 
 async function doLogin() {
@@ -232,30 +231,9 @@ async function loadAll() {
         cache.orders = orders || [];
         cache.expenses = expenses || [];
         cache.feedbacks = feedbacks || [];
-        // Check for new orders and notify
-        const prevCount = parseInt(sessionStorage.getItem("protech_order_count") || "0");
-        if (orders && orders.length > prevCount && prevCount !== 0) {
-          const newestOrder = orders[0];
-          sendPushNotification(
-            newestOrder.customer_name,
-            newestOrder.total,
-            newestOrder.code
-          );
-        }
         renderAll();
       } catch(e) {}
     }, 30000);
   }
 }
 
-async function sendPushNotification(customerName, total, orderCode) {
-  try {
-    await fetch('/api/notify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ customerName, total, orderCode })
-    });
-  } catch(e) {
-    console.warn('Push notification failed:', e);
-  }
-}

@@ -10,7 +10,6 @@ dashboards. Do these in order. Until step 1–3 are done, the new `api/` functio
 ## 1. Rotate the leaked keys (they were committed in plaintext — assume compromised)
 
 - **Bosta**: dashboard → API/Developers → revoke the old key, generate a new one.
-- **OneSignal**: app → Settings → Keys & IDs → regenerate the REST API Key.
 - **Supabase**: the publishable key is necessarily public (it ships in the browser), so it
   does not need rotating *by itself* — but it only becomes safe once RLS is fixed (step 4).
   Never expose the **service_role** key in client code.
@@ -24,18 +23,16 @@ Project **Protech-Stores** → Settings → Environment Variables (Production + 
 | `BOSTA_API_KEY` | your **new** Bosta key |
 | `SUPABASE_URL` | `https://wljxplbcfoorqpoflcdz.supabase.co` |
 | `SUPABASE_KEY` | your Supabase key (service_role preferred for server-side writes) |
-| `ONESIGNAL_API_KEY` | your **new** OneSignal REST key |
-| `ONESIGNAL_APP_ID` | `ffdfd9c4-f089-4d84-b38a-17b869d0e0ea` |
 | `ALLOWED_ORIGINS` | `https://protech-stores.vercel.app,https://YOUR-STOREFRONT-DOMAIN` |
-| `NOTIFY_SECRET` | (optional) a random string to gate /api/notify |
 
-Redeploy after saving.
+Redeploy after saving. (Push notifications via OneSignal were removed, so no
+OneSignal keys are needed.)
 
 ## 3. The serverless functions moved
 
-`bosta.js` / `notify.js` are now in **`/api`** (real Vercel functions) instead of
-`public/api` (where they were served as raw static files, leaking the keys). The URLs
-(`/api/bosta`, `/api/notify`) are unchanged.
+`bosta.js` is now in **`/api`** (a real Vercel function) instead of `public/api`
+(where it was served as a raw static file, leaking the key). The URL (`/api/bosta`)
+is unchanged. (`notify.js` / OneSignal were removed.)
 
 ## 4. 🔴 Lock down the database (RLS) — the most important fix
 

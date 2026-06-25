@@ -25,11 +25,6 @@ function printInvoice(id) {
   if (!o) return;
   generateInvoicePDF(o);
 }
-function requestNotificationPermission() {
-  if ("Notification" in window && Notification.permission === "default") {
-    Notification.requestPermission();
-  }
-}
 // ── UTILS ──
 const fmt = n => parseFloat(n || 0).toLocaleString('en-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -679,12 +674,6 @@ function renderOrders() {
   if (newCount > prevCount && prevCount !== 0) {
     playNotificationSound();
     showToast("🛒 طلب جديد وصل!");
-    if (Notification.permission === "granted") {
-      new Notification("بروتيك — طلب جديد! 🛒", {
-        body: `لديك ${newCount - prevCount} طلب جديد`,
-        icon: "/favicon.png",
-      });
-    }
   }
   sessionStorage.setItem("protech_order_count", newCount);
   const smap = { 'Processing': 'b-info', 'In Transit': 'b-warning', 'Delivered': 'b-success', 'Cancelled': 'b-danger', 'Returned': 'b-purple' };
@@ -1228,9 +1217,6 @@ function downloadFinancialsExcel() {
   showToast('Financials Excel downloaded ✓');
 }
 
-if (sessionStorage.getItem('pt_auth') === '1') {
-  requestNotificationPermission();
-}
 // ═══════════════════════════════════════════════════════════════════
 //  ANALYTICS — Customer funnel (product views → checkout → orders)
 // ═══════════════════════════════════════════════════════════════════
