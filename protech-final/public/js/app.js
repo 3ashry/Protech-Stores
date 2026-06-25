@@ -32,6 +32,7 @@ function requestNotificationPermission() {
 }
 // ── UTILS ──
 const fmt = n => parseFloat(n || 0).toLocaleString('en-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const genCode = p => p + '-' + Date.now().toString(36).toUpperCase().slice(-6);
 const today = () => new Date().toLocaleDateString('en-GB');
 const phoneOk = p => /^01[0-9]{9}$/.test(p);
@@ -152,7 +153,7 @@ function generateInvoicePDF(order) {
     ? order.products
         .map(p => `
           <tr>
-            <td>${p.name || '—'}</td>
+            <td>${esc(p.name) || '—'}</td>
             <td style="text-align:center">${p.qty || 1}</td>
             <td style="text-align:center">${(p.price || 0).toLocaleString('ar-EG')} ج.م</td>
             <td style="text-align:center">${((p.price || 0) * (p.qty || 1)).toLocaleString('ar-EG')} ج.م</td>
@@ -170,7 +171,7 @@ function generateInvoicePDF(order) {
 <html dir="rtl" lang="ar">
 <head>
   <meta charset="UTF-8"/>
-  <title>فاتورة — ${order.code || order.id}</title>
+  <title>فاتورة — ${esc(order.code || order.id)}</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -285,7 +286,7 @@ function generateInvoicePDF(order) {
     </div>
     <div class="invoice-meta">
       <div class="label">رقم الفاتورة</div>
-      <div class="value">#${order.code || order.id}</div>
+      <div class="value">#${esc(order.code || order.id)}</div>
       <div class="label" style="margin-top:6px">تاريخ الطلب</div>
       <div class="value">${orderDate}</div>
     </div>
@@ -296,24 +297,24 @@ function generateInvoicePDF(order) {
   <div class="info-grid">
     <div class="info-item">
       <div class="info-label">اسم العميل</div>
-      <div class="info-value">${order.customer_name || '—'}</div>
+      <div class="info-value">${esc(order.customer_name) || '—'}</div>
     </div>
     <div class="info-item">
       <div class="info-label">رقم الهاتف</div>
-      <div class="info-value">${order.phone || '—'}</div>
+      <div class="info-value">${esc(order.phone) || '—'}</div>
     </div>
     <div class="info-item">
       <div class="info-label">كود الشحن</div>
-      <div class="info-value ship-code">${order.ship_code || 'لم يُحدَّد بعد'}</div>
+      <div class="info-value ship-code">${esc(order.ship_code) || 'لم يُحدَّد بعد'}</div>
     </div>
     <div class="info-item">
       <div class="info-label">حالة الطلب</div>
-      <div class="info-value">${order.status || 'جديد'}</div>
+      <div class="info-value">${esc(order.status) || 'جديد'}</div>
     </div>
     ${order.notes ? `
     <div class="info-item" style="grid-column:1/-1">
       <div class="info-label">ملاحظات</div>
-      <div class="info-value">${order.notes}</div>
+      <div class="info-value">${esc(order.notes)}</div>
     </div>` : ''}
   </div>
 
@@ -434,17 +435,17 @@ function renderHome() {
   hf.innerHTML = fbs.map(f => `
     <div class="fb-card">
       <div style="display:flex;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:6px">
-        <strong style="font-size:13px">${f.order_code || f.orderCode || '—'}</strong>
-        <span class="badge ${(f.general === 'Satisfied' || f.general === 'راضي') ? 'b-success' : 'b-danger'}">${f.general}</span>
+        <strong style="font-size:13px">${esc(f.order_code || f.orderCode) || '—'}</strong>
+        <span class="badge ${(f.general === 'Satisfied' || f.general === 'راضي') ? 'b-success' : 'b-danger'}">${esc(f.general)}</span>
       </div>
       <div class="fb-pills">
-        <span class="badge b-gray">Service: ${f.service}</span>
-        <span class="badge b-gray">Quality: ${f.quality}</span>
-        <span class="badge b-gray">Delivery: ${f.delivery}</span>
-        <span class="badge b-gray">Packing: ${f.packing}</span>
-        <span class="badge ${(f.recommend === 'Yes' || f.recommend === 'أنصح') ? 'b-success' : 'b-danger'}">Recommend: ${f.recommend}</span>
+        <span class="badge b-gray">Service: ${esc(f.service)}</span>
+        <span class="badge b-gray">Quality: ${esc(f.quality)}</span>
+        <span class="badge b-gray">Delivery: ${esc(f.delivery)}</span>
+        <span class="badge b-gray">Packing: ${esc(f.packing)}</span>
+        <span class="badge ${(f.recommend === 'Yes' || f.recommend === 'أنصح') ? 'b-success' : 'b-danger'}">Recommend: ${esc(f.recommend)}</span>
       </div>
-      ${f.comment ? `<div style="font-size:13px;color:var(--muted);font-style:italic;margin-top:6px">"${f.comment}"</div>` : ''}
+      ${f.comment ? `<div style="font-size:13px;color:var(--muted);font-style:italic;margin-top:6px">"${esc(f.comment)}"</div>` : ''}
     </div>`).join('');
 }
 
@@ -530,12 +531,12 @@ function renderInventory() {
     const isOffer = p.is_offer && p.offer_price;
     return `
     <tr>
-      <td><span class="badge b-orange">${p.code}</span></td>
+      <td><span class="badge b-orange">${esc(p.code)}</span></td>
       <td>
-        <strong>${p.name}</strong>
+        <strong>${esc(p.name)}</strong>
         <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">
-          ${cats.map(c => `<span class="badge b-info" style="font-size:10px">${CAT_LABELS[c] || c}</span>`).join('')}
-          ${p.brand ? `<span class="badge b-gray" style="font-size:10px">${p.brand}</span>` : ''}
+          ${cats.map(c => `<span class="badge b-info" style="font-size:10px">${esc(CAT_LABELS[c] || c)}</span>`).join('')}
+          ${p.brand ? `<span class="badge b-gray" style="font-size:10px">${esc(p.brand)}</span>` : ''}
           ${isOffer ? `<span class="badge b-danger" style="font-size:10px">🔥 EGP ${fmt(p.offer_price)}</span>` : ''}
           ${!p.is_published ? `<span class="badge b-gray" style="font-size:10px">Hidden</span>` : ''}
         </div>
@@ -689,11 +690,11 @@ function renderOrders() {
   const smap = { 'Processing': 'b-info', 'In Transit': 'b-warning', 'Delivered': 'b-success', 'Cancelled': 'b-danger', 'Returned': 'b-purple' };
   document.getElementById('orders-tbody').innerHTML = cache.orders.length ? cache.orders.map(o => `
     <tr>
-      <td><span class="badge b-orange">${o.code}</span> ${orderProgressBadge(o)}</td>
-      <td><strong>${o.customer_name}</strong></td>
-      <td>${o.phone}</td>
+      <td><span class="badge b-orange">${esc(o.code)}</span> ${orderProgressBadge(o)}</td>
+      <td><strong>${esc(o.customer_name)}</strong></td>
+      <td>${esc(o.phone)}</td>
       <td>EGP ${fmt(o.total)}</td>
-      <td><span class="badge ${smap[o.status] || 'b-gray'}">${o.status}</span></td>
+      <td><span class="badge ${smap[o.status] || 'b-gray'}">${esc(o.status)}</span></td>
       <td><div class="actions">
         <button class="btn btn-ghost btn-xs" onclick="viewOrder('${o.id}')">View</button>
         <button class="btn btn-dark btn-xs" onclick="editOrder('${o.id}')">Edit</button>
@@ -747,7 +748,7 @@ function renderPRows() {
         <div class="form-group" style="margin:0"><label>Product</label>
           <select onchange="updatePRow(${i},'code',this.value)">
             <option value="">Select product</option>
-            ${cache.products.map(p => `<option value="${p.code}"${r.code === p.code ? ' selected' : ''}>${p.name} (${p.code})</option>`).join('')}
+            ${cache.products.map(p => `<option value="${esc(p.code)}"${r.code === p.code ? ' selected' : ''}>${esc(p.name)} (${esc(p.code)})</option>`).join('')}
           </select>
         </div>
         <div class="form-group" style="margin:0"><label>Qty</label>
@@ -788,7 +789,7 @@ async function saveOrder() {
     }
   }
 
-  const total = oPRows.reduce((a, r) => a + parseFloat(r.sell_price || 0) * parseInt(r.qty || 1), 0);
+  const total = oPRows.reduce((a, r) => a + parseFloat(r.sell_price || 0) * parseInt(r.qty || 1), 0) + est_shipping;
   const id = document.getElementById('o-idx').value;
   try {
     if (id) {
@@ -871,7 +872,7 @@ function viewOrder(id) {
     const pr = cache.products.find(pp => pp.code === p.code);
     const unitPrice = parseFloat(p.sell_price ?? p.price ?? 0);
     const line = unitPrice * parseInt(p.qty || 1);
-    return `<tr><td>${pr?.name || p.name || p.code}</td><td style="text-align:center">${p.qty}</td><td>EGP ${fmt(unitPrice)}</td><td>EGP ${fmt(line)}</td></tr>`;
+    return `<tr><td>${esc(pr?.name || p.name || p.code)}</td><td style="text-align:center">${p.qty}</td><td>EGP ${fmt(unitPrice)}</td><td>EGP ${fmt(line)}</td></tr>`;
   }).join('');
   const feedbackUrl = `${window.location.origin}/feedback.html?order=${o.code}`;
   const waText = encodeURIComponent(`أهلاً ${o.customer_name} 😊\nشكراً لتسوقك من بروتيك! 🔧\n\nنرجو منك تقييم تجربتك:\n${feedbackUrl}\n\nرأيك يهمنا 🙏`);
@@ -883,15 +884,15 @@ function viewOrder(id) {
       ${orderTrackerHTML(o)}
     </div>
     <div class="detail-grid">
-      <div><div class="detail-label">Order Code</div><strong>${o.code}</strong></div>
-      <div><div class="detail-label">Date</div>${o.date}</div>
-      <div><div class="detail-label">Customer</div><strong>${o.customer_name}</strong></div>
-      <div><div class="detail-label">Phone</div>${o.phone}</div>
-      <div><div class="detail-label">City</div><strong>${o.city || '—'}</strong></div>
-      <div><div class="detail-label">Address</div>${o.address || '—'}</div>
-      <div><div class="detail-label">Shipping Code</div>${o.ship_code || '—'}</div>
+      <div><div class="detail-label">Order Code</div><strong>${esc(o.code)}</strong></div>
+      <div><div class="detail-label">Date</div>${esc(o.date)}</div>
+      <div><div class="detail-label">Customer</div><strong>${esc(o.customer_name)}</strong></div>
+      <div><div class="detail-label">Phone</div>${esc(o.phone)}</div>
+      <div><div class="detail-label">City</div><strong>${esc(o.city) || '—'}</strong></div>
+      <div><div class="detail-label">Address</div>${esc(o.address) || '—'}</div>
+      <div><div class="detail-label">Shipping Code</div>${esc(o.ship_code) || '—'}</div>
       <div><div class="detail-label">Est. Shipping</div>EGP ${fmt(o.est_shipping || 0)}</div>
-      ${o.notes ? `<div style="grid-column:1/-1"><div class="detail-label">Notes</div>${o.notes}</div>` : ''}
+      ${o.notes ? `<div style="grid-column:1/-1"><div class="detail-label">Notes</div>${esc(o.notes)}</div>` : ''}
     </div>
     <div class="table-wrap" style="margin-bottom:14px">
       <table>
@@ -902,7 +903,7 @@ function viewOrder(id) {
     <div style="text-align:right;font-weight:800;font-size:15px;color:var(--orange);margin-bottom:16px">Order Total: EGP ${fmt(o.total)}</div>
     <div class="form-row">
       <div class="form-group"><label>Actual Shipping Cost (EGP)</label><input type="number" id="d-ship" value="${o.actual_shipping || ''}" placeholder="0" inputmode="decimal"></div>
-      <div class="form-group"><label>Cancellation Reason</label><input id="d-reason" value="${o.cancel_reason || ''}" placeholder="If applicable"></div>
+      <div class="form-group"><label>Cancellation Reason</label><input id="d-reason" value="${esc(o.cancel_reason)}" placeholder="If applicable"></div>
     </div>
     <div class="form-group"><label>Order Status</label>
       <select id="d-status">${statuses.map(s => `<option${o.status === s ? ' selected' : ''}>${s}</option>`).join('')}</select>
@@ -942,11 +943,11 @@ function renderReturns() {
     <div class="stat-card orange"><div class="stat-val">EGP ${fmt(totalShip)}</div><div class="stat-label">Total Shipping Cost</div></div>`;
   document.getElementById('ret-tbody').innerHTML = rets.length ? rets.map(o => `
     <tr>
-      <td><strong>${o.customer_name}</strong></td>
-      <td>${o.phone}</td>
-      <td>${o.cancel_reason || '—'}</td>
+      <td><strong>${esc(o.customer_name)}</strong></td>
+      <td>${esc(o.phone)}</td>
+      <td>${esc(o.cancel_reason) || '—'}</td>
       <td>EGP ${fmt(o.actual_shipping || 0)}</td>
-      <td>${o.date}</td>
+      <td>${esc(o.date)}</td>
     </tr>`).join('') : '<tr><td colspan="5"><div class="empty"><div class="empty-icon">↩️</div>No cancellations</div></td></tr>';
 }
 
@@ -955,7 +956,7 @@ function renderFinancials() {
   const orders = cache.orders;
   const delivered = orders.filter(o => o.status === 'Delivered');
   const cancelled = orders.filter(o => o.status === 'Cancelled');
-  const totalCollected = delivered.reduce((a, o) => a + parseFloat(o.total || 0) + parseFloat(o.actual_shipping || 0), 0);
+  const totalCollected = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
   const totalActualShip = delivered.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
   const netFromBosta = totalCollected - totalActualShip;
   const retShipCost = cancelled.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
@@ -976,10 +977,10 @@ function renderFinancials() {
 
   document.getElementById('exp-tbody').innerHTML = cache.expenses.length ? cache.expenses.map(e => `
     <tr>
-      <td><span class="badge b-orange">${e.category}</span></td>
-      <td>${e.description || '—'}</td>
+      <td><span class="badge b-orange">${esc(e.category)}</span></td>
+      <td>${esc(e.description) || '—'}</td>
       <td>EGP ${fmt(e.amount)}</td>
-      <td>${e.date}</td>
+      <td>${esc(e.date)}</td>
       <td><button class="btn btn-danger btn-xs" onclick="delExpense('${e.id}')">✕</button></td>
     </tr>`).join('') : '<tr><td colspan="5"><div class="empty">No expenses recorded</div></td></tr>';
 
@@ -1024,10 +1025,10 @@ async function delExpense(id) {
 function renderInvoices() {
   document.getElementById('inv-orders-tbody').innerHTML = cache.orders.length ? cache.orders.map(o => `
     <tr>
-      <td><span class="badge b-orange">${o.code}</span></td>
-      <td>${o.customer_name}</td>
+      <td><span class="badge b-orange">${esc(o.code)}</span></td>
+      <td>${esc(o.customer_name)}</td>
       <td>EGP ${fmt(o.total)}</td>
-      <td><span class="badge b-info">${o.status}</span></td>
+      <td><span class="badge b-info">${esc(o.status)}</span></td>
       <td><button class="btn btn-primary btn-sm" onclick="printInvoice('${o.id}')">Print PDF</button></td>
     </tr>`).join('') : '<tr><td colspan="5"><div class="empty"><div class="empty-icon">🧾</div>No orders to print</div></td></tr>';
 }
@@ -1171,7 +1172,7 @@ function downloadFinancialsExcel() {
   const orders = cache.orders;
   const delivered = orders.filter(o => o.status === 'Delivered');
   const cancelled = orders.filter(o => o.status === 'Cancelled');
-  const totalCollected = delivered.reduce((a, o) => a + parseFloat(o.total || 0) + parseFloat(o.actual_shipping || 0), 0);
+  const totalCollected = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
   const totalActualShip = delivered.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
   const netFromBosta = totalCollected - totalActualShip;
   const retShipCost = cancelled.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
@@ -1346,8 +1347,8 @@ function renderAnalytics() {
   const topRows = top.length ? top.map((p, i) => `
     <tr>
       <td style="color:var(--muted)">${i + 1}</td>
-      <td><strong>${p.name || '—'}</strong></td>
-      <td><span class="badge b-orange">${p.code || '—'}</span></td>
+      <td><strong>${esc(p.name) || '—'}</strong></td>
+      <td><span class="badge b-orange">${esc(p.code) || '—'}</span></td>
       <td style="text-align:center"><span class="badge b-info">${p.u}</span></td>
       <td style="text-align:center;color:var(--muted)">${p.views}</td>
     </tr>`).join('') : '<tr><td colspan="5"><div class="empty"><div class="empty-icon">👁</div>No product views yet</div></td></tr>';
@@ -1487,9 +1488,9 @@ function renderSupplierAccount() {
   const rows = supplierCache.payments.length
     ? supplierCache.payments.map(p => `
         <tr>
-          <td>${p.date || '—'}</td>
+          <td>${esc(p.date) || '—'}</td>
           <td><strong>EGP ${fmt(p.amount)}</strong></td>
-          <td>${p.note || '—'}</td>
+          <td>${esc(p.note) || '—'}</td>
           <td><button class="btn btn-danger btn-xs" onclick="delSupplierPayment('${p.id}')">✕</button></td>
         </tr>`).join('')
     : '<tr><td colspan="4"><div class="empty">No payments to Elashry recorded yet</div></td></tr>';
@@ -1575,7 +1576,7 @@ async function saveSupplierPayment() {
 async function delSupplierPayment(id) {
   if (!confirm('Delete this payment record?')) return;
   try {
-    const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/supplier_payments?id=eq.${id}`, {
+    const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/supplier_payments?id=eq.${encodeURIComponent(id)}`, {
       method: 'DELETE',
       headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + SUPPLIER_SB_KEY, Prefer: 'return=minimal' }
     });
@@ -1619,7 +1620,7 @@ const TRACK_SB_KEY = 'sb_publishable_zsHh-eOarHI7BSGtuP6WWQ_PQ4ACoHG';
 // Mark a tracking flag true/false in DB + cache, then refresh views
 async function setOrderFlag(orderId, field, value) {
   try {
-    const res = await fetch(`${TRACK_SB_URL}/rest/v1/orders?id=eq.${orderId}`, {
+    const res = await fetch(`${TRACK_SB_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
       method: 'PATCH',
       headers: { apikey: TRACK_SB_KEY, Authorization: 'Bearer ' + TRACK_SB_KEY, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
       body: JSON.stringify({ [field]: value })

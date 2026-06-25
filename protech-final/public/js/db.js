@@ -110,7 +110,7 @@ async function dbInsert(table, data) {
 
 async function dbUpdate(table, id, data) {
   if (!USE_SUPABASE) return localUpdate(table, id, data);
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: sbHeaders({ 'Prefer': 'return=representation' }),
     body: JSON.stringify(data)
@@ -121,7 +121,7 @@ async function dbUpdate(table, id, data) {
 
 async function dbDelete(table, id) {
   if (!USE_SUPABASE) return localDelete(table, id);
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, {
     method: 'DELETE',
     headers: sbHeaders()
   });

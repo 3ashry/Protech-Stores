@@ -1,3 +1,4 @@
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function printInvoice(id) {
   const o = cache.orders.find(x => x.id === id);
   if (!o) return;
@@ -40,8 +41,8 @@ function printInvoice(id) {
   // ── Render product rows (NO fake  line) ───────────────────────────
   const productsRows = items.map((it, i) => `
     <tr style="background:${i % 2 === 0 ? '#fff' : '#fafafa'}">
-      <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px">${it.code}</td>
-      <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px">${it.name}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px">${esc(it.code)}</td>
+      <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px">${esc(it.name)}</td>
       <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px;text-align:center">${it.qty}</td>
       <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px;text-align:center">${Math.round(it.unit)}</td>
       <td style="padding:9px 12px;border-bottom:1px solid #f0ebe7;font-size:13px;text-align:center;font-weight:700;color:#F26522">${Math.round(it.line)}</td>
@@ -52,7 +53,7 @@ function printInvoice(id) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width">
-<title>فاتوره - ${o.code}</title>
+<title>فاتوره - ${esc(o.code)}</title>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" rel="stylesheet">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -210,29 +211,29 @@ function printInvoice(id) {
     <div>
       <div class="info-group">
         <div class="info-label">العميل</div>
-        <div class="info-value">${o.customer_name || '—'}</div>
+        <div class="info-value">${esc(o.customer_name) || '—'}</div>
       </div>
       <div class="info-group">
         <div class="info-label">عنوان الشحن</div>
-        <div class="info-value">${o.address || '—'}</div>
+        <div class="info-value">${esc(o.address) || '—'}</div>
       </div>
       <div class="info-group">
         <div class="info-label">تليفون العميل</div>
-        <div class="info-value">${o.phone || '—'}</div>
+        <div class="info-value">${esc(o.phone) || '—'}</div>
       </div>
     </div>
     <div style="text-align:left">
       <div class="info-group">
         <div class="info-label">رقم الفاتوره</div>
-        <div class="info-value">${o.code || '—'}</div>
+        <div class="info-value">${esc(o.code) || '—'}</div>
       </div>
       <div class="info-group">
         <div class="info-label">تاريخ الاصدار</div>
-        <div class="info-value">${o.date || '—'}</div>
+        <div class="info-value">${esc(o.date) || '—'}</div>
       </div>
       <div class="info-group">
         <div class="info-label">كود الشحن</div>
-        <div class="info-value">${o.ship_code || '—'}</div>
+        <div class="info-value">${esc(o.ship_code) || '—'}</div>
       </div>
     </div>
   </div>

@@ -1,17 +1,33 @@
-// protech-final/public/api/bosta.js
+// protech-final/api/bosta.js
 // Vercel Serverless Function — Create Bosta shipment after order is placed
+//
+// Secrets are read from environment variables (Vercel → Project → Settings →
+// Environment Variables). Never hardcode keys here — this file is in source control.
+const BOSTA_API_KEY = process.env.BOSTA_API_KEY;
+const BOSTA_BASE_URL = process.env.BOSTA_BASE_URL || 'https://app.bosta.co/api/v2';
 
-const BOSTA_API_KEY = 'f53060d7b770cde18e78d50d910bb710798f1db40916714b3f77039f23973631';
-const BOSTA_BASE_URL = 'https://app.bosta.co/api/v2';
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
-const SUPABASE_URL = 'https://wljxplbcfoorqpoflcdz.supabase.co';
-const SUPABASE_KEY = 'sb_publishable_zsHh-eOarHI7BSGtuP6WWQ_PQ4ACoHG';
+// Comma-separated list of allowed browser origins, e.g.
+//   ALLOWED_ORIGINS="https://protech-stores.vercel.app,https://protechstores.com"
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
 
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-};
+function corsHeaders(req) {
+  const origin = req.headers.origin;
+  // With an allowlist configured, only echo a matching origin; otherwise fall back to '*'
+  // (functional, but set ALLOWED_ORIGINS to lock this down).
+  const allow = ALLOWED_ORIGINS.length
+    ? (ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0])
+    : '*';
+  return {
+    'Access-Control-Allow-Origin': allow,
+    'Vary': 'Origin',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+  };
+}
 
 const CITY_MAP = {
   'القاهرة':        'EG-01',
@@ -146,19 +162,31 @@ const SHIPPING_RATES = {
 };
 
 export default async function handler(req, res) {
+  const CORS = corsHeaders(req);
+
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, CORS_HEADERS);
+    res.writeHead(204, CORS);
     return res.end();
   }
 
-  Object.entries(CORS_HEADERS).forEach(([k, v]) => res.setHeader(k, v));
+  Object.entries(CORS).forEach(([k, v]) => res.setHeader(k, v));
 
   if (req.method !== 'POST') return res.status(405).end();
 
-  const { orderId, customerName, phone, city, address, notes, total } = req.body;
+  if (!BOSTA_API_KEY || !SUPABASE_URL || !SUPABASE_KEY) {
+    console.error('bosta.js missing env config (BOSTA_API_KEY / SUPABASE_URL / SUPABASE_KEY)');
+    return res.status(500).json({ error: 'Server not configured' });
+  }
+
+  const { orderId, customerName, phone, city, address, notes, total } = req.body || {};
 
   if (!orderId || !customerName || !phone || !city || !address || !total) {
     return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  // orderId is interpolated into a PostgREST filter URL below — only allow safe id chars.
+  if (!/^[A-Za-z0-9_-]+$/.test(String(orderId))) {
+    return res.status(400).json({ error: 'Invalid orderId' });
   }
 
   const cityCode = CITY_MAP[city];
@@ -249,7 +277,7 @@ export default async function handler(req, res) {
     }
 
     const updateRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/orders?id=eq.${orderId}`,
+      `${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`,
       {
         method: 'PATCH',
         headers: {
