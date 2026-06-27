@@ -288,7 +288,10 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           ship_code: trackingNumber,
-          est_shipping: shippingCost,
+          // Bosta's real cost goes to actual_shipping (the merchant's expense, used by
+          // the financials). Do NOT overwrite est_shipping — that holds the reduced
+          // amount the customer was actually charged (storefront already subtracts 40).
+          actual_shipping: shippingCost,
         }),
       }
     );
