@@ -1538,6 +1538,40 @@ function computeSupplierOwed() {
   return owed;
 }
 
+// Itemized breakdown of exactly which order lines make up the Elashry "goods owed",
+// so over-valued / wrongly-counted orders are easy to spot.
+function downloadSupplierBreakdownExcel() {
+  const products = cache.products;
+  const rows = [];
+  cache.orders.filter(owesElashry).forEach(o => {
+    (o.products || []).forEach(p => {
+      const bp = lineBuyPrice(p, products);
+      const qty = parseInt(p.qty || 1);
+      rows.push({
+        'Order Code': o.code || '',
+        'Status': o.status || '',
+        'Date': o.date || '',
+        'Customer': o.customer_name || '',
+        'Product Code': p.code || '',
+        'Product': p.name || (products.find(x => x.code === p.code)?.name) || p.code || '',
+        'Qty': qty,
+        'Buy Price': bp,
+        'Line Total': Math.round(bp * qty * 100) / 100,
+      });
+    });
+  });
+  if (!rows.length) { showToast('No orders are counted toward Elashry'); return; }
+  const total = rows.reduce((a, r) => a + r['Line Total'], 0);
+  rows.push({});
+  rows.push({ 'Product': 'TOTAL OWED (goods)', 'Line Total': Math.round(total * 100) / 100 });
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 20 }, { wch: 14 }, { wch: 34 }, { wch: 6 }, { wch: 12 }, { wch: 12 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Elashry Owed');
+  XLSX.writeFile(wb, `Elashry_Owed_Breakdown_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  showToast('Breakdown downloaded ✓');
+}
+
 function renderSupplierAccount() {
   const host = document.getElementById('supplier-account');
   if (!host) return;
@@ -1577,6 +1611,7 @@ function renderSupplierAccount() {
           ${supplierCache.loading ? '<span style="font-size:12px;color:var(--muted)">loading…</span>' : ''}
         </h3>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" onclick="downloadSupplierBreakdownExcel()">📥 Breakdown</button>
           <button class="btn btn-ghost btn-sm" onclick="openSupplierCharge()">+ Record Purchase</button>
           <button class="btn btn-primary btn-sm" onclick="openSupplierPayment()">+ Record Payment</button>
         </div>
