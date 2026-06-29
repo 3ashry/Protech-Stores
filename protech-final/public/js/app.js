@@ -1769,6 +1769,10 @@ function renderBostaCash() {
   const host = document.getElementById('bosta-cash');
   if (!host) return;
   const total = (bostaCashCache.receipts || []).reduce((a, r) => a + parseFloat(r.amount || 0), 0);
+  // Money Bosta owes us = net COD of Delivered orders (total − Bosta's shipping fee).
+  const delivered = (typeof cache !== 'undefined' && cache.orders ? cache.orders : []).filter(o => o.status === 'Delivered');
+  const expected = delivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0)), 0);
+  const remaining = expected - total;
   const rows = (bostaCashCache.receipts || []).length
     ? bostaCashCache.receipts.map(r => `
         <tr>
@@ -1788,6 +1792,8 @@ function renderBostaCash() {
       </div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px">
         <div class="stat-card green"><div class="stat-val">EGP ${fmt(total)}</div><div class="stat-label">In Safe / Bank (received from Bosta)</div></div>
+        <div class="stat-card blue"><div class="stat-val">EGP ${fmt(expected)}</div><div class="stat-label">Expected from Bosta (delivered orders)</div></div>
+        <div class="stat-card ${remaining > 0 ? 'orange' : 'green'}"><div class="stat-val">EGP ${fmt(Math.abs(remaining))}</div><div class="stat-label">${remaining > 0 ? 'Still to collect from Bosta' : 'All collected ✓'}</div></div>
       </div>
       <div class="table-wrap">
         <table>
