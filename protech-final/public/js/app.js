@@ -56,22 +56,24 @@ function updateSendShipBtn(orderId) {
   const total = o.total || 0;
 
   const msg = encodeURIComponent(
-`مرحباً ${o.customer_name} 👋
+`مرحباً ${o.customer_name}
 
-شكراً لطلبك من *بروتيك* 🛠️
+شكراً لطلبك من *بروتيك*
 تم تجهيز طلبك وجاري الشحن.
 
-📦 *تفاصيل الطلب:*
+*تفاصيل الطلب:*
 ${products}
 
-🚚 رسوم الشحن: ${shipping} ج.م
-💰 *الإجمالي الكلي: ${total} ج.م*
+رسوم الشحن: ${shipping} ج.م
+*الإجمالي الكلي: ${total} ج.م*
 
-📬 *كود الشحن: ${shipCode}*
-🔍 تتبع شحنتك: https://bosta.co/en-eg/tracking-shipments
+*كود الشحن: ${shipCode}*
+تتبع شحنتك: https://bosta.co/en-eg/tracking-shipments
 
-بروتيك — الشغل عليك والعدة علينا 🧡
-protechstores.com`
+بروتيك — الشغل عليك والعدة علينا
+protechstores.com
+
+برجاء تأكيد الطلب بإرسال كلمة *تأكيد* في رسالة`
   );
 
   const waPhone = (o.phone || '').startsWith('0') ? '2' + o.phone : o.phone;
