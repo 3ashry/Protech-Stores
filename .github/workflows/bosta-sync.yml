@@ -1,0 +1,15 @@
+name: Bosta status sync
+
+# Runs twice a day (≈ 8:00 and 20:00 Cairo time) and also on manual trigger.
+on:
+  schedule:
+    - cron: '0 6 * * *'
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Bosta sync
+        run: curl -fsS -X POST https://protech-stores.vercel.app/api/sync-status

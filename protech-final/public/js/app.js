@@ -694,6 +694,20 @@ function renderOrders() {
     </tr>`).join('') : '<tr><td colspan="6"><div class="empty"><div class="empty-icon">🛒</div>No orders yet</div></td></tr>';
 }
 
+async function syncFromBosta() {
+  showToast('Syncing from Bosta…');
+  try {
+    const res = await fetch('/api/sync-status', { method: 'POST' });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'sync failed');
+    await loadAll();
+    showToast(`Synced ✓ ${d.updated || 0} order(s) updated`);
+    if (d.unknownStates && d.unknownStates.length) {
+      console.warn('Bosta states not mapped yet:', d.unknownStates);
+    }
+  } catch (e) { showToast('Sync error: ' + e.message); }
+}
+
 let oPRows = [];
 
 function openCreateOrder() {
