@@ -859,6 +859,29 @@ async function confirmWarehouse(id) {
   } catch (e) { showToast('Error: ' + e.message); }
 }
 
+// Undo a warehouse confirmation: remove the stock that was added back and mark the
+// order as not-yet-received (so it counts as owed again).
+async function undoWarehouse(id) {
+  if (!confirm('Undo "received in warehouse"? This removes the restored stock and marks it as not yet received.')) return;
+  const order = cache.orders.find(x => x.id === id);
+  if (!order) return;
+  try {
+    for (const op of (order.products || [])) {
+      const pi = cache.products.findIndex(p => p.code === op.code);
+      if (pi >= 0) {
+        const newQty = Math.max(0, parseInt(cache.products[pi].qty || 0) - parseInt(op.qty || 1));
+        cache.products[pi].qty = newQty;
+        await dbUpdate('products', cache.products[pi].id, { qty: newQty });
+      }
+    }
+    await dbUpdate('orders', id, { warehouse_confirmed: false });
+    const i = cache.orders.findIndex(x => x.id === id);
+    if (i >= 0) cache.orders[i].warehouse_confirmed = false;
+    showToast('Reverted — marked as not yet received');
+    closeModal(); renderAll();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
 function viewOrder(id) {
   const o = cache.orders.find(x => x.id === id);
   if (!o) return;
@@ -913,7 +936,8 @@ function viewOrder(id) {
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
           Confirm Received in Warehouse
         </button>` : ''}
-      ${(o.status === 'Cancelled' || o.status === 'Returned') && o.warehouse_confirmed ? `<span style="color:#16a34a;font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Stock Returned to Inventory</span>` : ''}
+      ${(o.status === 'Cancelled' || o.status === 'Returned') && o.warehouse_confirmed ? `<span style="color:#16a34a;font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Stock Returned to Inventory</span>
+        <button class="btn btn-ghost btn-xs" onclick="undoWarehouse('${id}')">Undo</button>` : ''}
     </div>`;
   showModal('tpl-detail');
 }
