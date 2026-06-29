@@ -67,6 +67,8 @@ ${products}
 رسوم الشحن: ${shipping} ج.م
 *الإجمالي الكلي: ${total} ج.م*
 
+فتح الشحنة قبل الاستلام: ${o.allow_open ? 'متاح' : 'غير متاح'}
+
 *كود الشحن: ${shipCode}*
 تتبع شحنتك: https://bosta.co/en-eg/tracking-shipments
 
@@ -690,7 +692,7 @@ function renderOrders() {
         : `<span class="badge ${smap[o.status] || 'b-gray'}">${esc(o.status)}</span>`}${
           o.customer_confirmed === true ? `<div style="font-size:11px;color:#16a34a;font-weight:700;margin-top:3px">✅ مؤكد</div>`
           : o.customer_confirmed === false ? `<div style="font-size:11px;color:#dc2626;font-weight:700;margin-top:3px">❌ ملغي</div>`
-          : ''}</td>
+          : ''}${o.allow_open ? `<div style="font-size:11px;color:#F26A21;font-weight:700;margin-top:3px">📦 فتح الشحنة</div>` : ''}</td>
       <td><div class="actions">
         <button class="btn btn-ghost btn-xs" onclick="viewOrder('${o.id}')">View</button>
         <button class="btn btn-dark btn-xs" onclick="editOrder('${o.id}')">Edit</button>
@@ -965,6 +967,8 @@ ${confirmProducts}
 رسوم الشحن: ${o.est_shipping || 0} ج.م
 *الإجمالي الكلي: ${o.total || 0} ج.م*
 
+فتح الشحنة قبل الاستلام: ${o.allow_open ? 'متاح' : 'غير متاح'}
+
 *كود الشحن: ${o.ship_code || 'سيتم إرساله قريباً'}*
 تتبع شحنتك: https://bosta.co/en-eg/tracking-shipments
 
@@ -995,7 +999,9 @@ protechstores.com
       <div><div class="detail-label">Address</div>${esc(o.address) || '—'}</div>
       <div><div class="detail-label">Shipping Code</div>${esc(o.ship_code) || '—'}</div>
       <div><div class="detail-label">Est. Shipping</div>EGP ${fmt(o.est_shipping || 0)}</div>
-      ${o.allow_open ? `<div style="grid-column:1/-1"><div class="detail-label">Open Package</div><strong style="color:#F26A21">📦 العميل يريد فتح الشحنة قبل الاستلام</strong></div>` : ''}
+      <div style="grid-column:1/-1"><div class="detail-label">Open Package — فتح الشحنة</div>${o.allow_open
+        ? `<strong style="color:#F26A21">📦 متاح — العميل يريد فتح الشحنة قبل الاستلام</strong>`
+        : `<strong style="color:#16a34a">✔ غير متاح — لا يريد فتح الشحنة</strong>`}</div>
       ${o.notes ? `<div style="grid-column:1/-1"><div class="detail-label">Notes</div>${esc(o.notes)}</div>` : ''}
     </div>
     <div class="table-wrap" style="margin-bottom:8px">
