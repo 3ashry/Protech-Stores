@@ -29,13 +29,13 @@ async function fetchAllDeliveries() {
     const r = await fetch(`${BOSTA_BASE_URL}/deliveries/search`, {
       method: 'POST',
       headers: { 'Authorization': BOSTA_API_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ limit: 100, page }),
+      body: JSON.stringify({ limit: 100, page, pageNumber: page }),
     });
     const d = await r.json().catch(() => null);
     const list = d?.data?.deliveries || [];
     all.push(...list);
     const count = d?.data?.count || 0;
-    if (!list.length || all.length >= count) break;
+    if (list.length < 100 || all.length >= count) break;
   }
   return all;
 }
