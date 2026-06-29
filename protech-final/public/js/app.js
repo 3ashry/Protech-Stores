@@ -999,9 +999,11 @@ protechstores.com
       <div><div class="detail-label">Address</div>${esc(o.address) || '—'}</div>
       <div><div class="detail-label">Shipping Code</div>${esc(o.ship_code) || '—'}</div>
       <div><div class="detail-label">Est. Shipping</div>EGP ${fmt(o.est_shipping || 0)}</div>
-      <div style="grid-column:1/-1"><div class="detail-label">Open Package — فتح الشحنة</div>${o.allow_open
-        ? `<strong style="color:#F26A21">📦 متاح — العميل يريد فتح الشحنة قبل الاستلام</strong>`
-        : `<strong style="color:#16a34a">✔ غير متاح — لا يريد فتح الشحنة</strong>`}</div>
+      <div style="grid-column:1/-1"><div class="detail-label">Open Package — فتح الشحنة</div>
+        <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-weight:700">
+          <input type="checkbox" id="d-allowopen" ${o.allow_open ? 'checked' : ''} style="width:18px;height:18px;accent-color:#F26A21">
+          <span>📦 العميل يريد فتح الشحنة قبل الاستلام</span>
+        </label></div>
       ${o.notes ? `<div style="grid-column:1/-1"><div class="detail-label">Notes</div>${esc(o.notes)}</div>` : ''}
     </div>
     <div class="table-wrap" style="margin-bottom:8px">
@@ -1050,12 +1052,13 @@ protechstores.com
 async function saveDetail(id) {
   const cancel_reason = document.getElementById('d-reason').value;
   const status = document.getElementById('d-status').value;
+  const allow_open = !!document.getElementById('d-allowopen')?.checked;
   // Cancelled = cancelled before shipping, so there is no shipping cost.
   const actual_shipping = status === 'Cancelled' ? 0 : parseFloat(document.getElementById('d-ship').value || 0);
   try {
-    await dbUpdate('orders', id, { actual_shipping, cancel_reason, status });
+    await dbUpdate('orders', id, { actual_shipping, cancel_reason, status, allow_open });
     const i = cache.orders.findIndex(x => x.id === id);
-    if (i >= 0) cache.orders[i] = { ...cache.orders[i], actual_shipping, cancel_reason, status };
+    if (i >= 0) cache.orders[i] = { ...cache.orders[i], actual_shipping, cancel_reason, status, allow_open };
     showToast('Order updated ✓'); closeModal(); renderAll();
   } catch (e) { showToast('Error: ' + e.message); }
 }
