@@ -1751,6 +1751,130 @@ function injectSupplierUI() {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
   else run();
 })();
+
+// ═══════════════════════════════════════════════════════════════════
+//  SAFE / BANK — money received from Bosta (logged manually)
+// ═══════════════════════════════════════════════════════════════════
+let bostaCashCache = { receipts: [], loading: false };
+
+async function loadBostaReceipts() {
+  bostaCashCache.loading = true;
+  renderBostaCash();
+  bostaCashCache.receipts = await sbSupplierGet('bosta_receipts');
+  bostaCashCache.loading = false;
+  renderBostaCash();
+}
+
+function renderBostaCash() {
+  const host = document.getElementById('bosta-cash');
+  if (!host) return;
+  const total = (bostaCashCache.receipts || []).reduce((a, r) => a + parseFloat(r.amount || 0), 0);
+  const rows = (bostaCashCache.receipts || []).length
+    ? bostaCashCache.receipts.map(r => `
+        <tr>
+          <td>${esc(r.date) || '—'}</td>
+          <td><strong>EGP ${fmt(r.amount)}</strong></td>
+          <td>${esc(r.note) || '—'}</td>
+          <td><button class="btn btn-danger btn-xs" onclick="delBostaReceipt('${r.id}')">✕</button></td>
+        </tr>`).join('')
+    : '<tr><td colspan="4"><div class="empty">No money received logged yet</div></td></tr>';
+  host.innerHTML = `
+    <div style="margin-top:28px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+        <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:8px">💰 Safe / Bank — Money received from Bosta
+          ${bostaCashCache.loading ? '<span style="font-size:12px;color:var(--muted)">loading…</span>' : ''}
+        </h3>
+        <button class="btn btn-primary btn-sm" onclick="openBostaReceipt()">+ Record Receipt</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px">
+        <div class="stat-card green"><div class="stat-val">EGP ${fmt(total)}</div><div class="stat-label">In Safe / Bank (received from Bosta)</div></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Date</th><th>Amount</th><th>Note</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function openBostaReceipt() {
+  const overlay = document.getElementById('overlay');
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:14px;max-width:440px;width:92%;padding:24px;max-height:90vh;overflow:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px">
+        <h3 style="margin:0;font-size:17px">💰 Record Money Received from Bosta</h3>
+        <button class="btn btn-ghost btn-xs" onclick="closeModal()">✕</button>
+      </div>
+      <div class="form-group"><label>Amount Received (EGP) *</label><input type="number" id="br-amt" min="0" placeholder="0" inputmode="decimal"></div>
+      <div class="form-group"><label>Date</label><input type="text" id="br-date" value="${today()}"></div>
+      <div class="form-group"><label>Note (optional)</label><input type="text" id="br-note" placeholder="e.g. bank transfer"></div>
+      <div style="display:flex;gap:10px;margin-top:8px">
+        <button class="btn btn-primary" style="flex:1" onclick="saveBostaReceipt()">Save</button>
+        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      </div>
+    </div>`;
+  overlay.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+  setTimeout(() => document.getElementById('br-amt')?.focus(), 60);
+}
+
+async function saveBostaReceipt() {
+  const amount = parseFloat(document.getElementById('br-amt').value || 0);
+  const note = document.getElementById('br-note').value.trim();
+  const date = document.getElementById('br-date').value.trim() || today();
+  if (!amount || amount <= 0) { showToast('Please enter a valid amount'); return; }
+  const data = { id: genId(), amount, note, date, created_at: new Date().toISOString() };
+  try {
+    const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/bosta_receipts`, {
+      method: 'POST',
+      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error(await res.text());
+    bostaCashCache.receipts.unshift(data);
+    showToast('Receipt recorded ✓');
+    closeModal();
+    renderBostaCash();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+async function delBostaReceipt(id) {
+  if (!confirm('Delete this receipt?')) return;
+  try {
+    const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/bosta_receipts?id=eq.${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), Prefer: 'return=minimal' }
+    });
+    if (!res.ok) throw new Error(await res.text());
+    bostaCashCache.receipts = bostaCashCache.receipts.filter(r => r.id !== id);
+    showToast('Receipt deleted');
+    renderBostaCash();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+function injectBostaCashUI() {
+  if (document.getElementById('bosta-cash')) return;
+  const fin = document.getElementById('screen-financials');
+  if (!fin) return;
+  const div = document.createElement('div');
+  div.id = 'bosta-cash';
+  fin.appendChild(div);
+}
+
+(function initBostaCash() {
+  const run = () => {
+    injectBostaCashUI();
+    if (typeof renderFinancials === 'function' && !renderFinancials.__bostaCashPatched) {
+      const orig = renderFinancials;
+      renderFinancials = function () { orig.apply(this, arguments); renderBostaCash(); };
+      renderFinancials.__bostaCashPatched = true;
+    }
+    loadBostaReceipts();
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
+  else run();
+})();
 // ═══════════════════════════════════════════════════════════════════
 //  ORDER PROGRESS TRACKER — 3 ticks per order
 //  1) Confirmation sent (WhatsApp)  2) Delivered  3) Feedback sent (WhatsApp)
