@@ -890,15 +890,36 @@ async function undoWarehouse(id) {
   } catch (e) { showToast('Error: ' + e.message); }
 }
 
+// Update the per-order buy-price snapshot only (does not touch stock, sell prices,
+// totals, or the product's system-wide buy price).
+async function saveOrderBuyPrices(id) {
+  const o = cache.orders.find(x => x.id === id);
+  if (!o) return;
+  const newProducts = (o.products || []).map((p, idx) => {
+    const el = document.getElementById('bp-' + idx);
+    const v = el ? el.value : '';
+    const bp = (v !== '' && v != null) ? (parseFloat(v) || 0) : lineBuyPrice(p, cache.products);
+    return { ...p, buy_price: bp };
+  });
+  try {
+    await dbUpdate('orders', id, { products: newProducts });
+    const i = cache.orders.findIndex(x => x.id === id);
+    if (i >= 0) cache.orders[i].products = newProducts;
+    showToast('Buy prices updated for this order ✓');
+    renderAll();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
 function viewOrder(id) {
   const o = cache.orders.find(x => x.id === id);
   if (!o) return;
   const statuses = ['Processing', 'In Transit', 'Delivered', 'Cancelled', 'Returned'];
-  const prHtml = (o.products || []).map(p => {
+  const prHtml = (o.products || []).map((p, idx) => {
     const pr = cache.products.find(pp => pp.code === p.code);
     const unitPrice = parseFloat(p.sell_price ?? p.price ?? 0);
     const line = unitPrice * parseInt(p.qty || 1);
-    return `<tr><td>${esc(pr?.name || p.name || p.code)}</td><td style="text-align:center">${p.qty}</td><td>EGP ${fmt(unitPrice)}</td><td>EGP ${fmt(line)}</td></tr>`;
+    const bp = lineBuyPrice(p, cache.products);
+    return `<tr><td>${esc(pr?.name || p.name || p.code)}</td><td style="text-align:center">${p.qty}</td><td>EGP ${fmt(unitPrice)}</td><td>EGP ${fmt(line)}</td><td style="text-align:center"><input type="number" min="0" id="bp-${idx}" value="${bp}" style="width:88px;padding:5px 6px" inputmode="decimal"></td></tr>`;
   }).join('');
   const feedbackUrl = `${window.location.origin}/feedback.html?order=${o.code}`;
   const waText = encodeURIComponent(`أهلاً ${o.customer_name} 😊\nشكراً لتسوقك من بروتيك! 🔧\n\nنرجو منك تقييم تجربتك:\n${feedbackUrl}\n\nرأيك يهمنا 🙏`);
@@ -921,11 +942,14 @@ function viewOrder(id) {
       ${o.allow_open ? `<div style="grid-column:1/-1"><div class="detail-label">Open Package</div><strong style="color:#F26A21">📦 العميل يريد فتح الشحنة قبل الاستلام</strong></div>` : ''}
       ${o.notes ? `<div style="grid-column:1/-1"><div class="detail-label">Notes</div>${esc(o.notes)}</div>` : ''}
     </div>
-    <div class="table-wrap" style="margin-bottom:14px">
+    <div class="table-wrap" style="margin-bottom:8px">
       <table>
-        <thead><tr><th>Product</th><th style="text-align:center">Qty</th><th>Unit Price</th><th>Subtotal</th></tr></thead>
+        <thead><tr><th>Product</th><th style="text-align:center">Qty</th><th>Unit Price</th><th>Subtotal</th><th style="text-align:center">Buy Price</th></tr></thead>
         <tbody>${prHtml}</tbody>
       </table>
+    </div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:16px">
+      <button class="btn btn-ghost btn-sm" onclick="saveOrderBuyPrices('${id}')">💾 Save buy prices (this order only)</button>
     </div>
     <div style="text-align:right;font-weight:800;font-size:15px;color:var(--orange);margin-bottom:16px">Order Total: EGP ${fmt(o.total)}</div>
     <div class="form-row">
