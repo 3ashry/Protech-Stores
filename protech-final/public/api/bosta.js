@@ -178,7 +178,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Server not configured' });
   }
 
-  const { orderId, customerName, phone, city, address, notes, total } = req.body || {};
+  const { orderId, customerName, phone, city, address, notes, total, allowOpen } = req.body || {};
 
   if (!orderId || !customerName || !phone || !city || !address || !total) {
     return res.status(400).json({ error: 'Missing required fields' });
@@ -241,6 +241,7 @@ export default async function handler(req, res) {
     },
     businessReference: orderId,  // Links Bosta shipment back to our order
     notes: notes || '',
+    allowToOpenPackage: !!allowOpen,  // Customer chose "open package before receiving"
   };
 
   try {

@@ -679,7 +679,7 @@ function renderOrders() {
   const smap = { 'Processing': 'b-info', 'In Transit': 'b-warning', 'Delivered': 'b-success', 'Cancelled': 'b-danger', 'Returned': 'b-purple' };
   document.getElementById('orders-tbody').innerHTML = cache.orders.length ? cache.orders.map(o => `
     <tr>
-      <td><span class="badge b-orange">${esc(o.code)}</span> ${orderProgressBadge(o)}</td>
+      <td><span class="badge b-orange">${esc(o.code)}</span> ${orderProgressBadge(o)}${o.allow_open ? ' <span class="badge b-warning" title="يريد فتح الشحنة">📦</span>' : ''}</td>
       <td><strong>${esc(o.customer_name)}</strong></td>
       <td>${esc(o.phone)}</td>
       <td>EGP ${fmt(o.total)}</td>
@@ -887,6 +887,7 @@ function viewOrder(id) {
       <div><div class="detail-label">Address</div>${esc(o.address) || '—'}</div>
       <div><div class="detail-label">Shipping Code</div>${esc(o.ship_code) || '—'}</div>
       <div><div class="detail-label">Est. Shipping</div>EGP ${fmt(o.est_shipping || 0)}</div>
+      ${o.allow_open ? `<div style="grid-column:1/-1"><div class="detail-label">Open Package</div><strong style="color:#F26A21">📦 العميل يريد فتح الشحنة قبل الاستلام</strong></div>` : ''}
       ${o.notes ? `<div style="grid-column:1/-1"><div class="detail-label">Notes</div>${esc(o.notes)}</div>` : ''}
     </div>
     <div class="table-wrap" style="margin-bottom:14px">
