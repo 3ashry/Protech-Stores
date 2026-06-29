@@ -779,6 +779,12 @@ async function saveOrder() {
   }
 
   const total = oPRows.reduce((a, r) => a + parseFloat(r.sell_price || 0) * parseInt(r.qty || 1), 0) + est_shipping;
+  // Snapshot the buy price onto each line so the Elashry-owed figure stays fixed at the
+  // price paid when the order was placed, even if the product's buy price changes later.
+  const lineItems = oPRows.map(r => ({
+    ...r,
+    buy_price: parseFloat(cache.products.find(p => p.code === r.code)?.buy_price || 0),
+  }));
   const id = document.getElementById('o-idx').value;
   try {
     if (id) {
@@ -794,7 +800,7 @@ async function saveOrder() {
           }
         }
       }
-      const upd = { customer_name, phone, ship_code, est_shipping, products: oPRows, total };
+      const upd = { customer_name, phone, ship_code, est_shipping, products: lineItems, total };
       await dbUpdate('orders', id, upd);
       const i = cache.orders.findIndex(x => x.id === id);
       if (i >= 0) cache.orders[i] = { ...cache.orders[i], ...upd };
@@ -802,7 +808,7 @@ async function saveOrder() {
     } else {
       const data = {
         id: genId(), code: genCode('ORD'), customer_name, phone, ship_code, est_shipping,
-        products: oPRows, total, status: 'Processing', date: today(),
+        products: lineItems, total, status: 'Processing', date: today(),
         actual_shipping: 0, cancel_reason: '', created_at: new Date().toISOString()
       };
       await dbInsert('orders', data);
@@ -901,20 +907,21 @@ function viewOrder(id) {
       <button class="btn btn-primary" onclick="saveDetail('${id}')">Save Changes</button>
       ${o.status === 'Delivered' ? `<a href="${waLink}" target="_blank" class="btn btn-wa" onclick="markFeedbackSent('${id}')">WhatsApp Feedback</a>` : ''}
       ${o.status === 'Delivered' ? `<button class="btn btn-ghost" onclick="openFeedback('${o.code}')">Add Manual Feedback</button>` : ''}
-      ${o.status === 'Cancelled' && !o.warehouse_confirmed ? `
+      ${(o.status === 'Cancelled' || o.status === 'Returned') && !o.warehouse_confirmed ? `
         <button class="btn" style="background:#7c3aed;color:#fff;display:flex;align-items:center;gap:8px" onclick="confirmWarehouse('${id}')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
           Confirm Received in Warehouse
         </button>` : ''}
-      ${o.status === 'Cancelled' && o.warehouse_confirmed ? `<span style="color:#16a34a;font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Stock Returned to Inventory</span>` : ''}
+      ${(o.status === 'Cancelled' || o.status === 'Returned') && o.warehouse_confirmed ? `<span style="color:#16a34a;font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Stock Returned to Inventory</span>` : ''}
     </div>`;
   showModal('tpl-detail');
 }
 
 async function saveDetail(id) {
-  const actual_shipping = parseFloat(document.getElementById('d-ship').value || 0);
   const cancel_reason = document.getElementById('d-reason').value;
   const status = document.getElementById('d-status').value;
+  // Cancelled = cancelled before shipping, so there is no shipping cost.
+  const actual_shipping = status === 'Cancelled' ? 0 : parseFloat(document.getElementById('d-ship').value || 0);
   try {
     await dbUpdate('orders', id, { actual_shipping, cancel_reason, status });
     const i = cache.orders.findIndex(x => x.id === id);
@@ -925,11 +932,12 @@ async function saveDetail(id) {
 
 // ── RETURNS ──
 function renderReturns() {
-  const rets = cache.orders.filter(o => o.status === 'Cancelled');
+  // A return only counts once the order is explicitly set to "Returned".
+  const rets = cache.orders.filter(o => o.status === 'Returned');
   const totalShip = rets.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
   document.getElementById('ret-stats').innerHTML = `
     <div class="stat-card red"><div class="stat-val">${rets.length}</div><div class="stat-label">Total Returns</div></div>
-    <div class="stat-card orange"><div class="stat-val">EGP ${fmt(totalShip)}</div><div class="stat-label">Total Shipping Cost</div></div>`;
+    <div class="stat-card orange"><div class="stat-val">EGP ${fmt(totalShip)}</div><div class="stat-label">Total Return Shipping</div></div>`;
   document.getElementById('ret-tbody').innerHTML = rets.length ? rets.map(o => `
     <tr>
       <td><strong>${esc(o.customer_name)}</strong></td>
@@ -937,22 +945,20 @@ function renderReturns() {
       <td>${esc(o.cancel_reason) || '—'}</td>
       <td>EGP ${fmt(o.actual_shipping || 0)}</td>
       <td>${esc(o.date)}</td>
-    </tr>`).join('') : '<tr><td colspan="5"><div class="empty"><div class="empty-icon">↩️</div>No cancellations</div></td></tr>';
+    </tr>`).join('') : '<tr><td colspan="5"><div class="empty"><div class="empty-icon">↩️</div>No returns</div></td></tr>';
 }
 
 // ── FINANCIALS ──
 function renderFinancials() {
   const orders = cache.orders;
   const delivered = orders.filter(o => o.status === 'Delivered');
-  const cancelled = orders.filter(o => o.status === 'Cancelled');
+  const returned = orders.filter(o => o.status === 'Returned');
   const totalCollected = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
   const totalActualShip = delivered.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
   const netFromBosta = totalCollected - totalActualShip;
-  const retShipCost = cancelled.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
-  const buyingCost = orders.filter(o => !(o.status === 'Cancelled' && o.warehouse_confirmed)).reduce((a, o) => a + (o.products || []).reduce((b, p) => {
-    const pr = cache.products.find(pp => pp.code === p.code);
-    return b + parseFloat(pr?.buy_price || 0) * parseInt(p.qty || 1);
-  }, 0), 0);
+  const retShipCost = returned.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
+  const buyingCost = orders.filter(owesElashry).reduce((a, o) => a + (o.products || []).reduce((b, p) =>
+    b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
   const totalExp = cache.expenses.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
   const netProfit = netFromBosta - retShipCost - buyingCost - totalExp;
 
@@ -1129,7 +1135,7 @@ function downloadOrdersExcel() {
 }
 
 function downloadReturnsExcel() {
-  const rets = cache.orders.filter(o => o.status === 'Cancelled');
+  const rets = cache.orders.filter(o => o.status === 'Returned');
   const rows = rets.map(o => {
     const products = Array.isArray(o.products)
       ? o.products.map(p => `${p.name || p.code} ×${p.qty || 1} @${p.sell_price || p.price || 0}`).join(' | ')
@@ -1160,15 +1166,13 @@ function downloadReturnsExcel() {
 function downloadFinancialsExcel() {
   const orders = cache.orders;
   const delivered = orders.filter(o => o.status === 'Delivered');
-  const cancelled = orders.filter(o => o.status === 'Cancelled');
+  const returned = orders.filter(o => o.status === 'Returned');
   const totalCollected = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
   const totalActualShip = delivered.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
   const netFromBosta = totalCollected - totalActualShip;
-  const retShipCost = cancelled.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
-  const buyingCost = orders.filter(o => !(o.status === 'Cancelled' && o.warehouse_confirmed)).reduce((a, o) => a + (o.products || []).reduce((b, p) => {
-    const pr = cache.products.find(pp => pp.code === p.code);
-    return b + parseFloat(pr?.buy_price || 0) * parseInt(p.qty || 1);
-  }, 0), 0);
+  const retShipCost = returned.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
+  const buyingCost = orders.filter(owesElashry).reduce((a, o) => a + (o.products || []).reduce((b, p) =>
+    b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
   const totalExp = cache.expenses.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
   const netProfit = netFromBosta - retShipCost - buyingCost - totalExp;
 
@@ -1448,15 +1452,27 @@ async function loadSupplierPayments() {
 }
 
 // Owed = buy-price cost of goods across ALL orders (no exclusions)
+// An order's goods are owed to Elashry unless it was cancelled (never taken from
+// Elashry) or its goods have been received back in the warehouse.
+function owesElashry(o) {
+  return o.status !== 'Cancelled' && !o.warehouse_confirmed;
+}
+// Use the buy price snapshotted on the order line at order time; fall back to the
+// product's current buy price for older orders that have no snapshot.
+function lineBuyPrice(p, products) {
+  if (p && p.buy_price != null && p.buy_price !== '') return parseFloat(p.buy_price) || 0;
+  const pr = products.find(pp => pp.code === p.code);
+  return parseFloat(pr?.buy_price || 0);
+}
+
 function computeSupplierOwed() {
   const orders = (typeof cache !== 'undefined' && cache.orders) ? cache.orders : [];
   const products = (typeof cache !== 'undefined' && cache.products) ? cache.products : [];
   let owed = 0;
   orders.forEach(o => {
+    if (!owesElashry(o)) return;
     (o.products || []).forEach(p => {
-      const pr = products.find(pp => pp.code === p.code);
-      const bp = parseFloat(pr?.buy_price || 0);
-      owed += bp * parseInt(p.qty || 1);
+      owed += lineBuyPrice(p, products) * parseInt(p.qty || 1);
     });
   });
   return owed;
@@ -1504,7 +1520,7 @@ function renderSupplierAccount() {
         </table>
       </div>
       <div style="font-size:12px;color:var(--muted);margin-top:8px">
-        Owed = buy-price × qty across all orders (including cancelled). This is a separate liability tracker and does not affect Net Profit above.
+        Owed = buy-price × qty for active orders, valued at the buy price when the order was placed. Excludes cancelled orders and goods already received back in the warehouse.
       </div>
     </div>`;
 }
