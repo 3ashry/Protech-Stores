@@ -950,11 +950,28 @@ function viewOrder(id) {
   // Manual order-confirmation message (no API): opens WhatsApp with a pre-filled
   // request asking the customer to reply تأكيد / إلغاء. You then record their reply
   // with the ✅ / ❌ buttons below.
+  const confirmProducts = Array.isArray(o.products)
+    ? o.products.map(p => `• ${p.name || p.code} × ${p.qty || 1} — ${((p.sell_price || p.price || 0) * (p.qty || 1)).toLocaleString('ar-EG')} ج.م`).join('\n')
+    : '';
   const confirmText = encodeURIComponent(
-    `أهلاً ${o.customer_name} 👋\n` +
-    `شكراً لطلبك من *بروتيك* 🛠️\n\n` +
-    `طلبك رقم *${o.code}* بإجمالي *${fmt(o.total)} ج.م* (الدفع عند الاستلام 💵).\n\n` +
-    `برجاء تأكيد الحجز بالرد بكلمة *تأكيد* ✅ أو *إلغاء* ❌`
+`مرحباً ${o.customer_name}
+
+شكراً لطلبك من *بروتيك*
+تم تجهيز طلبك وجاري الشحن.
+
+*تفاصيل الطلب:*
+${confirmProducts}
+
+رسوم الشحن: ${o.est_shipping || 0} ج.م
+*الإجمالي الكلي: ${o.total || 0} ج.م*
+
+*كود الشحن: ${o.ship_code || 'سيتم إرساله قريباً'}*
+تتبع شحنتك: https://bosta.co/en-eg/tracking-shipments
+
+بروتيك — الشغل عليك والعدة علينا
+protechstores.com
+
+برجاء تأكيد الطلب بإرسال كلمة *تأكيد* في رسالة`
   );
   const confirmLink = `https://wa.me/${waPhone}?text=${confirmText}`;
   const cc = o.customer_confirmed;
