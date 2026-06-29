@@ -1769,9 +1769,12 @@ function renderBostaCash() {
   const host = document.getElementById('bosta-cash');
   if (!host) return;
   const total = (bostaCashCache.receipts || []).reduce((a, r) => a + parseFloat(r.amount || 0), 0);
-  // Money Bosta owes us = net COD of Delivered orders (total − Bosta's shipping fee).
+  // Money Bosta owes us = net COD of Delivered orders (total − Bosta's shipping fee),
+  // minus any Bosta fees deducted from the payout (e.g. small-pickup fee).
   const delivered = (typeof cache !== 'undefined' && cache.orders ? cache.orders : []).filter(o => o.status === 'Delivered');
-  const expected = delivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0)), 0);
+  const deliveredNet = delivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0)), 0);
+  const bostaFees = (cache.expenses || []).filter(e => e.category === 'Bosta Fees').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const expected = deliveredNet - bostaFees;
   const remaining = expected - total;
   const rows = (bostaCashCache.receipts || []).length
     ? bostaCashCache.receipts.map(r => `
@@ -1788,12 +1791,18 @@ function renderBostaCash() {
         <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:8px">💰 Safe / Bank — Money received from Bosta
           ${bostaCashCache.loading ? '<span style="font-size:12px;color:var(--muted)">loading…</span>' : ''}
         </h3>
-        <button class="btn btn-primary btn-sm" onclick="openBostaReceipt()">+ Record Receipt</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" onclick="openExpense('Bosta Fees')">+ Record Bosta fee</button>
+          <button class="btn btn-primary btn-sm" onclick="openBostaReceipt()">+ Record Receipt</button>
+        </div>
       </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:8px">
         <div class="stat-card green"><div class="stat-val">EGP ${fmt(total)}</div><div class="stat-label">In Safe / Bank (received from Bosta)</div></div>
-        <div class="stat-card blue"><div class="stat-val">EGP ${fmt(expected)}</div><div class="stat-label">Expected from Bosta (delivered orders)</div></div>
+        <div class="stat-card blue"><div class="stat-val">EGP ${fmt(expected)}</div><div class="stat-label">Expected from Bosta (after fees)</div></div>
         <div class="stat-card ${remaining > 0 ? 'orange' : 'green'}"><div class="stat-val">EGP ${fmt(Math.abs(remaining))}</div><div class="stat-label">${remaining > 0 ? 'Still to collect from Bosta' : 'All collected ✓'}</div></div>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:18px">
+        Delivered net COD: EGP ${fmt(deliveredNet)} &nbsp;−&nbsp; Bosta fees deducted: EGP ${fmt(bostaFees)} &nbsp;=&nbsp; Expected EGP ${fmt(expected)}
       </div>
       <div class="table-wrap">
         <table>
