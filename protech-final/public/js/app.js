@@ -1483,27 +1483,28 @@ function injectAnalyticsUI() {
 // ═══════════════════════════════════════════════════════════════════
 const SUPPLIER_SB_URL = 'https://wljxplbcfoorqpoflcdz.supabase.co';
 const SUPPLIER_SB_KEY = 'sb_publishable_zsHh-eOarHI7BSGtuP6WWQ_PQ4ACoHG';
-let supplierCache = { payments: [], loaded: false, loading: false };
+let supplierCache = { payments: [], charges: [], loaded: false, loading: false };
+
+async function sbSupplierGet(table) {
+  try {
+    const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/${table}?select=*&order=created_at.desc`, {
+      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY) }
+    });
+    const data = await res.json();
+    return (res.ok && Array.isArray(data)) ? data : [];
+  } catch (e) { return []; }
+}
 
 async function loadSupplierPayments() {
   supplierCache.loading = true;
   renderSupplierAccount();
-  try {
-    const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/supplier_payments?select=*&order=created_at.desc`, {
-      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY) }
-    });
-    const data = await res.json();
-    if (!res.ok || !Array.isArray(data)) {
-      supplierCache.payments = [];
-      showToast('Supplier: ' + (data?.message || 'table not found — run the SQL migration'));
-    } else {
-      supplierCache.payments = data;
-    }
-    supplierCache.loaded = true;
-  } catch (e) {
-    supplierCache.payments = [];
-    showToast('Supplier load failed: ' + e.message);
-  }
+  const [payments, charges] = await Promise.all([
+    sbSupplierGet('supplier_payments'),
+    sbSupplierGet('supplier_charges'),
+  ]);
+  supplierCache.payments = payments;
+  supplierCache.charges = charges;
+  supplierCache.loaded = true;
   supplierCache.loading = false;
   renderSupplierAccount();
 }
@@ -1541,12 +1542,24 @@ function renderSupplierAccount() {
   const host = document.getElementById('supplier-account');
   if (!host) return;
 
-  const owed = computeSupplierOwed();
+  const goodsOwed = computeSupplierOwed();
+  const chargesTotal = (supplierCache.charges || []).reduce((a, c) => a + parseFloat(c.amount || 0), 0);
+  const owed = goodsOwed + chargesTotal;
   const paid = supplierCache.payments.reduce((a, p) => a + parseFloat(p.amount || 0), 0);
   const remaining = owed - paid;
   const settled = remaining <= 0;
 
-  const rows = supplierCache.payments.length
+  const chargeRows = (supplierCache.charges || []).length
+    ? supplierCache.charges.map(c => `
+        <tr>
+          <td>${esc(c.date) || '—'}</td>
+          <td><strong>EGP ${fmt(c.amount)}</strong></td>
+          <td>${esc(c.note) || '—'}</td>
+          <td><button class="btn btn-danger btn-xs" onclick="delSupplierCharge('${c.id}')">✕</button></td>
+        </tr>`).join('')
+    : '<tr><td colspan="4"><div class="empty">No extra purchases recorded</div></td></tr>';
+
+  const payRows = supplierCache.payments.length
     ? supplierCache.payments.map(p => `
         <tr>
           <td>${esc(p.date) || '—'}</td>
@@ -1563,23 +1576,38 @@ function renderSupplierAccount() {
           🏭 Supplier Account — Elashry
           ${supplierCache.loading ? '<span style="font-size:12px;color:var(--muted)">loading…</span>' : ''}
         </h3>
-        <button class="btn btn-primary btn-sm" onclick="openSupplierPayment()">+ Record Payment</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" onclick="openSupplierCharge()">+ Record Purchase</button>
+          <button class="btn btn-primary btn-sm" onclick="openSupplierPayment()">+ Record Payment</button>
+        </div>
       </div>
 
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px">
-        <div class="stat-card orange"><div class="stat-val">EGP ${fmt(owed)}</div><div class="stat-label">Total Cost of Goods Taken</div></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:8px">
+        <div class="stat-card orange"><div class="stat-val">EGP ${fmt(owed)}</div><div class="stat-label">Total Owed (goods + purchases)</div></div>
         <div class="stat-card blue"><div class="stat-val">EGP ${fmt(paid)}</div><div class="stat-label">Total Paid to Elashry</div></div>
         <div class="stat-card ${settled ? 'green' : 'red'}"><div class="stat-val">EGP ${fmt(Math.abs(remaining))}</div><div class="stat-label">${settled ? (remaining < 0 ? 'Overpaid / Credit' : 'Fully Settled') : 'Remaining to Pay'}</div></div>
       </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:18px">
+        Goods from orders: EGP ${fmt(goodsOwed)} &nbsp;+&nbsp; Extra purchases: EGP ${fmt(chargesTotal)}
+      </div>
 
+      <h4 style="margin:6px 0;font-size:13px;color:var(--muted)">Extra purchases from Elashry (added to what you owe)</h4>
+      <div class="table-wrap" style="margin-bottom:16px">
+        <table>
+          <thead><tr><th>Date</th><th>Amount</th><th>Note</th><th></th></tr></thead>
+          <tbody>${chargeRows}</tbody>
+        </table>
+      </div>
+
+      <h4 style="margin:6px 0;font-size:13px;color:var(--muted)">Payments to Elashry</h4>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Date</th><th>Amount</th><th>Note</th><th></th></tr></thead>
-          <tbody>${rows}</tbody>
+          <tbody>${payRows}</tbody>
         </table>
       </div>
       <div style="font-size:12px;color:var(--muted);margin-top:8px">
-        Owed = buy-price × qty for In-Transit, Delivered and Returned orders (until the goods are received back in inventory), valued at the buy price when the order was placed.
+        Goods owed = buy-price × qty for In-Transit, Delivered and Returned orders (until received back in inventory), valued at the buy price when the order was placed. "Extra purchases" are added on top.
       </div>
     </div>`;
 }
@@ -1644,6 +1672,71 @@ async function delSupplierPayment(id) {
     if (!res.ok) throw new Error(await res.text());
     supplierCache.payments = supplierCache.payments.filter(p => p.id !== id);
     showToast('Payment deleted');
+    renderSupplierAccount();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+// ── Extra purchases from Elashry (added to the owed total) ──
+function openSupplierCharge() {
+  const overlay = document.getElementById('overlay');
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:14px;max-width:440px;width:92%;padding:24px;max-height:90vh;overflow:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px">
+        <h3 style="margin:0;font-size:17px">🏭 Record Extra Purchase from Elashry</h3>
+        <button class="btn btn-ghost btn-xs" onclick="closeModal()">✕</button>
+      </div>
+      <div class="form-group">
+        <label>Amount (EGP) *</label>
+        <input type="number" id="sc-amt" min="0" placeholder="0" inputmode="decimal">
+      </div>
+      <div class="form-group">
+        <label>Date</label>
+        <input type="text" id="sc-date" value="${today()}">
+      </div>
+      <div class="form-group">
+        <label>Note (optional)</label>
+        <input type="text" id="sc-note" placeholder="e.g. personal items, extra tools">
+      </div>
+      <div style="display:flex;gap:10px;margin-top:8px">
+        <button class="btn btn-primary" style="flex:1" onclick="saveSupplierCharge()">Save Purchase</button>
+        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      </div>
+    </div>`;
+  overlay.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+  setTimeout(() => document.getElementById('sc-amt')?.focus(), 60);
+}
+
+async function saveSupplierCharge() {
+  const amount = parseFloat(document.getElementById('sc-amt').value || 0);
+  const note = document.getElementById('sc-note').value.trim();
+  const date = document.getElementById('sc-date').value.trim() || today();
+  if (!amount || amount <= 0) { showToast('Please enter a valid amount'); return; }
+  const data = { id: genId(), amount, note, date, created_at: new Date().toISOString() };
+  try {
+    const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/supplier_charges`, {
+      method: 'POST',
+      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error(await res.text());
+    supplierCache.charges.unshift(data);
+    showToast('Extra purchase recorded ✓');
+    closeModal();
+    renderSupplierAccount();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+async function delSupplierCharge(id) {
+  if (!confirm('Delete this purchase record?')) return;
+  try {
+    const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/supplier_charges?id=eq.${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), Prefer: 'return=minimal' }
+    });
+    if (!res.ok) throw new Error(await res.text());
+    supplierCache.charges = supplierCache.charges.filter(c => c.id !== id);
+    showToast('Purchase deleted');
     renderSupplierAccount();
   } catch (e) { showToast('Error: ' + e.message); }
 }
