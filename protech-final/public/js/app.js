@@ -1045,10 +1045,11 @@ function renderFinancials() {
 }
 
 // ── EXPENSES ──
-function openExpense() {
+function openExpense(presetCategory) {
+  showModal('tpl-expense');
   document.getElementById('e-desc').value = '';
   document.getElementById('e-amt').value = '';
-  showModal('tpl-expense');
+  if (presetCategory) { const el = document.getElementById('e-cat'); if (el) el.value = presetCategory; }
 }
 
 async function saveExpense() {
@@ -1498,12 +1499,7 @@ async function sbSupplierGet(table) {
 async function loadSupplierPayments() {
   supplierCache.loading = true;
   renderSupplierAccount();
-  const [payments, charges] = await Promise.all([
-    sbSupplierGet('supplier_payments'),
-    sbSupplierGet('supplier_charges'),
-  ]);
-  supplierCache.payments = payments;
-  supplierCache.charges = charges;
+  supplierCache.payments = await sbSupplierGet('supplier_payments');
   supplierCache.loaded = true;
   supplierCache.loading = false;
   renderSupplierAccount();
@@ -1577,21 +1573,23 @@ function renderSupplierAccount() {
   if (!host) return;
 
   const goodsOwed = computeSupplierOwed();
-  const chargesTotal = (supplierCache.charges || []).reduce((a, c) => a + parseFloat(c.amount || 0), 0);
+  // Extra purchases from Elashry = expenses logged with the "Elashry" category.
+  const elashryExpenses = (cache.expenses || []).filter(e => e.category === 'Elashry');
+  const chargesTotal = elashryExpenses.reduce((a, c) => a + parseFloat(c.amount || 0), 0);
   const owed = goodsOwed + chargesTotal;
   const paid = supplierCache.payments.reduce((a, p) => a + parseFloat(p.amount || 0), 0);
   const remaining = owed - paid;
   const settled = remaining <= 0;
 
-  const chargeRows = (supplierCache.charges || []).length
-    ? supplierCache.charges.map(c => `
+  const chargeRows = elashryExpenses.length
+    ? elashryExpenses.map(c => `
         <tr>
           <td>${esc(c.date) || '—'}</td>
           <td><strong>EGP ${fmt(c.amount)}</strong></td>
-          <td>${esc(c.note) || '—'}</td>
-          <td><button class="btn btn-danger btn-xs" onclick="delSupplierCharge('${c.id}')">✕</button></td>
+          <td>${esc(c.description) || '—'}</td>
+          <td><button class="btn btn-danger btn-xs" onclick="delExpense('${c.id}')">✕</button></td>
         </tr>`).join('')
-    : '<tr><td colspan="4"><div class="empty">No extra purchases recorded</div></td></tr>';
+    : '<tr><td colspan="4"><div class="empty">No Elashry purchases yet — add an expense with category "Elashry"</div></td></tr>';
 
   const payRows = supplierCache.payments.length
     ? supplierCache.payments.map(p => `
@@ -1612,7 +1610,7 @@ function renderSupplierAccount() {
         </h3>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-ghost btn-sm" onclick="downloadSupplierBreakdownExcel()">📥 Breakdown</button>
-          <button class="btn btn-ghost btn-sm" onclick="openSupplierCharge()">+ Record Purchase</button>
+          <button class="btn btn-ghost btn-sm" onclick="openExpense('Elashry')">+ Record Purchase</button>
           <button class="btn btn-primary btn-sm" onclick="openSupplierPayment()">+ Record Payment</button>
         </div>
       </div>
@@ -1711,70 +1709,6 @@ async function delSupplierPayment(id) {
   } catch (e) { showToast('Error: ' + e.message); }
 }
 
-// ── Extra purchases from Elashry (added to the owed total) ──
-function openSupplierCharge() {
-  const overlay = document.getElementById('overlay');
-  overlay.innerHTML = `
-    <div style="background:#fff;border-radius:14px;max-width:440px;width:92%;padding:24px;max-height:90vh;overflow:auto">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px">
-        <h3 style="margin:0;font-size:17px">🏭 Record Extra Purchase from Elashry</h3>
-        <button class="btn btn-ghost btn-xs" onclick="closeModal()">✕</button>
-      </div>
-      <div class="form-group">
-        <label>Amount (EGP) *</label>
-        <input type="number" id="sc-amt" min="0" placeholder="0" inputmode="decimal">
-      </div>
-      <div class="form-group">
-        <label>Date</label>
-        <input type="text" id="sc-date" value="${today()}">
-      </div>
-      <div class="form-group">
-        <label>Note (optional)</label>
-        <input type="text" id="sc-note" placeholder="e.g. personal items, extra tools">
-      </div>
-      <div style="display:flex;gap:10px;margin-top:8px">
-        <button class="btn btn-primary" style="flex:1" onclick="saveSupplierCharge()">Save Purchase</button>
-        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      </div>
-    </div>`;
-  overlay.style.display = 'flex';
-  document.body.style.overflow = 'hidden';
-  setTimeout(() => document.getElementById('sc-amt')?.focus(), 60);
-}
-
-async function saveSupplierCharge() {
-  const amount = parseFloat(document.getElementById('sc-amt').value || 0);
-  const note = document.getElementById('sc-note').value.trim();
-  const date = document.getElementById('sc-date').value.trim() || today();
-  if (!amount || amount <= 0) { showToast('Please enter a valid amount'); return; }
-  const data = { id: genId(), amount, note, date, created_at: new Date().toISOString() };
-  try {
-    const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/supplier_charges`, {
-      method: 'POST',
-      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-      body: JSON.stringify(data)
-    });
-    if (!res.ok) throw new Error(await res.text());
-    supplierCache.charges.unshift(data);
-    showToast('Extra purchase recorded ✓');
-    closeModal();
-    renderSupplierAccount();
-  } catch (e) { showToast('Error: ' + e.message); }
-}
-
-async function delSupplierCharge(id) {
-  if (!confirm('Delete this purchase record?')) return;
-  try {
-    const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/supplier_charges?id=eq.${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), Prefer: 'return=minimal' }
-    });
-    if (!res.ok) throw new Error(await res.text());
-    supplierCache.charges = supplierCache.charges.filter(c => c.id !== id);
-    showToast('Purchase deleted');
-    renderSupplierAccount();
-  } catch (e) { showToast('Error: ' + e.message); }
-}
 
 // Inject the supplier section into the Financials screen + auto-render with it
 function injectSupplierUI() {
