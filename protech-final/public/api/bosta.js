@@ -272,6 +272,13 @@ export default async function handler(req, res) {
       bostaData?.message?.trackingNumber ||
       null;
 
+    // Bosta's internal delivery id — needed later to fetch status/fees from Bosta.
+    const bostaId =
+      bostaData?._id ||
+      bostaData?.data?._id ||
+      bostaData?.message?._id ||
+      null;
+
     if (!trackingNumber) {
       console.error('No tracking number:', JSON.stringify(bostaData));
       return res.status(502).json({ error: 'No tracking number returned', details: bostaData });
@@ -289,6 +296,7 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           ship_code: trackingNumber,
+          bosta_id: bostaId,
           // Bosta's real cost goes to actual_shipping (the merchant's expense, used by
           // the financials). Do NOT overwrite est_shipping — that holds the reduced
           // amount the customer was actually charged (storefront already subtracts 40).
