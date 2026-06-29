@@ -685,7 +685,10 @@ function renderOrders() {
       <td>EGP ${fmt(o.total)}</td>
       <td>${o.status === 'Awaiting Action'
         ? `<span style="display:inline-block;background:#dc2626;color:#fff;font-weight:800;font-size:13px;padding:6px 12px;border-radius:8px;animation:none">⚠️ AWAITING ACTION</span>`
-        : `<span class="badge ${smap[o.status] || 'b-gray'}">${esc(o.status)}</span>`}</td>
+        : `<span class="badge ${smap[o.status] || 'b-gray'}">${esc(o.status)}</span>`}${
+          o.customer_confirmed === true ? `<div style="font-size:11px;color:#16a34a;font-weight:700;margin-top:3px">✅ مؤكد</div>`
+          : o.customer_confirmed === false ? `<div style="font-size:11px;color:#dc2626;font-weight:700;margin-top:3px">❌ ملغي</div>`
+          : ''}</td>
       <td><div class="actions">
         <button class="btn btn-ghost btn-xs" onclick="viewOrder('${o.id}')">View</button>
         <button class="btn btn-dark btn-xs" onclick="editOrder('${o.id}')">Edit</button>
@@ -942,6 +945,23 @@ function viewOrder(id) {
   const waPhone = o.phone.startsWith('0') ? '2' + o.phone : o.phone;
   const waLink = `https://wa.me/${waPhone}?text=${waText}`;
 
+  // Manual order-confirmation message (no API): opens WhatsApp with a pre-filled
+  // request asking the customer to reply تأكيد / إلغاء. You then record their reply
+  // with the ✅ / ❌ buttons below.
+  const confirmText = encodeURIComponent(
+    `أهلاً ${o.customer_name} 👋\n` +
+    `شكراً لطلبك من *بروتيك* 🛠️\n\n` +
+    `طلبك رقم *${o.code}* بإجمالي *${fmt(o.total)} ج.م* (الدفع عند الاستلام 💵).\n\n` +
+    `برجاء تأكيد الحجز بالرد بكلمة *تأكيد* ✅ أو *إلغاء* ❌`
+  );
+  const confirmLink = `https://wa.me/${waPhone}?text=${confirmText}`;
+  const cc = o.customer_confirmed;
+  const ccBadge = cc === true
+    ? `<span style="color:#16a34a;font-weight:800;font-size:13px;display:inline-flex;align-items:center;gap:6px">✅ العميل أكد الحجز</span>`
+    : cc === false
+    ? `<span style="color:#dc2626;font-weight:800;font-size:13px;display:inline-flex;align-items:center;gap:6px">❌ العميل ألغى الحجز</span>`
+    : `<span style="color:#92702a;font-weight:700;font-size:13px;display:inline-flex;align-items:center;gap:6px">⏳ بانتظار تأكيد العميل</span>`;
+
   document.getElementById('m-detail-body').innerHTML = `
     ${o.status === 'Awaiting Action' ? `<div style="background:#dc2626;color:#fff;font-weight:800;font-size:16px;text-align:center;padding:14px;border-radius:10px;margin-bottom:14px">⚠️ هذا الطلب يحتاج إجراء — AWAITING ACTION</div>` : ''}
     <div id="order-tracker-${id}" style="background:#fafafa;border:1px solid #eee;border-radius:10px;padding:14px;margin-bottom:16px;display:flex;justify-content:center">
@@ -976,6 +996,17 @@ function viewOrder(id) {
     <div class="form-group"><label>Order Status</label>
       <select id="d-status">${statuses.map(s => `<option${o.status === s ? ' selected' : ''}>${s}</option>`).join('')}</select>
     </div>
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:12px;margin:6px 0 14px;display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+      <span style="font-weight:800;font-size:13px;color:#166534">تأكيد الطلب عبر واتساب</span>
+      ${ccBadge}
+      <div style="flex-basis:100%;height:0"></div>
+      <a href="${confirmLink}" target="_blank"
+        style="display:inline-flex;align-items:center;gap:8px;background:#25D366;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:700;font-size:13px">
+        📲 إرسال طلب التأكيد
+      </a>
+      <button class="btn" style="background:#16a34a;color:#fff" onclick="setConfirm('${id}',true)">✅ تم التأكيد</button>
+      <button class="btn" style="background:#dc2626;color:#fff" onclick="setConfirm('${id}',false)">❌ تم الإلغاء</button>
+    </div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
       <button class="btn btn-primary" onclick="saveDetail('${id}')">Save Changes</button>
       ${o.status === 'Delivered' ? `<a href="${waLink}" target="_blank" class="btn btn-wa" onclick="markFeedbackSent('${id}')">WhatsApp Feedback</a>` : ''}
@@ -1001,6 +1032,20 @@ async function saveDetail(id) {
     const i = cache.orders.findIndex(x => x.id === id);
     if (i >= 0) cache.orders[i] = { ...cache.orders[i], actual_shipping, cancel_reason, status };
     showToast('Order updated ✓'); closeModal(); renderAll();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+// Record the customer's reply to the manual WhatsApp confirmation request.
+// confirmed=true  -> customer_confirmed=true
+// confirmed=false -> customer_confirmed=false AND status -> Cancelled
+async function setConfirm(id, confirmed) {
+  const patch = confirmed ? { customer_confirmed: true } : { customer_confirmed: false, status: 'Cancelled' };
+  try {
+    await dbUpdate('orders', id, patch);
+    const i = cache.orders.findIndex(x => x.id === id);
+    if (i >= 0) cache.orders[i] = { ...cache.orders[i], ...patch };
+    showToast(confirmed ? 'Order confirmed ✓' : 'Order cancelled ✗');
+    closeModal(); renderAll();
   } catch (e) { showToast('Error: ' + e.message); }
 }
 
