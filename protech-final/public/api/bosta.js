@@ -161,6 +161,46 @@ const SHIPPING_RATES = {
   'EG-24': 182,  // الوادي الجديد
 };
 
+// Supabase REST helper (service-role key — can update products despite RLS).
+function sbFetch(path, opts = {}) {
+  return fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    ...opts,
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+      'Content-Type': 'application/json',
+      ...(opts.headers || {}),
+    },
+  });
+}
+
+// Decrement product stock for an order, server-side. Idempotent: if the order
+// already has a ship_code we assume stock was handled and skip (prevents a second
+// call from double-decrementing). Best-effort: never throws.
+async function decrementStockForOrder(orderId) {
+  try {
+    const r = await sbFetch(`orders?id=eq.${encodeURIComponent(orderId)}&select=products,ship_code`);
+    const row = (await r.json())?.[0];
+    if (!row) return;
+    if (row.ship_code) return; // already processed on a prior call
+    const items = Array.isArray(row.products) ? row.products : [];
+    for (const it of items) {
+      if (!it || !it.id) continue;
+      const pr = await sbFetch(`products?id=eq.${encodeURIComponent(it.id)}&select=id,qty`);
+      const prow = (await pr.json())?.[0];
+      if (!prow) continue;
+      const newQty = Math.max(0, (parseInt(prow.qty) || 0) - (parseInt(it.qty) || 0));
+      await sbFetch(`products?id=eq.${encodeURIComponent(it.id)}`, {
+        method: 'PATCH',
+        headers: { Prefer: 'return=minimal' },
+        body: JSON.stringify({ qty: newQty }),
+      });
+    }
+  } catch (e) {
+    console.warn('decrementStockForOrder failed (order still saved):', e.message);
+  }
+}
+
 export default async function handler(req, res) {
   const CORS = corsHeaders(req);
 
@@ -188,6 +228,10 @@ export default async function handler(req, res) {
   if (!/^[A-Za-z0-9_-]+$/.test(String(orderId))) {
     return res.status(400).json({ error: 'Invalid orderId' });
   }
+
+  // Decrement stock server-side (client can't, RLS blocks anonymous product writes).
+  // Runs before the ship_code is set, so the idempotency guard works on retries.
+  await decrementStockForOrder(orderId);
 
   const cityCode = CITY_MAP[city];
   if (!cityCode) {
