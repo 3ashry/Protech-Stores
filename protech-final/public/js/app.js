@@ -1031,9 +1031,13 @@ function renderFinancials() {
   const totalActualShip = delivered.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
   const netFromBosta = totalCollected - totalActualShip;
   const retShipCost = returned.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
-  const buyingCost = orders.filter(owesElashry).reduce((a, o) => a + (o.products || []).reduce((b, p) =>
+  const orderGoods = orders.filter(owesElashry).reduce((a, o) => a + (o.products || []).reduce((b, p) =>
     b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
-  const totalExp = cache.expenses.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  // Things bought from Elashry for Protech (logged as "Elashry" expenses) are part of the
+  // Elashry cost, not generic expenses — fold them into buying cost and out of extra expenses.
+  const elashryExp = cache.expenses.filter(e => e.category === 'Elashry').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const buyingCost = orderGoods + elashryExp;
+  const totalExp = cache.expenses.filter(e => e.category !== 'Elashry').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
   const netProfit = netFromBosta - retShipCost - buyingCost - totalExp;
 
   document.getElementById('fin-revenue').innerHTML = `
@@ -1042,7 +1046,7 @@ function renderFinancials() {
     <div class="fin-row subtotal"><span>Net amount from Bosta</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(netFromBosta)}</span></div>
     <div style="height:10px"></div>
     <div class="fin-row"><span>Return shipping cost</span><span class="fin-val deduct">− EGP ${fmt(retShipCost)}</span></div>
-    <div class="fin-row"><span>Total buying price of all orders</span><span class="fin-val deduct">− EGP ${fmt(buyingCost)}</span></div>`;
+    <div class="fin-row"><span>Total Elashry cost (goods + purchases)</span><span class="fin-val deduct">− EGP ${fmt(buyingCost)}</span></div>`;
 
   document.getElementById('exp-tbody').innerHTML = cache.expenses.length ? cache.expenses.map(e => `
     <tr>
@@ -1055,7 +1059,7 @@ function renderFinancials() {
 
   document.getElementById('fin-net').innerHTML = `
     <div class="fin-row"><span>Net from Bosta</span><span class="fin-val">EGP ${fmt(netFromBosta)}</span></div>
-    <div class="fin-row"><span>Total buying costs</span><span class="fin-val deduct">− EGP ${fmt(buyingCost)}</span></div>
+    <div class="fin-row"><span>Total Elashry cost (goods + purchases)</span><span class="fin-val deduct">− EGP ${fmt(buyingCost)}</span></div>
     <div class="fin-row"><span>Total extra expenses</span><span class="fin-val deduct">− EGP ${fmt(totalExp)}</span></div>
     <div class="fin-row"><span>Return shipping costs</span><span class="fin-val deduct">− EGP ${fmt(retShipCost)}</span></div>
     <div class="fin-row ${netProfit >= 0 ? 'profit' : 'loss'}"><span>${netProfit >= 0 ? '🟢 Net Profit' : '🔴 Net Loss'}</span><span>EGP ${fmt(Math.abs(netProfit))}</span></div>`;
@@ -1246,9 +1250,13 @@ function downloadFinancialsExcel() {
   const totalActualShip = delivered.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
   const netFromBosta = totalCollected - totalActualShip;
   const retShipCost = returned.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
-  const buyingCost = orders.filter(owesElashry).reduce((a, o) => a + (o.products || []).reduce((b, p) =>
+  const orderGoods = orders.filter(owesElashry).reduce((a, o) => a + (o.products || []).reduce((b, p) =>
     b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
-  const totalExp = cache.expenses.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  // Things bought from Elashry for Protech (logged as "Elashry" expenses) are part of the
+  // Elashry cost, not generic expenses — fold them into buying cost and out of extra expenses.
+  const elashryExp = cache.expenses.filter(e => e.category === 'Elashry').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const buyingCost = orderGoods + elashryExp;
+  const totalExp = cache.expenses.filter(e => e.category !== 'Elashry').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
   const netProfit = netFromBosta - retShipCost - buyingCost - totalExp;
 
   // Sheet 1: P&L Summary
@@ -1735,7 +1743,8 @@ function injectSupplierUI() {
   if (!fin) return;
   const div = document.createElement('div');
   div.id = 'supplier-account';
-  fin.appendChild(div);
+  const netCard = document.getElementById('fin-net-card');
+  if (netCard) fin.insertBefore(div, netCard); else fin.appendChild(div);
 }
 
 (function initSupplier() {
@@ -1878,7 +1887,8 @@ function injectBostaCashUI() {
   if (!fin) return;
   const div = document.createElement('div');
   div.id = 'bosta-cash';
-  fin.appendChild(div);
+  const netCard = document.getElementById('fin-net-card');
+  if (netCard) fin.insertBefore(div, netCard); else fin.appendChild(div);
 }
 
 (function initBostaCash() {
