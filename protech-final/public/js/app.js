@@ -1040,6 +1040,15 @@ function renderFinancials() {
   const totalExp = cache.expenses.filter(e => e.category !== 'Elashry').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
   const netProfit = netFromBosta - retShipCost - buyingCost - totalExp;
 
+  // Projected scenario: assume every In-Transit order is delivered & paid in full, and all
+  // Returned goods are restocked (so their cost is excluded). The true per-order "am I
+  // winning?" once the pipeline clears.
+  const projOrders = orders.filter(o => o.status === 'In Transit' || o.status === 'Delivered');
+  const projRevenue = projOrders.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0)), 0);
+  const projCOGS = projOrders.reduce((a, o) => a + (o.products || []).reduce((b, p) => b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
+  const allExpenses = cache.expenses.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const projProfit = projRevenue - projCOGS - allExpenses - retShipCost;
+
   document.getElementById('fin-revenue').innerHTML = `
     <div class="fin-row"><span>Total collected (orders + shipping)</span><span class="fin-val">EGP ${fmt(totalCollected)}</span></div>
     <div class="fin-row"><span>Total actual shipping cost</span><span class="fin-val deduct">− EGP ${fmt(totalActualShip)}</span></div>
@@ -1062,7 +1071,14 @@ function renderFinancials() {
     <div class="fin-row"><span>Total Elashry cost (goods + purchases)</span><span class="fin-val deduct">− EGP ${fmt(buyingCost)}</span></div>
     <div class="fin-row"><span>Total extra expenses</span><span class="fin-val deduct">− EGP ${fmt(totalExp)}</span></div>
     <div class="fin-row"><span>Return shipping costs</span><span class="fin-val deduct">− EGP ${fmt(retShipCost)}</span></div>
-    <div class="fin-row ${netProfit >= 0 ? 'profit' : 'loss'}"><span>${netProfit >= 0 ? '🟢 Net Profit' : '🔴 Net Loss'}</span><span>EGP ${fmt(Math.abs(netProfit))}</span></div>`;
+    <div class="fin-row ${netProfit >= 0 ? 'profit' : 'loss'}"><span>${netProfit >= 0 ? '🟢 Net Profit' : '🔴 Net Loss'}</span><span>EGP ${fmt(Math.abs(netProfit))}</span></div>
+    <div style="height:16px"></div>
+    <div class="fin-row"><span style="font-weight:800;color:var(--orange)">Projected — if all In-Transit deliver & returns restocked</span></div>
+    <div class="fin-row"><span>Projected revenue (delivered + in-transit, net of shipping)</span><span class="fin-val">EGP ${fmt(projRevenue)}</span></div>
+    <div class="fin-row"><span>Cost of those goods (returns excluded)</span><span class="fin-val deduct">− EGP ${fmt(projCOGS)}</span></div>
+    <div class="fin-row"><span>All expenses (ads, Elashry purchases, Bosta fees…)</span><span class="fin-val deduct">− EGP ${fmt(allExpenses)}</span></div>
+    <div class="fin-row"><span>Return shipping</span><span class="fin-val deduct">− EGP ${fmt(retShipCost)}</span></div>
+    <div class="fin-row ${projProfit >= 0 ? 'profit' : 'loss'}"><span>${projProfit >= 0 ? '🟢 Projected Profit' : '🔴 Projected Loss'}</span><span>EGP ${fmt(Math.abs(projProfit))}</span></div>`;
 }
 
 // ── EXPENSES ──
