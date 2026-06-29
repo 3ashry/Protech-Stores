@@ -1453,10 +1453,10 @@ async function loadSupplierPayments() {
 }
 
 // Owed = buy-price cost of goods across ALL orders (no exclusions)
-// An order's goods are owed to Elashry unless it was cancelled (never taken from
-// Elashry) or its goods have been received back in the warehouse.
+// Goods count as owed to Elashry (and as buying cost) only while the order is
+// In Transit — taken from Elashry and shipped, not yet delivered, cancelled, or returned.
 function owesElashry(o) {
-  return o.status !== 'Cancelled' && !o.warehouse_confirmed;
+  return o.status === 'In Transit';
 }
 // Use the buy price snapshotted on the order line at order time; fall back to the
 // product's current buy price for older orders that have no snapshot.
@@ -1521,7 +1521,7 @@ function renderSupplierAccount() {
         </table>
       </div>
       <div style="font-size:12px;color:var(--muted);margin-top:8px">
-        Owed = buy-price × qty for active orders, valued at the buy price when the order was placed. Excludes cancelled orders and goods already received back in the warehouse.
+        Owed = buy-price × qty for orders currently In Transit, valued at the buy price when the order was placed.
       </div>
     </div>`;
 }
