@@ -676,14 +676,16 @@ function renderOrders() {
     showToast("🛒 طلب جديد وصل!");
   }
   sessionStorage.setItem("protech_order_count", newCount);
-  const smap = { 'Processing': 'b-info', 'In Transit': 'b-warning', 'Delivered': 'b-success', 'Cancelled': 'b-danger', 'Returned': 'b-purple' };
+  const smap = { 'Processing': 'b-info', 'In Transit': 'b-warning', 'Delivered': 'b-success', 'On its way to me': 'b-purple', 'Returned': 'b-purple', 'Cancelled': 'b-danger', 'Awaiting Action': 'b-danger' };
   document.getElementById('orders-tbody').innerHTML = cache.orders.length ? cache.orders.map(o => `
-    <tr>
+    <tr${o.status === 'Awaiting Action' ? ' style="background:#fff4f4"' : ''}>
       <td><span class="badge b-orange">${esc(o.code)}</span> ${orderProgressBadge(o)}${o.allow_open ? ' <span class="badge b-warning" title="يريد فتح الشحنة">📦</span>' : ''}</td>
       <td><strong>${esc(o.customer_name)}</strong></td>
       <td>${esc(o.phone)}</td>
       <td>EGP ${fmt(o.total)}</td>
-      <td><span class="badge ${smap[o.status] || 'b-gray'}">${esc(o.status)}</span></td>
+      <td>${o.status === 'Awaiting Action'
+        ? `<span style="display:inline-block;background:#dc2626;color:#fff;font-weight:800;font-size:13px;padding:6px 12px;border-radius:8px;animation:none">⚠️ AWAITING ACTION</span>`
+        : `<span class="badge ${smap[o.status] || 'b-gray'}">${esc(o.status)}</span>`}</td>
       <td><div class="actions">
         <button class="btn btn-ghost btn-xs" onclick="viewOrder('${o.id}')">View</button>
         <button class="btn btn-dark btn-xs" onclick="editOrder('${o.id}')">Edit</button>
@@ -913,7 +915,7 @@ async function saveOrderBuyPrices(id) {
 function viewOrder(id) {
   const o = cache.orders.find(x => x.id === id);
   if (!o) return;
-  const statuses = ['Processing', 'In Transit', 'Delivered', 'Cancelled', 'Returned'];
+  const statuses = ['Processing', 'In Transit', 'Delivered', 'On its way to me', 'Returned', 'Awaiting Action', 'Cancelled'];
   const prHtml = (o.products || []).map((p, idx) => {
     const pr = cache.products.find(pp => pp.code === p.code);
     const unitPrice = parseFloat(p.sell_price ?? p.price ?? 0);
@@ -927,6 +929,7 @@ function viewOrder(id) {
   const waLink = `https://wa.me/${waPhone}?text=${waText}`;
 
   document.getElementById('m-detail-body').innerHTML = `
+    ${o.status === 'Awaiting Action' ? `<div style="background:#dc2626;color:#fff;font-weight:800;font-size:16px;text-align:center;padding:14px;border-radius:10px;margin-bottom:14px">⚠️ هذا الطلب يحتاج إجراء — AWAITING ACTION</div>` : ''}
     <div id="order-tracker-${id}" style="background:#fafafa;border:1px solid #eee;border-radius:10px;padding:14px;margin-bottom:16px;display:flex;justify-content:center">
       ${orderTrackerHTML(o)}
     </div>
@@ -1511,7 +1514,8 @@ async function loadSupplierPayments() {
 // received back in inventory (warehouse_confirmed). Processing and Cancelled don't count.
 function owesElashry(o) {
   if (o.warehouse_confirmed) return false;
-  return o.status === 'In Transit' || o.status === 'Delivered' || o.status === 'Returned';
+  // Goods are "out" (owed) once picked up and until they're returned to stock.
+  return ['In Transit', 'Delivered', 'On its way to me', 'Returned', 'Awaiting Action'].includes(o.status);
 }
 // Use the buy price snapshotted on the order line at order time; fall back to the
 // product's current buy price for older orders that have no snapshot.
