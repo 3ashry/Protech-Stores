@@ -117,7 +117,11 @@
     </div>
     <div class="stat-grid" id="inv-stats"></div>
     <div class="card">
-      <div class="card-header"><span class="card-title">All Products</span></div>
+      <div class="card-header" style="gap:10px;flex-wrap:wrap">
+        <span class="card-title">All Products</span>
+        <input id="inv-search" type="search" oninput="renderInventory()" placeholder="🔍 ابحث بالكود أو اسم المنتج…"
+          style="flex:1;min-width:200px;max-width:360px;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px">
+      </div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Code</th><th>Product Name</th><th>Qty</th><th>Buy Price</th><th>Sell Price</th><th>Actions</th></tr></thead>

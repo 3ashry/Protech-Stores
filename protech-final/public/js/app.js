@@ -513,16 +513,22 @@ function removeProductImage(idx) {
 
 // ── INVENTORY ──
 function renderInventory() {
-  const ps = cache.products;
-  const oos = ps.filter(p => parseInt(p.qty || 0) === 0).length;
-  const low = ps.filter(p => parseInt(p.qty || 0) > 0 && parseInt(p.qty || 0) <= 5).length;
-  const totalVal = ps.reduce((a, p) => a + parseFloat(p.buy_price || p.price || 0) * parseInt(p.qty || 0), 0);
+  const all = cache.products;
+  const oos = all.filter(p => parseInt(p.qty || 0) === 0).length;
+  const low = all.filter(p => parseInt(p.qty || 0) > 0 && parseInt(p.qty || 0) <= 5).length;
+  const totalVal = all.reduce((a, p) => a + parseFloat(p.buy_price || p.price || 0) * parseInt(p.qty || 0), 0);
 
   document.getElementById('inv-stats').innerHTML = `
-    <div class="stat-card orange"><div class="stat-val">${ps.length}</div><div class="stat-label">Total Products</div></div>
+    <div class="stat-card orange"><div class="stat-val">${all.length}</div><div class="stat-label">Total Products</div></div>
     <div class="stat-card red"><div class="stat-val">${oos}</div><div class="stat-label">Out of Stock</div></div>
     <div class="stat-card blue"><div class="stat-val">${low}</div><div class="stat-label">Low Stock ≤5</div></div>
     <div class="stat-card green"><div class="stat-val">EGP ${fmt(totalVal)}</div><div class="stat-label">Inventory Value</div></div>`;
+
+  // Filter by product code or name (case-insensitive, trimmed).
+  const q = (document.getElementById('inv-search')?.value || '').trim().toLowerCase();
+  const ps = q
+    ? all.filter(p => String(p.code || '').toLowerCase().includes(q) || String(p.name || '').toLowerCase().includes(q))
+    : all;
 
   document.getElementById('inv-tbody').innerHTML = ps.length ? ps.map(p => {
     // categories can be array or string
@@ -548,7 +554,7 @@ function renderInventory() {
         <button class="btn btn-danger btn-xs" onclick="delProduct('${p.id}')">Remove</button>
       </div></td>
     </tr>`;
-  }).join('') : '<tr><td colspan="5"><div class="empty"><div class="empty-icon">📦</div>No products yet. Add your first product.</div></td></tr>';
+  }).join('') : `<tr><td colspan="6"><div class="empty"><div class="empty-icon">📦</div>${q ? `لا توجد منتجات مطابقة لـ "${esc(q)}"` : 'No products yet. Add your first product.'}</div></td></tr>`;
 }
 
 // ── OFFER TOGGLE ──
