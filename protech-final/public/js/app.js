@@ -695,7 +695,7 @@ function renderOrders() {
 let oPRows = [];
 
 function openCreateOrder() {
-  oPRows = [{ code: '', qty: 1, sell_price: '' }];
+  oPRows = [{ code: '', qty: 1, sell_price: '', buy_price: '' }];
   ['o-name', 'o-phone', 'o-shipcode', 'o-shipest'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('o-idx').value = '';
   document.getElementById('m-order-title').textContent = 'New Order';
@@ -726,7 +726,7 @@ function editOrder(id) {
   }, 80);
 }
 
-function addProdRow() { oPRows.push({ code: '', qty: 1, sell_price: '' }); renderPRows(); }
+function addProdRow() { oPRows.push({ code: '', qty: 1, sell_price: '', buy_price: '' }); renderPRows(); }
 function removePRow(i) { oPRows.splice(i, 1); renderPRows(); }
 function updatePRow(i, f, v) { oPRows[i][f] = v; calcTotal(); }
 
@@ -745,6 +745,9 @@ function renderPRows() {
         </div>
         <div class="form-group" style="margin:0"><label>Sell Price</label>
           <input type="number" min="0" value="${r.sell_price}" placeholder="0" inputmode="decimal" onchange="updatePRow(${i},'sell_price',this.value)">
+        </div>
+        <div class="form-group" style="margin:0"><label>Buy Price</label>
+          <input type="number" min="0" value="${r.buy_price ?? ''}" placeholder="${fmt(cache.products.find(p => p.code === r.code)?.buy_price || 0)}" inputmode="decimal" onchange="updatePRow(${i},'buy_price',this.value)">
         </div>
         ${oPRows.length > 1 ? `<button class="btn btn-danger btn-xs" style="margin-bottom:2px" onclick="removePRow(${i})">✕</button>` : '<div></div>'}
       </div>
@@ -783,7 +786,12 @@ async function saveOrder() {
   // price paid when the order was placed, even if the product's buy price changes later.
   const lineItems = oPRows.map(r => ({
     ...r,
-    buy_price: parseFloat(cache.products.find(p => p.code === r.code)?.buy_price || 0),
+    // Use the buy price typed for this line; if left blank, fall back to the product's
+    // current buy price. This is a per-order snapshot — editing it here does not change
+    // the product's system-wide buy price.
+    buy_price: (r.buy_price !== '' && r.buy_price != null)
+      ? parseFloat(r.buy_price) || 0
+      : parseFloat(cache.products.find(p => p.code === r.code)?.buy_price || 0),
   }));
   const id = document.getElementById('o-idx').value;
   try {
