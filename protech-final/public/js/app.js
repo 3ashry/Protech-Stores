@@ -2025,18 +2025,27 @@ async function delBostaReceipt(id) {
 // ═══════════════════════════════════════════════════════════════════
 //  ABANDONED CARTS — people who reached checkout but didn't finish
 // ═══════════════════════════════════════════════════════════════════
-let cartsCache = { rows: [], loaded: false, loading: false };
+let cartsCache = { rows: [], loaded: false, loading: false, error: null };
 
 async function loadAbandonedCarts() {
   cartsCache.loading = true;
+  cartsCache.error = null;
   renderAbandonedCarts();
   try {
     const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/abandoned_carts?status=eq.open&order=updated_at.desc`, {
       headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY) }
     });
-    const data = await res.json();
-    cartsCache.rows = (res.ok && Array.isArray(data)) ? data : [];
-  } catch (e) { cartsCache.rows = []; }
+    if (!res.ok) {
+      const txt = await res.text();
+      cartsCache.rows = [];
+      cartsCache.error = /does not exist|relation|42P01|PGRST205/i.test(txt)
+        ? 'الجدول غير موجود — شغّل ملف create_abandoned_carts.sql في Supabase'
+        : ('تعذّر تحميل السلات: ' + txt.slice(0, 140));
+    } else {
+      const data = await res.json();
+      cartsCache.rows = Array.isArray(data) ? data : [];
+    }
+  } catch (e) { cartsCache.rows = []; cartsCache.error = e.message; }
   cartsCache.loaded = true;
   cartsCache.loading = false;
   renderAbandonedCarts();
@@ -2075,6 +2084,10 @@ function renderAbandonedCarts() {
   if (stats) stats.innerHTML = `
     <div class="stat-card orange"><div class="stat-val">${rows.length}</div><div class="stat-label">Open Carts</div></div>
     <div class="stat-card green"><div class="stat-val">EGP ${fmt(potential)}</div><div class="stat-label">Potential Value</div></div>`;
+  if (cartsCache.error) {
+    body.innerHTML = `<div style="background:#fef2f2;border:1px solid #fecaca;color:#dc2626;border-radius:10px;padding:16px;font-weight:700">⚠️ ${esc(cartsCache.error)}</div>`;
+    return;
+  }
   body.innerHTML = `
     <div class="table-wrap">
       <table>
