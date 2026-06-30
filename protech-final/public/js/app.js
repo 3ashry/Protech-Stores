@@ -1623,6 +1623,7 @@ async function loadSupplierPayments() {
   supplierCache.loaded = true;
   supplierCache.loading = false;
   renderSupplierAccount();
+  if (typeof renderBostaCash === 'function') renderBostaCash(); // cash-on-hand uses Elashry payments
 }
 
 // Owed = buy-price cost of goods across ALL orders (no exclusions)
@@ -1883,6 +1884,18 @@ function renderBostaCash() {
   // Projection: net COD of In-Transit orders (what Bosta would owe once they deliver).
   const inTransit = (typeof cache !== 'undefined' && cache.orders ? cache.orders : []).filter(o => o.status === 'In Transit');
   const inTransitNet = inTransit.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0)), 0);
+
+  // ── CASH ON HAND ──
+  // = starting capital + money received from Bosta − payments to Elashry
+  //   − operating expenses actually paid (excluding Elashry purchases [credit] and
+  //   Bosta fees [already netted from the received amount]).
+  const startingCapital = parseFloat(localStorage.getItem('protech_starting_capital') || 0) || 0;
+  const elashryPaid = (typeof supplierCache !== 'undefined' && supplierCache.payments ? supplierCache.payments : [])
+    .reduce((a, p) => a + parseFloat(p.amount || 0), 0);
+  const opExpenses = (cache.expenses || [])
+    .filter(e => e.category !== 'Elashry' && e.category !== 'Bosta Fees')
+    .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const cashOnHand = startingCapital + total - elashryPaid - opExpenses;
   const rows = (bostaCashCache.receipts || []).length
     ? bostaCashCache.receipts.map(r => `
         <tr>
@@ -1912,6 +1925,29 @@ function renderBostaCash() {
       <div style="font-size:12px;color:var(--muted);margin-bottom:18px">
         Delivered net COD: EGP ${fmt(deliveredNet)} &nbsp;−&nbsp; Bosta fees deducted: EGP ${fmt(bostaFees)} &nbsp;=&nbsp; Expected EGP ${fmt(expected)}
       </div>
+
+      <div style="background:${cashOnHand >= 0 ? '#f0fdf4' : '#fef2f2'};border:2px solid ${cashOnHand >= 0 ? '#16a34a' : '#dc2626'};border-radius:12px;padding:16px;margin-bottom:18px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+          <div>
+            <div style="font-size:13px;color:var(--muted);font-weight:700">💵 Cash on hand (الكاش المتاح فعلياً)</div>
+            <div style="font-size:28px;font-weight:900;color:${cashOnHand >= 0 ? '#16a34a' : '#dc2626'}">EGP ${fmt(cashOnHand)}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <label style="font-size:12px;color:var(--muted);font-weight:700">Starting capital</label>
+            <input type="number" id="cash-start-cap" value="${startingCapital || ''}" placeholder="0" inputmode="decimal"
+              onchange="saveStartingCapital(this.value)"
+              style="width:120px;padding:8px 10px;border:1px solid #ccc;border-radius:8px;font-size:14px">
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-top:10px;line-height:1.8">
+          ${fmt(startingCapital)} رأس مال
+          &nbsp;+&nbsp; ${fmt(total)} مستلم من بوسطة
+          &nbsp;−&nbsp; ${fmt(elashryPaid)} مدفوع للأشري
+          &nbsp;−&nbsp; ${fmt(opExpenses)} مصاريف تشغيل
+          <br><span style="opacity:.8">لا يشمل: المستحق من بوسطة (لم يصل بعد) ولا الدين غير المدفوع للأشري.</span>
+        </div>
+      </div>
+
       <div class="table-wrap">
         <table>
           <thead><tr><th>Date</th><th>Amount</th><th>Note</th><th></th></tr></thead>
@@ -1919,6 +1955,15 @@ function renderBostaCash() {
         </table>
       </div>
     </div>`;
+}
+
+// Starting capital is a manual figure (cash the owner put in that isn't already
+// recorded as an expense). Stored locally in the browser.
+function saveStartingCapital(v) {
+  const n = parseFloat(v || 0) || 0;
+  localStorage.setItem('protech_starting_capital', String(n));
+  renderBostaCash();
+  showToast('Starting capital saved ✓');
 }
 
 function openBostaReceipt() {
