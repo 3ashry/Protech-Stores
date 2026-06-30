@@ -99,9 +99,10 @@ protechstores.com
 }
 
 // ── NAVIGATION ──
-const SCREENS = ['home', 'inventory', 'orders', 'returns', 'financials', 'invoices', 'analytics'];
+const SCREENS = ['home', 'inventory', 'orders', 'returns', 'financials', 'invoices', 'carts', 'analytics'];
 function go(id) {
   if (id === 'analytics' && !analyticsCache.loaded) loadAnalytics();
+  if (id === 'carts') loadAbandonedCarts();
   SCREENS.forEach(s => {
     document.getElementById('screen-' + s)?.classList.toggle('active', s === id);
   });
@@ -2018,6 +2019,95 @@ async function delBostaReceipt(id) {
     bostaCashCache.receipts = bostaCashCache.receipts.filter(r => r.id !== id);
     showToast('Receipt deleted');
     renderBostaCash();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  ABANDONED CARTS — people who reached checkout but didn't finish
+// ═══════════════════════════════════════════════════════════════════
+let cartsCache = { rows: [], loaded: false, loading: false };
+
+async function loadAbandonedCarts() {
+  cartsCache.loading = true;
+  renderAbandonedCarts();
+  try {
+    const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/abandoned_carts?status=eq.open&order=updated_at.desc`, {
+      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY) }
+    });
+    const data = await res.json();
+    cartsCache.rows = (res.ok && Array.isArray(data)) ? data : [];
+  } catch (e) { cartsCache.rows = []; }
+  cartsCache.loaded = true;
+  cartsCache.loading = false;
+  renderAbandonedCarts();
+}
+
+function timeAgo(iso) {
+  if (!iso) return '—';
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (isNaN(diff)) return '—';
+  if (diff < 3600) return `منذ ${Math.max(1, Math.round(diff / 60))} دقيقة`;
+  if (diff < 86400) return `منذ ${Math.round(diff / 3600)} ساعة`;
+  return `منذ ${Math.round(diff / 86400)} يوم`;
+}
+
+function cartWaLink(c) {
+  const items = (Array.isArray(c.items) ? c.items : []).map(i => `• ${i.name || i.code} × ${i.qty || 1}`).join('\n');
+  const msg = encodeURIComponent(
+`مرحباً ${c.name || ''}
+لاحظنا إنك بدأت طلب من *بروتيك* ولم تكمله 🛒
+
+المنتجات في سلتك:
+${items}
+
+تحب نساعدك تكمل طلبك؟ إحنا متاحين لأي استفسار 🙏
+الدفع عند الاستلام والشحن لكل المحافظات.`);
+  const waPhone = String(c.phone || '').startsWith('0') ? '2' + c.phone : c.phone;
+  return `https://wa.me/${waPhone}?text=${msg}`;
+}
+
+function renderAbandonedCarts() {
+  const stats = document.getElementById('carts-stats');
+  const body = document.getElementById('carts-body');
+  if (!body) return;
+  const rows = cartsCache.rows || [];
+  const potential = rows.reduce((a, c) => a + parseFloat(c.total || 0), 0);
+  if (stats) stats.innerHTML = `
+    <div class="stat-card orange"><div class="stat-val">${rows.length}</div><div class="stat-label">Open Carts</div></div>
+    <div class="stat-card green"><div class="stat-val">EGP ${fmt(potential)}</div><div class="stat-label">Potential Value</div></div>`;
+  body.innerHTML = `
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Customer</th><th>Phone</th><th>Items</th><th>Total</th><th>When</th><th>Action</th></tr></thead>
+        <tbody>${rows.length ? rows.map(c => {
+          const items = (Array.isArray(c.items) ? c.items : []).map(i => `${esc(i.name || i.code)} × ${i.qty || 1}`).join('<br>');
+          return `<tr>
+            <td><strong>${esc(c.name) || '—'}</strong></td>
+            <td>${esc(c.phone)}</td>
+            <td style="font-size:12px;line-height:1.7">${items || '—'}</td>
+            <td>EGP ${fmt(c.total || 0)}</td>
+            <td style="font-size:12px;color:var(--muted)">${esc(timeAgo(c.updated_at || c.created_at))}</td>
+            <td><div class="actions" style="gap:6px">
+              <a href="${cartWaLink(c)}" target="_blank" class="btn btn-xs" style="background:#25D366;color:#fff">📲 ذكّره</a>
+              <button class="btn btn-ghost btn-xs" onclick="dismissCart('${esc(c.id)}')">Dismiss</button>
+            </div></td>
+          </tr>`;
+        }).join('') : `<tr><td colspan="6"><div class="empty"><div class="empty-icon">🛒</div>${cartsCache.loading ? 'loading…' : 'No abandoned carts 🎉'}</div></td></tr>`}</tbody>
+      </table>
+    </div>`;
+}
+
+async function dismissCart(id) {
+  try {
+    const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/abandoned_carts?id=eq.${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify({ status: 'dismissed' })
+    });
+    if (!res.ok) throw new Error(await res.text());
+    cartsCache.rows = cartsCache.rows.filter(c => c.id !== id);
+    showToast('Cart dismissed');
+    renderAbandonedCarts();
   } catch (e) { showToast('Error: ' + e.message); }
 }
 
