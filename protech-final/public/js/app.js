@@ -874,6 +874,30 @@ async function delOrder(id) {
   } catch (e) { showToast('Error: ' + e.message); }
 }
 
+// Cancelling an order returns its products to inventory and deletes the order entirely.
+// Stock is only restored if it hasn't already been returned (warehouse_confirmed).
+async function cancelOrder(id) {
+  const order = cache.orders.find(x => x.id === id);
+  if (!order) return;
+  if (!confirm('Cancel this order?\nIts products go back to inventory and the order is deleted permanently.')) return;
+  try {
+    if (!order.warehouse_confirmed) {
+      for (const op of (order.products || [])) {
+        const pi = cache.products.findIndex(p => p.code === op.code);
+        if (pi >= 0) {
+          const restored = parseInt(cache.products[pi].qty || 0) + parseInt(op.qty || 1);
+          cache.products[pi].qty = restored;
+          await dbUpdate('products', cache.products[pi].id, { qty: restored });
+        }
+      }
+    }
+    await dbDelete('orders', id);
+    cache.orders = cache.orders.filter(x => x.id !== id);
+    showToast('Order cancelled — stock restored & order deleted ✓');
+    closeModal(); renderAll();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
 async function confirmWarehouse(id) {
   if (!confirm('Confirm you have received this order back in your warehouse?')) return;
   const order = cache.orders.find(x => x.id === id);
@@ -1044,12 +1068,12 @@ protechstores.com
       <button class="btn btn-primary" onclick="saveDetail('${id}')">Save Changes</button>
       ${o.status === 'Delivered' ? `<a href="${waLink}" target="_blank" class="btn btn-wa" onclick="markFeedbackSent('${id}')">WhatsApp Feedback</a>` : ''}
       ${o.status === 'Delivered' ? `<button class="btn btn-ghost" onclick="openFeedback('${o.code}')">Add Manual Feedback</button>` : ''}
-      ${(o.status === 'Cancelled' || o.status === 'Returned') && !o.warehouse_confirmed ? `
+      ${o.status === 'Returned' && !o.warehouse_confirmed ? `
         <button class="btn" style="background:#7c3aed;color:#fff;display:flex;align-items:center;gap:8px" onclick="confirmWarehouse('${id}')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
           Confirm Received in Warehouse
         </button>` : ''}
-      ${(o.status === 'Cancelled' || o.status === 'Returned') && o.warehouse_confirmed ? `<span style="color:#16a34a;font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Stock Returned to Inventory</span>
+      ${o.status === 'Returned' && o.warehouse_confirmed ? `<span style="color:#16a34a;font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Stock Returned to Inventory</span>
         <button class="btn btn-ghost btn-xs" onclick="undoWarehouse('${id}')">Undo</button>` : ''}
     </div>`;
   showModal('tpl-detail');
@@ -1059,8 +1083,9 @@ async function saveDetail(id) {
   const cancel_reason = document.getElementById('d-reason').value;
   const status = document.getElementById('d-status').value;
   const allow_open = !!document.getElementById('d-allowopen')?.checked;
-  // Cancelled = cancelled before shipping, so there is no shipping cost.
-  const actual_shipping = status === 'Cancelled' ? 0 : parseFloat(document.getElementById('d-ship').value || 0);
+  // Cancelling restores stock and deletes the order entirely.
+  if (status === 'Cancelled') { await cancelOrder(id); return; }
+  const actual_shipping = parseFloat(document.getElementById('d-ship').value || 0);
   try {
     await dbUpdate('orders', id, { actual_shipping, cancel_reason, status, allow_open });
     const i = cache.orders.findIndex(x => x.id === id);
@@ -1073,12 +1098,13 @@ async function saveDetail(id) {
 // confirmed=true  -> customer_confirmed=true
 // confirmed=false -> customer_confirmed=false AND status -> Cancelled
 async function setConfirm(id, confirmed) {
-  const patch = confirmed ? { customer_confirmed: true } : { customer_confirmed: false, status: 'Cancelled' };
+  // Customer declined → cancel the order (restore stock + delete).
+  if (!confirmed) { await cancelOrder(id); return; }
   try {
-    await dbUpdate('orders', id, patch);
+    await dbUpdate('orders', id, { customer_confirmed: true });
     const i = cache.orders.findIndex(x => x.id === id);
-    if (i >= 0) cache.orders[i] = { ...cache.orders[i], ...patch };
-    showToast(confirmed ? 'Order confirmed ✓' : 'Order cancelled ✗');
+    if (i >= 0) cache.orders[i] = { ...cache.orders[i], customer_confirmed: true };
+    showToast('Order confirmed ✓');
     closeModal(); renderAll();
   } catch (e) { showToast('Error: ' + e.message); }
 }
