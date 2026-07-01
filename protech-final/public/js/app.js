@@ -684,7 +684,9 @@ function renderOrders() {
   }
   sessionStorage.setItem("protech_order_count", newCount);
   const smap = { 'Processing': 'b-info', 'In Transit': 'b-warning', 'Delivered': 'b-success', 'On its way to me': 'b-purple', 'Returned': 'b-purple', 'Cancelled': 'b-danger', 'Awaiting Action': 'b-danger' };
-  document.getElementById('orders-tbody').innerHTML = cache.orders.length ? cache.orders.map(o => `
+  // Cancelled orders are removed entirely from the list (and are excluded from all money calcs).
+  const visibleOrders = cache.orders.filter(o => o.status !== 'Cancelled');
+  document.getElementById('orders-tbody').innerHTML = visibleOrders.length ? visibleOrders.map(o => `
     <tr${o.status === 'Awaiting Action' ? ' style="background:#fff4f4"' : ''}>
       <td><span class="badge b-orange">${esc(o.code)}</span> ${orderProgressBadge(o)}${o.allow_open ? ' <span class="badge b-warning" title="يريد فتح الشحنة">📦</span>' : ''}${o.status === 'Returned' && !o.warehouse_confirmed ? ' <span class="badge b-danger" title="مرتجع — لم يُرجع للمخزن بعد">↩️ لم يُرجع للمخزن</span>' : ''}</td>
       <td><strong>${esc(o.customer_name)}</strong></td>
@@ -1212,7 +1214,8 @@ async function delExpense(id) {
 
 // ── INVOICES ──
 function renderInvoices() {
-  document.getElementById('inv-orders-tbody').innerHTML = cache.orders.length ? cache.orders.map(o => `
+  const invOrders = cache.orders.filter(o => o.status !== 'Cancelled');
+  document.getElementById('inv-orders-tbody').innerHTML = invOrders.length ? invOrders.map(o => `
     <tr>
       <td><span class="badge b-orange">${esc(o.code)}</span></td>
       <td>${esc(o.customer_name)}</td>
