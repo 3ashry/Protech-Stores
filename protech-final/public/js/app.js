@@ -1153,7 +1153,9 @@ function renderFinancials() {
       <button class="btn btn-primary btn-sm" ${mbOwed > 0 ? '' : 'disabled'} onclick="payMediaBuyer(${mbOwed})">✅ Mark as paid (record EGP ${fmt(mbOwed)} to expenses)</button>
     </div>`;
 
-  document.getElementById('exp-tbody').innerHTML = cache.expenses.length ? cache.expenses.map(e => `
+  // General expenses list — exclude "Elashry" (shown in the Elashry supplier box instead).
+  const generalExpenses = cache.expenses.filter(e => e.category !== 'Elashry');
+  document.getElementById('exp-tbody').innerHTML = generalExpenses.length ? generalExpenses.map(e => `
     <tr>
       <td><span class="badge b-orange">${esc(e.category)}</span></td>
       <td>${esc(e.description) || '—'}</td>
@@ -1750,10 +1752,23 @@ function renderSupplierAccount() {
   const host = document.getElementById('supplier-account');
   if (!host) return;
 
-  const owed = computeSupplierOwed(); // goods for delivered + returned-not-restocked only
+  const goodsOwed = computeSupplierOwed(); // goods for delivered + returned-not-restocked only
+  // Extra things bought from Elashry (e.g. for videos) = expenses with category "Elashry".
+  const elashryPurchases = (cache.expenses || []).filter(e => e.category === 'Elashry');
+  const purchasesTotal = elashryPurchases.reduce((a, c) => a + parseFloat(c.amount || 0), 0);
+  const owed = goodsOwed + purchasesTotal;
   const paid = supplierCache.payments.reduce((a, p) => a + parseFloat(p.amount || 0), 0);
   const remaining = owed - paid;
   const settled = remaining <= 0;
+  const purchaseRows = elashryPurchases.length
+    ? elashryPurchases.map(c => `
+        <tr>
+          <td>${esc(c.date) || '—'}</td>
+          <td><strong>EGP ${fmt(c.amount)}</strong></td>
+          <td>${esc(c.description) || '—'}</td>
+          <td><button class="btn btn-danger btn-xs" onclick="delExpense('${c.id}')">✕</button></td>
+        </tr>`).join('')
+    : '<tr><td colspan="4"><div class="empty">No purchases from Elashry yet</div></td></tr>';
   // Buy cost of goods from Returned orders not yet returned to the warehouse.
   const notReturnedCost = (cache.orders || [])
     .filter(o => o.status === 'Returned' && !o.warehouse_confirmed)
@@ -1776,20 +1791,31 @@ function renderSupplierAccount() {
           🏭 Elashry — Supplier
           ${supplierCache.loading ? '<span style="font-size:12px;color:var(--muted)">loading…</span>' : ''}
         </h3>
-        <button class="btn btn-primary btn-sm" onclick="openSupplierPayment()">+ Record Payment</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" onclick="openExpense('Elashry')">+ Record Purchase</button>
+          <button class="btn btn-primary btn-sm" onclick="openSupplierPayment()">+ Record Payment</button>
+        </div>
       </div>
 
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:8px">
-        <div class="stat-card orange"><div class="stat-val">EGP ${fmt(owed)}</div><div class="stat-label">How much I owe Elashry</div></div>
+        <div class="stat-card orange"><div class="stat-val">EGP ${fmt(owed)}</div><div class="stat-label">How much I owe Elashry (goods + purchases)</div></div>
         <div class="stat-card blue"><div class="stat-val">EGP ${fmt(paid)}</div><div class="stat-label">Total Paid to Elashry</div></div>
         <div class="stat-card ${settled ? 'green' : 'red'}"><div class="stat-val">EGP ${fmt(Math.abs(remaining))}</div><div class="stat-label">${settled ? (remaining < 0 ? 'Overpaid / Credit' : 'Fully Settled') : 'Remaining to Pay'}</div></div>
       </div>
       <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
-        Owed = buy price × qty for <strong>Delivered</strong> orders + <strong>Returned</strong> orders not yet returned to the warehouse. Returned-and-restocked orders don't count.
+        Owed = buy price × qty for <strong>Delivered</strong> orders + <strong>Returned</strong> orders not yet returned to the warehouse (returned-and-restocked don't count) <strong>+ purchases from Elashry</strong> below. &nbsp;Goods: EGP ${fmt(goodsOwed)} &nbsp;+&nbsp; Purchases: EGP ${fmt(purchasesTotal)}
       </div>
       <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:12px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
         <span style="font-weight:700;font-size:13px">↩️ Goods not returned to warehouse yet (buy cost)</span>
         <span style="font-weight:900;font-size:16px;color:#c2410c">EGP ${fmt(notReturnedCost)}</span>
+      </div>
+
+      <h4 style="margin:6px 0;font-size:13px;color:var(--muted)">Purchases from Elashry (for videos etc. — added to what you owe)</h4>
+      <div class="table-wrap" style="margin-bottom:16px">
+        <table>
+          <thead><tr><th>Date</th><th>Amount</th><th>What</th><th></th></tr></thead>
+          <tbody>${purchaseRows}</tbody>
+        </table>
       </div>
 
       <h4 style="margin:6px 0;font-size:13px;color:var(--muted)">Payments to Elashry</h4>
