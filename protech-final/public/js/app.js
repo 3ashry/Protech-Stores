@@ -1309,6 +1309,40 @@ function downloadOrdersExcel() {
   showToast('Orders Excel downloaded ✓');
 }
 
+// Delivered orders only: COD Bosta collected, buying cost per order, actual shipping, ship code.
+function downloadDeliveredOrdersExcel() {
+  const products = cache.products || [];
+  const delivered = (cache.orders || []).filter(o => o.status === 'Delivered');
+  if (!delivered.length) { showToast('No delivered orders to export'); return; }
+  const rows = delivered.map(o => {
+    const buyCost = (Array.isArray(o.products) ? o.products : [])
+      .reduce((a, p) => a + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0);
+    return {
+      'Order Code': o.code || '',
+      'Date': o.date || '',
+      'Customer': o.customer_name || '',
+      'Shipping Code': o.ship_code || '',
+      'Bosta Collected from Customer (EGP)': parseFloat(o.total || 0),
+      'Total Buying Cost (EGP)': Math.round(buyCost * 100) / 100,
+      'Actual Shipping Cost (EGP)': parseFloat(o.actual_shipping || 0),
+    };
+  });
+  // Totals row.
+  rows.push({
+    'Order Code': 'TOTAL',
+    'Date': '', 'Customer': '', 'Shipping Code': '',
+    'Bosta Collected from Customer (EGP)': rows.reduce((a, r) => a + r['Bosta Collected from Customer (EGP)'], 0),
+    'Total Buying Cost (EGP)': Math.round(rows.reduce((a, r) => a + r['Total Buying Cost (EGP)'], 0) * 100) / 100,
+    'Actual Shipping Cost (EGP)': rows.reduce((a, r) => a + r['Actual Shipping Cost (EGP)'], 0),
+  });
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 22 }, { wch: 16 }, { wch: 30 }, { wch: 22 }, { wch: 22 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Delivered Orders');
+  XLSX.writeFile(wb, `Protech_Delivered_Orders_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  showToast('Delivered orders Excel downloaded ✓');
+}
+
 function downloadReturnsExcel() {
   const rets = cache.orders.filter(o => o.status === 'Returned');
   const rows = rets.map(o => {
