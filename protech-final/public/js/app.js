@@ -1754,6 +1754,10 @@ function renderSupplierAccount() {
   const paid = supplierCache.payments.reduce((a, p) => a + parseFloat(p.amount || 0), 0);
   const remaining = owed - paid;
   const settled = remaining <= 0;
+  // Buy cost of goods from Returned orders not yet returned to the warehouse.
+  const notReturnedCost = (cache.orders || [])
+    .filter(o => o.status === 'Returned' && !o.warehouse_confirmed)
+    .reduce((a, o) => a + (o.products || []).reduce((b, p) => b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
 
   const payRows = supplierCache.payments.length
     ? supplierCache.payments.map(p => `
@@ -1780,8 +1784,12 @@ function renderSupplierAccount() {
         <div class="stat-card blue"><div class="stat-val">EGP ${fmt(paid)}</div><div class="stat-label">Total Paid to Elashry</div></div>
         <div class="stat-card ${settled ? 'green' : 'red'}"><div class="stat-val">EGP ${fmt(Math.abs(remaining))}</div><div class="stat-label">${settled ? (remaining < 0 ? 'Overpaid / Credit' : 'Fully Settled') : 'Remaining to Pay'}</div></div>
       </div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:18px">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
         Owed = buy price × qty for <strong>Delivered</strong> orders + <strong>Returned</strong> orders not yet returned to the warehouse. Returned-and-restocked orders don't count.
+      </div>
+      <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:12px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="font-weight:700;font-size:13px">↩️ Goods not returned to warehouse yet (buy cost)</span>
+        <span style="font-weight:900;font-size:16px;color:#c2410c">EGP ${fmt(notReturnedCost)}</span>
       </div>
 
       <h4 style="margin:6px 0;font-size:13px;color:var(--muted)">Payments to Elashry</h4>
