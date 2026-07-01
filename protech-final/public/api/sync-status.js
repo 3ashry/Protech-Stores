@@ -40,6 +40,35 @@ async function fetchAllDeliveries() {
   return all;
 }
 
+// Pull a shipping fee (number) out of a Bosta pricing object, trying the common fields.
+function pickFee(pricing) {
+  if (!pricing || typeof pricing !== 'object') return null;
+  const cands = [
+    pricing.priceAfterVat, pricing.total, pricing.businessAmount, pricing.priceBeforeVat,
+    pricing.shippingFee, pricing.deliveryFee, pricing.cost, pricing.amount,
+  ];
+  for (const c of cands) { const n = parseFloat(c); if (!isNaN(n) && n > 0) return n; }
+  return null;
+}
+
+// Get the actual shipping fee for a delivery. The list endpoint usually leaves pricing
+// empty, so fall back to the individual delivery detail (richer). Returns a number or null.
+async function fetchDeliveryFee(bostaId, searchObj, feeLog) {
+  let fee = pickFee(searchObj && searchObj.pricing);
+  if (fee) return fee;
+  if (!bostaId) return null;
+  try {
+    const r = await fetch(`${BOSTA_BASE_URL}/deliveries/${encodeURIComponent(bostaId)}`, {
+      headers: { Authorization: BOSTA_API_KEY },
+    });
+    const d = await r.json().catch(() => null);
+    const del = (d && d.data) ? d.data : d;
+    const pricing = del && del.pricing;
+    if (feeLog && pricing) feeLog.push({ id: bostaId, pricing });
+    return pickFee(pricing);
+  } catch { return null; }
+}
+
 async function sbGet(path) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
@@ -69,25 +98,40 @@ export default async function handler(req, res) {
       if (d.trackingNumber) byTrack[d.trackingNumber] = d;
     }
 
-    const orders = await sbGet('orders?select=id,code,ship_code,status,warehouse_confirmed,actual_shipping&limit=3000');
+    const orders = await sbGet('orders?select=id,code,ship_code,status,warehouse_confirmed,actual_shipping,bosta_id&limit=3000');
     const MANUAL = ['Returned', 'Cancelled'];
     const changes = [];
+    const feeLog = [];
     for (const o of (orders || [])) {
-      if (o.warehouse_confirmed) continue;
-      if (MANUAL.includes(o.status)) continue;
       const d = byRef[o.id] || (o.ship_code && byTrack[o.ship_code]);
       if (!d) continue;
       const mapped = mapState(d.state?.value);
-      if (!mapped) { if (d.state?.value) unknownStates.add(d.state.value); continue; }
-      if (mapped === o.status) continue;
-      const patch = { status: mapped };
-      // Defensive: if Bosta ever exposes the fee, capture it on delivery.
-      const fee = d.pricing?.priceAfterVat ?? d.pricing?.total ?? d.pricing?.businessAmount ?? null;
-      if (mapped === 'Delivered' && typeof fee === 'number' && fee > 0 && !o.actual_shipping) patch.actual_shipping = fee;
-      await sbPatch(o.id, patch);
-      changes.push({ code: o.code, from: o.status, to: mapped, bostaState: d.state?.value });
+      const patch = {};
+
+      // 1) Auto-advance status (never for manual Returned/Cancelled or already-restocked).
+      if (!o.warehouse_confirmed && !MANUAL.includes(o.status)) {
+        if (mapped && mapped !== o.status) patch.status = mapped;
+        else if (!mapped && d.state?.value) unknownStates.add(d.state.value);
+      }
+
+      // 2) Readjust actual shipping from Bosta for delivered / returned orders (overwrite).
+      const bostaState = (d.state?.value || '').toLowerCase();
+      const effStatus = patch.status || o.status;
+      const isDelOrRet = ['Delivered', 'Returned', 'On its way to me'].includes(effStatus)
+        || /deliver|return/.test(bostaState);
+      if (isDelOrRet) {
+        const fee = await fetchDeliveryFee(o.bosta_id, d, feeLog);
+        if (typeof fee === 'number' && fee > 0 && fee !== parseFloat(o.actual_shipping || 0)) {
+          patch.actual_shipping = fee;
+        }
+      }
+
+      if (Object.keys(patch).length) {
+        await sbPatch(o.id, patch);
+        changes.push({ code: o.code, from: o.status, bostaState: d.state?.value, ...patch });
+      }
     }
-    const result = { ok: true, bostaDeliveries: deliveries.length, ordersChecked: (orders || []).length, updated: changes.length, changes, unknownStates: [...unknownStates] };
+    const result = { ok: true, bostaDeliveries: deliveries.length, ordersChecked: (orders || []).length, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8) };
     console.log('sync-status', JSON.stringify(result));
     return res.status(200).json(result);
   } catch (e) {
