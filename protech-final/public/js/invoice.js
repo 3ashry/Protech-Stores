@@ -1,4 +1,6 @@
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// NOTE: esc() is declared once in app.js (loaded before this file). Re-declaring it
+// here as a top-level `const` collided with app.js and made this whole file fail to
+// load (so printInvoice was undefined / the invoice design broke). Reuse the global.
 function printInvoice(id) {
   const o = cache.orders.find(x => x.id === id);
   if (!o) return;
