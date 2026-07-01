@@ -1129,6 +1129,17 @@ function renderFinancials() {
   const allExpenses = cache.expenses.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
   const projProfit = projRevenue - projCOGS - allExpenses - retShipCost;
 
+  // Pure product selling price — no shipping, no expenses.
+  const soldOrders = orders.filter(o => o.status !== 'Cancelled');
+  const productSalesAll = soldOrders.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
+  const productSalesDelivered = delivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
+  const stockRetail = (cache.products || []).reduce((a, p) => a + parseFloat(p.price || 0) * parseInt(p.qty || 0), 0);
+  const salesEl = document.getElementById('fin-sales-value');
+  if (salesEl) salesEl.innerHTML = `
+    <div class="fin-row"><span>Product sales — all orders (excl. shipping)</span><span class="fin-val">EGP ${fmt(productSalesAll)}</span></div>
+    <div class="fin-row"><span>Product sales — delivered only (excl. shipping)</span><span class="fin-val">EGP ${fmt(productSalesDelivered)}</span></div>
+    <div class="fin-row"><span>Retail value of current stock (sell price × qty)</span><span class="fin-val">EGP ${fmt(stockRetail)}</span></div>`;
+
   document.getElementById('fin-revenue').innerHTML = `
     <div class="fin-row"><span>Total collected (orders + shipping)</span><span class="fin-val">EGP ${fmt(totalCollected)}</span></div>
     <div class="fin-row"><span>Total actual shipping cost</span><span class="fin-val deduct">− EGP ${fmt(totalActualShip)}</span></div>
