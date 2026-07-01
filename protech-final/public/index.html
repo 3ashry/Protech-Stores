@@ -177,30 +177,22 @@
       <button class="btn btn-primary btn-sm" onclick="openExpense()">+ Add Expense</button>
       <button class="btn btn-ghost btn-sm" onclick="downloadFinancialsExcel()" style="margin-inline-start:8px">📥 Excel</button>
     </div>
+    <div id="bosta-cash"></div>
+    <div id="supplier-account"></div>
     <div class="card">
-      <div class="card-header"><span class="card-title">Product Sales & Stock Value (no shipping / no expenses)</span></div>
-      <div class="card-body" id="fin-sales-value"></div>
-    </div>
-    <div class="card">
-      <div class="card-header"><span class="card-title">🧮 Media Buyer Payment (20% of paid ads + 1% of sales)</span></div>
+      <div class="card-header"><span class="card-title">🧮 Media Buyer Payment (20% of paid ads + 1% of delivered sales)</span></div>
       <div class="card-body" id="fin-mediabuyer"></div>
     </div>
     <div class="card">
-      <div class="card-header"><span class="card-title">Revenue Summary</span></div>
-      <div class="card-body" id="fin-revenue"></div>
-    </div>
-    <div class="card">
-      <div class="card-header"><span class="card-title">Additional Expenses</span></div>
+      <div class="card-header"><span class="card-title">Expenses</span>
+        <button class="btn btn-primary btn-xs" onclick="openExpense()" style="margin-inline-start:auto">+ Add Expense</button>
+      </div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Category</th><th>Description</th><th>Amount</th><th>Date</th><th></th></tr></thead>
           <tbody id="exp-tbody"></tbody>
         </table>
       </div>
-    </div>
-    <div class="card" id="fin-net-card">
-      <div class="card-header"><span class="card-title" style="color:var(--orange)">Net Profit Summary</span></div>
-      <div class="card-body" id="fin-net"></div>
     </div>
   </div>
 

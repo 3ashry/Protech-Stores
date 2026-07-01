@@ -1129,16 +1129,8 @@ function renderFinancials() {
   const allExpenses = cache.expenses.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
   const projProfit = projRevenue - projCOGS - allExpenses - retShipCost;
 
-  // Pure product selling price — no shipping, no expenses.
-  const soldOrders = orders.filter(o => o.status !== 'Cancelled');
-  const productSalesAll = soldOrders.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
+  // Delivered product sales (excl. shipping) — used by the media buyer fee.
   const productSalesDelivered = delivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
-  const stockRetail = (cache.products || []).reduce((a, p) => a + parseFloat(p.price || 0) * parseInt(p.qty || 0), 0);
-  const salesEl = document.getElementById('fin-sales-value');
-  if (salesEl) salesEl.innerHTML = `
-    <div class="fin-row"><span>Product sales — all orders (excl. shipping)</span><span class="fin-val">EGP ${fmt(productSalesAll)}</span></div>
-    <div class="fin-row"><span>Product sales — delivered only (excl. shipping)</span><span class="fin-val">EGP ${fmt(productSalesDelivered)}</span></div>
-    <div class="fin-row"><span>Retail value of current stock (sell price × qty)</span><span class="fin-val">EGP ${fmt(stockRetail)}</span></div>`;
 
   // Media buyer fee = 20% of paid-ads spend + 1% of DELIVERED product sales (no shipping).
   const paidAds = cache.expenses.filter(e => e.category === 'Paid Ads').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
@@ -1161,14 +1153,6 @@ function renderFinancials() {
       <button class="btn btn-primary btn-sm" ${mbOwed > 0 ? '' : 'disabled'} onclick="payMediaBuyer(${mbOwed})">✅ Mark as paid (record EGP ${fmt(mbOwed)} to expenses)</button>
     </div>`;
 
-  document.getElementById('fin-revenue').innerHTML = `
-    <div class="fin-row"><span>Total collected (orders + shipping)</span><span class="fin-val">EGP ${fmt(totalCollected)}</span></div>
-    <div class="fin-row"><span>Total actual shipping cost</span><span class="fin-val deduct">− EGP ${fmt(totalActualShip)}</span></div>
-    <div class="fin-row subtotal"><span>Net amount from Bosta</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(netFromBosta)}</span></div>
-    <div style="height:10px"></div>
-    <div class="fin-row"><span>Return shipping cost</span><span class="fin-val deduct">− EGP ${fmt(retShipCost)}</span></div>
-    <div class="fin-row"><span>Total Elashry cost (goods + purchases)</span><span class="fin-val deduct">− EGP ${fmt(buyingCost)}</span></div>`;
-
   document.getElementById('exp-tbody').innerHTML = cache.expenses.length ? cache.expenses.map(e => `
     <tr>
       <td><span class="badge b-orange">${esc(e.category)}</span></td>
@@ -1178,19 +1162,9 @@ function renderFinancials() {
       <td><button class="btn btn-danger btn-xs" onclick="delExpense('${e.id}')">✕</button></td>
     </tr>`).join('') : '<tr><td colspan="5"><div class="empty">No expenses recorded</div></td></tr>';
 
-  document.getElementById('fin-net').innerHTML = `
-    <div class="fin-row"><span>Net from Bosta</span><span class="fin-val">EGP ${fmt(netFromBosta)}</span></div>
-    <div class="fin-row"><span>Total Elashry cost (goods + purchases)</span><span class="fin-val deduct">− EGP ${fmt(buyingCost)}</span></div>
-    <div class="fin-row"><span>Total extra expenses</span><span class="fin-val deduct">− EGP ${fmt(totalExp)}</span></div>
-    <div class="fin-row"><span>Return shipping costs</span><span class="fin-val deduct">− EGP ${fmt(retShipCost)}</span></div>
-    <div class="fin-row ${netProfit >= 0 ? 'profit' : 'loss'}"><span>${netProfit >= 0 ? '🟢 Net Profit' : '🔴 Net Loss'}</span><span>EGP ${fmt(Math.abs(netProfit))}</span></div>
-    <div style="height:16px"></div>
-    <div class="fin-row"><span style="font-weight:800;color:var(--orange)">Projected — if all In-Transit deliver & returns restocked</span></div>
-    <div class="fin-row"><span>Projected revenue (delivered + in-transit, net of shipping)</span><span class="fin-val">EGP ${fmt(projRevenue)}</span></div>
-    <div class="fin-row"><span>Cost of those goods (returns excluded)</span><span class="fin-val deduct">− EGP ${fmt(projCOGS)}</span></div>
-    <div class="fin-row"><span>All expenses (ads, Elashry purchases, Bosta fees…)</span><span class="fin-val deduct">− EGP ${fmt(allExpenses)}</span></div>
-    <div class="fin-row"><span>Return shipping</span><span class="fin-val deduct">− EGP ${fmt(retShipCost)}</span></div>
-    <div class="fin-row ${projProfit >= 0 ? 'profit' : 'loss'}"><span>${projProfit >= 0 ? '🟢 Projected Profit' : '🔴 Projected Loss'}</span><span>EGP ${fmt(Math.abs(projProfit))}</span></div>`;
+  // The two money sections (Bosta receivable + Elashry owed) render into their own containers.
+  if (typeof renderBostaCash === 'function') renderBostaCash();
+  if (typeof renderSupplierAccount === 'function') renderSupplierAccount();
 }
 
 // ── EXPENSES ──
@@ -1707,14 +1681,15 @@ async function loadSupplierPayments() {
   if (typeof renderBostaCash === 'function') renderBostaCash(); // cash-on-hand uses Elashry payments
 }
 
-// Owed = buy-price cost of goods across ALL orders (no exclusions)
-// Goods count as owed to Elashry (and as buying cost) once the order has gone out —
-// In Transit or Delivered, and a Returned order keeps counting until its goods are
-// received back in inventory (warehouse_confirmed). Processing and Cancelled don't count.
+// Owed to Elashry = buy-price cost of goods for:
+//   • Delivered orders, and
+//   • Returned orders that have NOT yet been returned to the warehouse (!warehouse_confirmed).
+// A returned order already restocked (warehouse_confirmed) is settled and does NOT count.
+// In-Transit / Processing / On-its-way / Awaiting / Cancelled do not count.
 function owesElashry(o) {
-  if (o.warehouse_confirmed) return false;
-  // Goods are "out" (owed) once picked up and until they're returned to stock.
-  return ['In Transit', 'Delivered', 'On its way to me', 'Returned', 'Awaiting Action'].includes(o.status);
+  if (o.status === 'Delivered') return true;
+  if (o.status === 'Returned' && !o.warehouse_confirmed) return true;
+  return false;
 }
 // Use the buy price snapshotted on the order line at order time; fall back to the
 // product's current buy price for older orders that have no snapshot.
@@ -1775,24 +1750,10 @@ function renderSupplierAccount() {
   const host = document.getElementById('supplier-account');
   if (!host) return;
 
-  const goodsOwed = computeSupplierOwed();
-  // Extra purchases from Elashry = expenses logged with the "Elashry" category.
-  const elashryExpenses = (cache.expenses || []).filter(e => e.category === 'Elashry');
-  const chargesTotal = elashryExpenses.reduce((a, c) => a + parseFloat(c.amount || 0), 0);
-  const owed = goodsOwed + chargesTotal;
+  const owed = computeSupplierOwed(); // goods for delivered + returned-not-restocked only
   const paid = supplierCache.payments.reduce((a, p) => a + parseFloat(p.amount || 0), 0);
   const remaining = owed - paid;
   const settled = remaining <= 0;
-
-  const chargeRows = elashryExpenses.length
-    ? elashryExpenses.map(c => `
-        <tr>
-          <td>${esc(c.date) || '—'}</td>
-          <td><strong>EGP ${fmt(c.amount)}</strong></td>
-          <td>${esc(c.description) || '—'}</td>
-          <td><button class="btn btn-danger btn-xs" onclick="delExpense('${c.id}')">✕</button></td>
-        </tr>`).join('')
-    : '<tr><td colspan="4"><div class="empty">No Elashry purchases yet — add an expense with category "Elashry"</div></td></tr>';
 
   const payRows = supplierCache.payments.length
     ? supplierCache.payments.map(p => `
@@ -1805,34 +1766,22 @@ function renderSupplierAccount() {
     : '<tr><td colspan="4"><div class="empty">No payments to Elashry recorded yet</div></td></tr>';
 
   host.innerHTML = `
-    <div style="margin-top:28px">
+    <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">
         <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:8px">
-          🏭 Supplier Account — Elashry
+          🏭 Elashry — Supplier
           ${supplierCache.loading ? '<span style="font-size:12px;color:var(--muted)">loading…</span>' : ''}
         </h3>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-ghost btn-sm" onclick="downloadSupplierBreakdownExcel()">📥 Breakdown</button>
-          <button class="btn btn-ghost btn-sm" onclick="openExpense('Elashry')">+ Record Purchase</button>
-          <button class="btn btn-primary btn-sm" onclick="openSupplierPayment()">+ Record Payment</button>
-        </div>
+        <button class="btn btn-primary btn-sm" onclick="openSupplierPayment()">+ Record Payment</button>
       </div>
 
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:8px">
-        <div class="stat-card orange"><div class="stat-val">EGP ${fmt(owed)}</div><div class="stat-label">Total Owed (goods + purchases)</div></div>
+        <div class="stat-card orange"><div class="stat-val">EGP ${fmt(owed)}</div><div class="stat-label">How much I owe Elashry</div></div>
         <div class="stat-card blue"><div class="stat-val">EGP ${fmt(paid)}</div><div class="stat-label">Total Paid to Elashry</div></div>
         <div class="stat-card ${settled ? 'green' : 'red'}"><div class="stat-val">EGP ${fmt(Math.abs(remaining))}</div><div class="stat-label">${settled ? (remaining < 0 ? 'Overpaid / Credit' : 'Fully Settled') : 'Remaining to Pay'}</div></div>
       </div>
       <div style="font-size:12px;color:var(--muted);margin-bottom:18px">
-        Goods from orders: EGP ${fmt(goodsOwed)} &nbsp;+&nbsp; Extra purchases: EGP ${fmt(chargesTotal)}
-      </div>
-
-      <h4 style="margin:6px 0;font-size:13px;color:var(--muted)">Extra purchases from Elashry (added to what you owe)</h4>
-      <div class="table-wrap" style="margin-bottom:16px">
-        <table>
-          <thead><tr><th>Date</th><th>Amount</th><th>Note</th><th></th></tr></thead>
-          <tbody>${chargeRows}</tbody>
-        </table>
+        Owed = buy price × qty for <strong>Delivered</strong> orders + <strong>Returned</strong> orders not yet returned to the warehouse. Returned-and-restocked orders don't count.
       </div>
 
       <h4 style="margin:6px 0;font-size:13px;color:var(--muted)">Payments to Elashry</h4>
@@ -1841,9 +1790,6 @@ function renderSupplierAccount() {
           <thead><tr><th>Date</th><th>Amount</th><th>Note</th><th></th></tr></thead>
           <tbody>${payRows}</tbody>
         </table>
-      </div>
-      <div style="font-size:12px;color:var(--muted);margin-top:8px">
-        Goods owed = buy-price × qty for In-Transit, Delivered and Returned orders (until received back in inventory), valued at the buy price when the order was placed. "Extra purchases" are added on top.
       </div>
     </div>`;
 }
@@ -1954,29 +1900,19 @@ async function loadBostaReceipts() {
 function renderBostaCash() {
   const host = document.getElementById('bosta-cash');
   if (!host) return;
-  const total = (bostaCashCache.receipts || []).reduce((a, r) => a + parseFloat(r.amount || 0), 0);
-  // Money Bosta owes us = net COD of Delivered orders (total − Bosta's shipping fee),
-  // minus any Bosta fees deducted from the payout (e.g. small-pickup fee).
-  const delivered = (typeof cache !== 'undefined' && cache.orders ? cache.orders : []).filter(o => o.status === 'Delivered');
-  const deliveredNet = delivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0)), 0);
-  const bostaFees = (cache.expenses || []).filter(e => e.category === 'Bosta Fees').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-  const expected = deliveredNet - bostaFees;
-  const remaining = expected - total;
-  // Projection: net COD of In-Transit orders (what Bosta would owe once they deliver).
-  const inTransit = (typeof cache !== 'undefined' && cache.orders ? cache.orders : []).filter(o => o.status === 'In Transit');
-  const inTransitNet = inTransit.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0)), 0);
+  const orders = (typeof cache !== 'undefined' && cache.orders) ? cache.orders : [];
+  const delivered = orders.filter(o => o.status === 'Delivered');
+  const returned = orders.filter(o => o.status === 'Returned');
+  // Money I should receive from Bosta =
+  //   total Bosta collected from customers (delivered order totals)
+  //   − (actual shipping of delivered orders + actual shipping of returned orders).
+  const collected = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
+  const delShip = delivered.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
+  const retShip = returned.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
+  const shouldReceive = collected - (delShip + retShip);
+  const received = (bostaCashCache.receipts || []).reduce((a, r) => a + parseFloat(r.amount || 0), 0);
+  const remaining = shouldReceive - received;
 
-  // ── CASH ON HAND ──
-  // = starting capital + money received from Bosta − payments to Elashry
-  //   − operating expenses actually paid (excluding Elashry purchases [credit] and
-  //   Bosta fees [already netted from the received amount]).
-  const startingCapital = parseFloat(localStorage.getItem('protech_starting_capital') || 0) || 0;
-  const elashryPaid = (typeof supplierCache !== 'undefined' && supplierCache.payments ? supplierCache.payments : [])
-    .reduce((a, p) => a + parseFloat(p.amount || 0), 0);
-  const opExpenses = (cache.expenses || [])
-    .filter(e => e.category !== 'Elashry' && e.category !== 'Bosta Fees')
-    .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-  const cashOnHand = startingCapital + total - elashryPaid - opExpenses;
   const rows = (bostaCashCache.receipts || []).length
     ? bostaCashCache.receipts.map(r => `
         <tr>
@@ -1987,48 +1923,22 @@ function renderBostaCash() {
         </tr>`).join('')
     : '<tr><td colspan="4"><div class="empty">No money received logged yet</div></td></tr>';
   host.innerHTML = `
-    <div style="margin-top:28px">
+    <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">
-        <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:8px">💰 Safe / Bank — Money received from Bosta
+        <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:8px">💰 Bosta — Money to receive
           ${bostaCashCache.loading ? '<span style="font-size:12px;color:var(--muted)">loading…</span>' : ''}
         </h3>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-ghost btn-sm" onclick="openExpense('Bosta Fees')">+ Record Bosta fee</button>
-          <button class="btn btn-primary btn-sm" onclick="openBostaReceipt()">+ Record Receipt</button>
-        </div>
+        <button class="btn btn-primary btn-sm" onclick="openBostaReceipt()">+ Record Receipt</button>
       </div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:8px">
-        <div class="stat-card green"><div class="stat-val">EGP ${fmt(total)}</div><div class="stat-label">In Safe / Bank (received from Bosta)</div></div>
-        <div class="stat-card blue"><div class="stat-val">EGP ${fmt(expected)}</div><div class="stat-label">Expected from Bosta (after fees)</div></div>
-        <div class="stat-card ${remaining > 0 ? 'orange' : 'green'}"><div class="stat-val">EGP ${fmt(Math.abs(remaining))}</div><div class="stat-label">${remaining > 0 ? 'Still to collect from Bosta' : 'All collected ✓'}</div></div>
-        <div class="stat-card blue"><div class="stat-val">EGP ${fmt(inTransitNet)}</div><div class="stat-label">Coming if In-Transit delivered</div></div>
+        <div class="stat-card orange"><div class="stat-val">EGP ${fmt(shouldReceive)}</div><div class="stat-label">Total I should receive from Bosta</div></div>
+        <div class="stat-card green"><div class="stat-val">EGP ${fmt(received)}</div><div class="stat-label">Received so far</div></div>
+        <div class="stat-card ${remaining > 0 ? 'blue' : 'green'}"><div class="stat-val">EGP ${fmt(Math.abs(remaining))}</div><div class="stat-label">${remaining > 0 ? 'Still to collect' : 'All collected ✓'}</div></div>
       </div>
       <div style="font-size:12px;color:var(--muted);margin-bottom:18px">
-        Delivered net COD: EGP ${fmt(deliveredNet)} &nbsp;−&nbsp; Bosta fees deducted: EGP ${fmt(bostaFees)} &nbsp;=&nbsp; Expected EGP ${fmt(expected)}
+        Bosta collected (delivered): EGP ${fmt(collected)} &nbsp;−&nbsp; delivered shipping: EGP ${fmt(delShip)} &nbsp;−&nbsp; returned shipping: EGP ${fmt(retShip)} &nbsp;=&nbsp; EGP ${fmt(shouldReceive)}
       </div>
-
-      <div style="background:${cashOnHand >= 0 ? '#f0fdf4' : '#fef2f2'};border:2px solid ${cashOnHand >= 0 ? '#16a34a' : '#dc2626'};border-radius:12px;padding:16px;margin-bottom:18px">
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
-          <div>
-            <div style="font-size:13px;color:var(--muted);font-weight:700">💵 Cash on hand (الكاش المتاح فعلياً)</div>
-            <div style="font-size:28px;font-weight:900;color:${cashOnHand >= 0 ? '#16a34a' : '#dc2626'}">EGP ${fmt(cashOnHand)}</div>
-          </div>
-          <div style="display:flex;align-items:center;gap:8px">
-            <label style="font-size:12px;color:var(--muted);font-weight:700">Starting capital</label>
-            <input type="number" id="cash-start-cap" value="${startingCapital || ''}" placeholder="0" inputmode="decimal"
-              onchange="saveStartingCapital(this.value)"
-              style="width:120px;padding:8px 10px;border:1px solid #ccc;border-radius:8px;font-size:14px">
-          </div>
-        </div>
-        <div style="font-size:12px;color:var(--muted);margin-top:10px;line-height:1.8">
-          ${fmt(startingCapital)} رأس مال
-          &nbsp;+&nbsp; ${fmt(total)} مستلم من بوسطة
-          &nbsp;−&nbsp; ${fmt(elashryPaid)} مدفوع للأشري
-          &nbsp;−&nbsp; ${fmt(opExpenses)} مصاريف تشغيل
-          <br><span style="opacity:.8">لا يشمل: المستحق من بوسطة (لم يصل بعد) ولا الدين غير المدفوع للأشري.</span>
-        </div>
-      </div>
-
+      <h4 style="margin:6px 0;font-size:13px;color:var(--muted)">Payments received from Bosta</h4>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Date</th><th>Amount</th><th>Note</th><th></th></tr></thead>
