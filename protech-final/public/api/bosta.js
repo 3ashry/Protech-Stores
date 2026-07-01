@@ -341,10 +341,11 @@ export default async function handler(req, res) {
         body: JSON.stringify({
           ship_code: trackingNumber,
           bosta_id: bostaId,
-          // Bosta's real cost goes to actual_shipping (the merchant's expense, used by
-          // the financials). Do NOT overwrite est_shipping — that holds the reduced
-          // amount the customer was actually charged (storefront already subtracts 40).
-          actual_shipping: shippingCost,
+          // Store the calculated Bosta shipping cost (the merchant's real expense) so the
+          // sync can apply it as actual_shipping ONCE the order is delivered/returned.
+          // actual_shipping stays 0 until then. Do NOT touch est_shipping (customer amount).
+          calc_shipping: shippingCost,
+          actual_shipping: 0,
         }),
       }
     );

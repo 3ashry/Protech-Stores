@@ -98,7 +98,7 @@ export default async function handler(req, res) {
       if (d.trackingNumber) byTrack[d.trackingNumber] = d;
     }
 
-    const orders = await sbGet('orders?select=id,code,ship_code,status,warehouse_confirmed,actual_shipping,bosta_id&limit=3000');
+    const orders = await sbGet('orders?select=id,code,ship_code,status,warehouse_confirmed,actual_shipping,calc_shipping,est_shipping,allow_open,bosta_id&limit=3000');
     const MANUAL = ['Returned', 'Cancelled'];
     const changes = [];
     const feeLog = [];
@@ -114,16 +114,18 @@ export default async function handler(req, res) {
         else if (!mapped && d.state?.value) unknownStates.add(d.state.value);
       }
 
-      // 2) Readjust actual shipping from Bosta for delivered / returned orders (overwrite).
-      const bostaState = (d.state?.value || '').toLowerCase();
+      // 2) Actual shipping is only "real" once the order is Delivered or Returned.
+      //    (Return-in-transit "On its way to me" does NOT count yet.) We fill it in only
+      //    if it's still 0, so manual edits are never overwritten. Value = the Bosta cost
+      //    calculated at creation (calc_shipping); fall back to the API fee, then to the
+      //    customer est_shipping + 40 − open-package fee.
       const effStatus = patch.status || o.status;
-      const isDelOrRet = ['Delivered', 'Returned', 'On its way to me'].includes(effStatus)
-        || /deliver|return/.test(bostaState);
-      if (isDelOrRet) {
-        const fee = await fetchDeliveryFee(o.bosta_id, d, feeLog);
-        if (typeof fee === 'number' && fee > 0 && fee !== parseFloat(o.actual_shipping || 0)) {
-          patch.actual_shipping = fee;
-        }
+      const isFinal = effStatus === 'Delivered' || effStatus === 'Returned';
+      if (isFinal && !parseFloat(o.actual_shipping || 0)) {
+        let cost = parseFloat(o.calc_shipping || 0);
+        if (!cost) { const fee = await fetchDeliveryFee(o.bosta_id, d, feeLog); if (typeof fee === 'number' && fee > 0) cost = fee; }
+        if (!cost) cost = parseFloat(o.est_shipping || 0) + 40 - (o.allow_open ? 7 : 0);
+        if (cost > 0) patch.actual_shipping = Math.round(cost * 100) / 100;
       }
 
       if (Object.keys(patch).length) {

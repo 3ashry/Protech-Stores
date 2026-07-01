@@ -85,10 +85,6 @@ protechstores.com
   btn.id = 'send-ship-btn';
   btn.style.cssText = 'margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;';
   btn.innerHTML = `
-    <a href="${waLink}" target="_blank" onclick="markConfirmSent('${orderId}')"
-      style="display:inline-flex;align-items:center;gap:8px;background:#25D366;color:white;padding:11px 20px;border-radius:8px;text-decoration:none;font-weight:700;font-size:14px;">
-      📲 إرسال كود الشحن عبر واتساب
-    </a>
     <button onclick="generateInvoicePDF(${JSON.stringify({...o, ship_code: document.getElementById('o-shipcode').value.trim()}).replace(/'/g, "\\'")})"
       style="display:inline-flex;align-items:center;gap:8px;background:#f97316;color:white;padding:11px 20px;border-radius:8px;border:none;cursor:pointer;font-weight:700;font-size:14px;">
       🧾 طباعة الفاتورة PDF
@@ -994,6 +990,7 @@ protechstores.com
 
   document.getElementById('m-detail-body').innerHTML = `
     ${o.status === 'Awaiting Action' ? `<div style="background:#dc2626;color:#fff;font-weight:800;font-size:16px;text-align:center;padding:14px;border-radius:10px;margin-bottom:14px">⚠️ هذا الطلب يحتاج إجراء — AWAITING ACTION</div>` : ''}
+    ${o.allow_open ? `<div style="background:#F26A21;color:#fff;font-weight:800;font-size:15px;text-align:center;padding:12px;border-radius:10px;margin-bottom:14px">📦 العميل يسمح بفتح الشحنة قبل الاستلام — OPEN PACKAGE ALLOWED</div>` : ''}
     <div id="order-tracker-${id}" style="background:#fafafa;border:1px solid #eee;border-radius:10px;padding:14px;margin-bottom:16px;display:flex;justify-content:center">
       ${orderTrackerHTML(o)}
     </div>
@@ -1034,9 +1031,9 @@ protechstores.com
       <span style="font-weight:800;font-size:13px;color:#166534">تأكيد الطلب عبر واتساب</span>
       ${ccBadge}
       <div style="flex-basis:100%;height:0"></div>
-      <a href="${confirmLink}" target="_blank"
+      <a href="${confirmLink}" target="_blank" onclick="markConfirmSent('${id}')"
         style="display:inline-flex;align-items:center;gap:8px;background:#25D366;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:700;font-size:13px">
-        📲 إرسال طلب التأكيد
+        📲 إرسال رسالة تأكيد الشحن
       </a>
       <button class="btn" style="background:#16a34a;color:#fff" onclick="setConfirm('${id}',true)">✅ تم التأكيد</button>
       <button class="btn" style="background:#dc2626;color:#fff" onclick="setConfirm('${id}',false)">❌ تم الإلغاء</button>
@@ -1744,12 +1741,13 @@ function owesElashry(o) {
   if (o.status === 'Returned' && !o.warehouse_confirmed) return true;
   return false;
 }
-// Use the buy price snapshotted on the order line at order time; fall back to the
-// product's current buy price for older orders that have no snapshot.
+// Use the product's CURRENT buy price (matched by code); fall back to the snapshot
+// stored on the order line only if the product no longer exists in inventory.
 function lineBuyPrice(p, products) {
-  if (p && p.buy_price != null && p.buy_price !== '') return parseFloat(p.buy_price) || 0;
   const pr = products.find(pp => pp.code === p.code);
-  return parseFloat(pr?.buy_price || 0);
+  if (pr && pr.buy_price != null && pr.buy_price !== '') return parseFloat(pr.buy_price) || 0;
+  if (p && p.buy_price != null && p.buy_price !== '') return parseFloat(p.buy_price) || 0;
+  return 0;
 }
 
 function computeSupplierOwed() {
