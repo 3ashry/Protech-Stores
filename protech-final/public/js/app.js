@@ -1140,17 +1140,17 @@ function renderFinancials() {
     <div class="fin-row"><span>Product sales — delivered only (excl. shipping)</span><span class="fin-val">EGP ${fmt(productSalesDelivered)}</span></div>
     <div class="fin-row"><span>Retail value of current stock (sell price × qty)</span><span class="fin-val">EGP ${fmt(stockRetail)}</span></div>`;
 
-  // Media buyer fee = 20% of paid-ads spend + 1% of product sales (no shipping).
+  // Media buyer fee = 20% of paid-ads spend + 1% of DELIVERED product sales (no shipping).
   const paidAds = cache.expenses.filter(e => e.category === 'Paid Ads').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
   const adsShare = paidAds * 0.20;
-  const salesShare = productSalesAll * 0.01;
+  const salesShare = productSalesDelivered * 0.01;
   const mediaBuyerFee = adsShare + salesShare;
   const mbEl = document.getElementById('fin-mediabuyer');
   if (mbEl) mbEl.innerHTML = `
     <div class="fin-row"><span>Total paid ads (expense category "Paid Ads")</span><span class="fin-val">EGP ${fmt(paidAds)}</span></div>
     <div class="fin-row"><span>20% of paid ads</span><span class="fin-val">EGP ${fmt(adsShare)}</span></div>
-    <div class="fin-row"><span>Product sales — all orders (excl. shipping)</span><span class="fin-val">EGP ${fmt(productSalesAll)}</span></div>
-    <div class="fin-row"><span>1% of sales</span><span class="fin-val">EGP ${fmt(salesShare)}</span></div>
+    <div class="fin-row"><span>Delivered product sales (excl. shipping)</span><span class="fin-val">EGP ${fmt(productSalesDelivered)}</span></div>
+    <div class="fin-row"><span>1% of delivered sales</span><span class="fin-val">EGP ${fmt(salesShare)}</span></div>
     <div class="fin-row subtotal"><span>Total due to media buyer</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(mediaBuyerFee)}</span></div>`;
 
   document.getElementById('fin-revenue').innerHTML = `
