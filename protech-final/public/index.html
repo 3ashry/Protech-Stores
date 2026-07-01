@@ -175,17 +175,20 @@
     <div class="page-header">
       <div class="page-title">Financials <span>& P&L</span></div>
       <button class="btn btn-primary btn-sm" onclick="openExpense()">+ Add Expense</button>
-      <button class="btn btn-ghost btn-sm" onclick="downloadFinancialsExcel()" style="margin-inline-start:8px">📥 Excel</button>
+      <button class="btn btn-ghost btn-sm" onclick="downloadAllFinancesExcel()" style="margin-inline-start:8px">📥 All finances Excel</button>
     </div>
     <div id="bosta-cash"></div>
     <div id="supplier-account"></div>
     <div class="card">
-      <div class="card-header"><span class="card-title">🧮 Media Buyer Payment (20% of paid ads + 1% of delivered sales)</span></div>
+      <div class="card-header"><span class="card-title">🧮 Media Buyer Payment (20% of paid ads + 1% of delivered sales)</span>
+        <button class="btn btn-ghost btn-xs" onclick="downloadMediaBuyerExcel()" style="margin-inline-start:auto">📥 Excel</button>
+      </div>
       <div class="card-body" id="fin-mediabuyer"></div>
     </div>
     <div class="card">
       <div class="card-header"><span class="card-title">Expenses</span>
-        <button class="btn btn-primary btn-xs" onclick="openExpense()" style="margin-inline-start:auto">+ Add Expense</button>
+        <button class="btn btn-ghost btn-xs" onclick="downloadExpensesExcel()" style="margin-inline-start:auto">📥 Excel</button>
+        <button class="btn btn-primary btn-xs" onclick="openExpense()" style="margin-inline-start:8px">+ Add Expense</button>
       </div>
       <div class="table-wrap">
         <table>

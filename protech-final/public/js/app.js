@@ -1394,67 +1394,118 @@ function downloadReturnsExcel() {
   showToast('Returns Excel downloaded ✓');
 }
 
-function downloadFinancialsExcel() {
-  const orders = cache.orders;
+// ── FINANCES EXCEL EXPORTS ──────────────────────────────────────────
+// Compute every figure used by the Financials screen, once.
+function financeData() {
+  const orders = cache.orders || [];
+  const products = cache.products || [];
+  const expenses = cache.expenses || [];
   const delivered = orders.filter(o => o.status === 'Delivered');
   const returned = orders.filter(o => o.status === 'Returned');
-  const totalCollected = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
-  const totalActualShip = delivered.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
-  const netFromBosta = totalCollected - totalActualShip;
-  const retShipCost = returned.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
-  const orderGoods = orders.filter(owesElashry).reduce((a, o) => a + (o.products || []).reduce((b, p) =>
-    b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
-  // Things bought from Elashry for Protech (logged as "Elashry" expenses) are part of the
-  // Elashry cost, not generic expenses — fold them into buying cost and out of extra expenses.
-  const elashryExp = cache.expenses.filter(e => e.category === 'Elashry').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-  const buyingCost = orderGoods + elashryExp;
-  const totalExp = cache.expenses.filter(e => e.category !== 'Elashry').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-  const netProfit = netFromBosta - retShipCost - buyingCost - totalExp;
 
-  // Sheet 1: P&L Summary
-  const summaryRows = [
-    { 'Item': 'Total collected (orders + shipping)', 'Amount (EGP)': totalCollected },
-    { 'Item': 'Total actual shipping cost', 'Amount (EGP)': -totalActualShip },
-    { 'Item': 'Net amount from Bosta', 'Amount (EGP)': netFromBosta },
-    { 'Item': '', 'Amount (EGP)': '' },
-    { 'Item': 'Return shipping cost', 'Amount (EGP)': -retShipCost },
-    { 'Item': 'Total buying cost of all orders', 'Amount (EGP)': -buyingCost },
-    { 'Item': 'Total extra expenses', 'Amount (EGP)': -totalExp },
-    { 'Item': '', 'Amount (EGP)': '' },
-    { 'Item': netProfit >= 0 ? '🟢 NET PROFIT' : '🔴 NET LOSS', 'Amount (EGP)': netProfit },
-  ];
-  const ws1 = XLSX.utils.json_to_sheet(summaryRows);
-  ws1['!cols'] = [{ wch: 40 }, { wch: 18 }];
+  // Bosta receivable
+  const collected = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
+  const delShip = delivered.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
+  const retShip = returned.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
+  const shouldReceive = collected - delShip - retShip;
+  const receipts = (typeof bostaCashCache !== 'undefined' && bostaCashCache.receipts) ? bostaCashCache.receipts : [];
+  const received = receipts.reduce((a, r) => a + parseFloat(r.amount || 0), 0);
+  const bostaRemaining = shouldReceive - received;
 
-  // Sheet 2: Expenses
-  const expRows = cache.expenses.map(e => ({
-    'Category': e.category || '',
-    'Description': e.description || '',
-    'Amount (EGP)': parseFloat(e.amount || 0),
-    'Date': e.date || '',
-  }));
-  const ws2 = XLSX.utils.json_to_sheet(expRows);
-  ws2['!cols'] = [{ wch: 20 }, { wch: 30 }, { wch: 14 }, { wch: 14 }];
+  // Elashry
+  const goodsOwed = computeSupplierOwed();
+  const purchases = expenses.filter(e => e.category === 'Elashry');
+  const purchasesTotal = purchases.reduce((a, c) => a + parseFloat(c.amount || 0), 0);
+  const owed = goodsOwed + purchasesTotal;
+  const payments = (typeof supplierCache !== 'undefined' && supplierCache.payments) ? supplierCache.payments : [];
+  const paid = payments.reduce((a, p) => a + parseFloat(p.amount || 0), 0);
+  const elashryRemaining = owed - paid;
+  const notReturnedCost = returned.filter(o => !o.warehouse_confirmed)
+    .reduce((a, o) => a + (o.products || []).reduce((b, p) => b + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0), 0);
 
-  // Sheet 3: Delivered orders breakdown
-  const delRows = delivered.map(o => ({
-    'Order Code': o.code || '',
-    'Customer': o.customer_name || '',
-    'Order Total (EGP)': parseFloat(o.total || 0),
-    'Est. Shipping': parseFloat(o.est_shipping || 0),
-    'Actual Shipping': parseFloat(o.actual_shipping || 0),
-    'Date': o.date || '',
-  }));
-  const ws3 = XLSX.utils.json_to_sheet(delRows);
-  ws3['!cols'] = [{ wch: 14 }, { wch: 22 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
+  // Media buyer
+  const productSalesDelivered = delivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
+  const paidAds = expenses.filter(e => e.category === 'Paid Ads').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const adsShare = paidAds * 0.20;
+  const salesShare = productSalesDelivered * 0.01;
+  const mbFee = adsShare + salesShare;
+  const mbPaid = expenses.filter(e => e.category === 'Media Buyer').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const mbOwed = Math.max(0, mbFee - mbPaid);
 
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws1, 'P&L Summary');
-  XLSX.utils.book_append_sheet(wb, ws2, 'Expenses');
-  XLSX.utils.book_append_sheet(wb, ws3, 'Delivered Orders');
-  XLSX.writeFile(wb, `Protech_Financials_${new Date().toISOString().slice(0,10)}.xlsx`);
-  showToast('Financials Excel downloaded ✓');
+  const generalExpenses = expenses.filter(e => e.category !== 'Elashry');
+  return { collected, delShip, retShip, shouldReceive, receipts, received, bostaRemaining,
+    goodsOwed, purchases, purchasesTotal, owed, payments, paid, elashryRemaining, notReturnedCost,
+    productSalesDelivered, paidAds, adsShare, salesShare, mbFee, mbPaid, mbOwed, generalExpenses };
 }
+
+const r2 = n => Math.round((parseFloat(n) || 0) * 100) / 100;
+function _finAoa(section, d) {
+  if (section === 'bosta') return [
+    ['Bosta — Money to receive'], [],
+    ['Bosta collected from customers (delivered)', r2(d.collected)],
+    ['− Delivered shipping cost', -r2(d.delShip)],
+    ['− Returned shipping cost', -r2(d.retShip)],
+    ['= Total I should receive from Bosta', r2(d.shouldReceive)],
+    ['Received so far', r2(d.received)],
+    ['Still to collect', r2(d.bostaRemaining)], [],
+    ['Payments received from Bosta'], ['Date', 'Amount (EGP)', 'Note'],
+    ...d.receipts.map(x => [x.date || '', r2(x.amount), x.note || '']),
+  ];
+  if (section === 'elashry') return [
+    ['Elashry — Supplier'], [],
+    ['Goods owed (delivered + returned-not-restocked)', r2(d.goodsOwed)],
+    ['+ Purchases from Elashry', r2(d.purchasesTotal)],
+    ['= Total owed to Elashry', r2(d.owed)],
+    ['Total paid to Elashry', r2(d.paid)],
+    ['Remaining to pay', r2(d.elashryRemaining)],
+    ['Goods not returned to warehouse yet (buy cost)', r2(d.notReturnedCost)], [],
+    ['Purchases from Elashry'], ['Date', 'Amount (EGP)', 'What'],
+    ...d.purchases.map(x => [x.date || '', r2(x.amount), x.description || '']), [],
+    ['Payments to Elashry'], ['Date', 'Amount (EGP)', 'Note'],
+    ...d.payments.map(x => [x.date || '', r2(x.amount), x.note || '']),
+  ];
+  if (section === 'mediabuyer') return [
+    ['Media Buyer Payment (20% ads + 1% delivered sales)'], [],
+    ['Total paid ads', r2(d.paidAds)],
+    ['20% of paid ads', r2(d.adsShare)],
+    ['Delivered product sales (excl. shipping)', r2(d.productSalesDelivered)],
+    ['1% of delivered sales', r2(d.salesShare)],
+    ['Total fee to date', r2(d.mbFee)],
+    ['Already paid to media buyer', r2(d.mbPaid)],
+    ['Owed now', r2(d.mbOwed)],
+  ];
+  if (section === 'expenses') return [
+    ['Expenses'], [],
+    ['Category', 'Description', 'Amount (EGP)', 'Date'],
+    ...d.generalExpenses.map(e => [e.category || '', e.description || '', r2(e.amount), e.date || '']),
+  ];
+  return [];
+}
+
+function _dlWb(wb, filename) {
+  XLSX.writeFile(wb, filename);
+  showToast('Excel downloaded ✓');
+}
+function _sheet(aoa) { const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [{ wch: 44 }, { wch: 18 }, { wch: 28 }]; return ws; }
+const _today = () => new Date().toISOString().slice(0, 10);
+
+function downloadBostaExcel() { const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, _sheet(_finAoa('bosta', financeData())), 'Bosta'); _dlWb(wb, `Protech_Bosta_${_today()}.xlsx`); }
+function downloadElashryExcel() { const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, _sheet(_finAoa('elashry', financeData())), 'Elashry'); _dlWb(wb, `Protech_Elashry_${_today()}.xlsx`); }
+function downloadMediaBuyerExcel() { const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, _sheet(_finAoa('mediabuyer', financeData())), 'Media Buyer'); _dlWb(wb, `Protech_MediaBuyer_${_today()}.xlsx`); }
+function downloadExpensesExcel() { const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, _sheet(_finAoa('expenses', financeData())), 'Expenses'); _dlWb(wb, `Protech_Expenses_${_today()}.xlsx`); }
+
+// One workbook with every section on its own sheet.
+function downloadAllFinancesExcel() {
+  const d = financeData();
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, _sheet(_finAoa('bosta', d)), 'Bosta');
+  XLSX.utils.book_append_sheet(wb, _sheet(_finAoa('elashry', d)), 'Elashry');
+  XLSX.utils.book_append_sheet(wb, _sheet(_finAoa('mediabuyer', d)), 'Media Buyer');
+  XLSX.utils.book_append_sheet(wb, _sheet(_finAoa('expenses', d)), 'Expenses');
+  _dlWb(wb, `Protech_Finances_ALL_${_today()}.xlsx`);
+}
+// Keep the old name (page-header button) pointing at the full export.
+function downloadFinancialsExcel() { downloadAllFinancesExcel(); }
 
 // ═══════════════════════════════════════════════════════════════════
 //  ANALYTICS — Customer funnel (product views → checkout → orders)
@@ -1792,6 +1843,7 @@ function renderSupplierAccount() {
           ${supplierCache.loading ? '<span style="font-size:12px;color:var(--muted)">loading…</span>' : ''}
         </h3>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" onclick="downloadElashryExcel()">📥 Excel</button>
           <button class="btn btn-ghost btn-sm" onclick="openExpense('Elashry')">+ Record Purchase</button>
           <button class="btn btn-primary btn-sm" onclick="openSupplierPayment()">+ Record Payment</button>
         </div>
@@ -1962,7 +2014,10 @@ function renderBostaCash() {
         <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:8px">💰 Bosta — Money to receive
           ${bostaCashCache.loading ? '<span style="font-size:12px;color:var(--muted)">loading…</span>' : ''}
         </h3>
-        <button class="btn btn-primary btn-sm" onclick="openBostaReceipt()">+ Record Receipt</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" onclick="downloadBostaExcel()">📥 Excel</button>
+          <button class="btn btn-primary btn-sm" onclick="openBostaReceipt()">+ Record Receipt</button>
+        </div>
       </div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:8px">
         <div class="stat-card orange"><div class="stat-val">EGP ${fmt(shouldReceive)}</div><div class="stat-label">Total I should receive from Bosta</div></div>
