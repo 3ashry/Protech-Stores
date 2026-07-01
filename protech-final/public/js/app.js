@@ -1145,13 +1145,21 @@ function renderFinancials() {
   const adsShare = paidAds * 0.20;
   const salesShare = productSalesDelivered * 0.01;
   const mediaBuyerFee = adsShare + salesShare;
+  // Already paid = sum of "Media Buyer" expenses. Owed now = total fee to date − already paid.
+  const mbPaid = cache.expenses.filter(e => e.category === 'Media Buyer').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const mbOwed = Math.round(Math.max(0, mediaBuyerFee - mbPaid) * 100) / 100;
   const mbEl = document.getElementById('fin-mediabuyer');
   if (mbEl) mbEl.innerHTML = `
     <div class="fin-row"><span>Total paid ads (expense category "Paid Ads")</span><span class="fin-val">EGP ${fmt(paidAds)}</span></div>
     <div class="fin-row"><span>20% of paid ads</span><span class="fin-val">EGP ${fmt(adsShare)}</span></div>
     <div class="fin-row"><span>Delivered product sales (excl. shipping)</span><span class="fin-val">EGP ${fmt(productSalesDelivered)}</span></div>
     <div class="fin-row"><span>1% of delivered sales</span><span class="fin-val">EGP ${fmt(salesShare)}</span></div>
-    <div class="fin-row subtotal"><span>Total due to media buyer</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(mediaBuyerFee)}</span></div>`;
+    <div class="fin-row subtotal"><span>Total fee to date</span><span class="fin-val">EGP ${fmt(mediaBuyerFee)}</span></div>
+    <div class="fin-row"><span>Already paid to media buyer</span><span class="fin-val deduct">− EGP ${fmt(mbPaid)}</span></div>
+    <div class="fin-row subtotal"><span>Owed now</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(mbOwed)}</span></div>
+    <div style="margin-top:12px">
+      <button class="btn btn-primary btn-sm" ${mbOwed > 0 ? '' : 'disabled'} onclick="payMediaBuyer(${mbOwed})">✅ Mark as paid (record EGP ${fmt(mbOwed)} to expenses)</button>
+    </div>`;
 
   document.getElementById('fin-revenue').innerHTML = `
     <div class="fin-row"><span>Total collected (orders + shipping)</span><span class="fin-val">EGP ${fmt(totalCollected)}</span></div>
@@ -1203,6 +1211,20 @@ async function saveExpense() {
     await dbInsert('expenses', data);
     cache.expenses.unshift(data);
     showToast('Expense saved ✓'); closeModal(); renderAll();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+// Record a media-buyer payment as an expense; this resets "Owed now" back to ~0
+// (owed = total fee to date − sum of these Media Buyer expenses).
+async function payMediaBuyer(amount) {
+  const amt = Math.round((parseFloat(amount) || 0) * 100) / 100;
+  if (amt <= 0) { showToast('Nothing due to the media buyer'); return; }
+  if (!confirm(`Record a media buyer payment of EGP ${fmt(amt)}?\nThis adds it to expenses and resets the amount owed.`)) return;
+  try {
+    const data = { id: genId(), category: 'Media Buyer', description: 'Media buyer payment', amount: amt, date: today(), created_at: new Date().toISOString() };
+    await dbInsert('expenses', data);
+    cache.expenses.unshift(data);
+    showToast('Media buyer paid ✓'); renderAll();
   } catch (e) { showToast('Error: ' + e.message); }
 }
 
