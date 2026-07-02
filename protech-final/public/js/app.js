@@ -119,7 +119,7 @@ function buildWhatsAppMessage(order) {
         .join('\n')
     : 'لا توجد منتجات';
 
-  const shipping = order.est_shipping ?? 80;
+  const shipping = order.est_shipping ?? 0;
   const total = order.total ?? 0;
 
   const message =
@@ -335,7 +335,7 @@ function generateInvoicePDF(order) {
     <table class="totals-table">
       <tr>
         <td style="color:#888">رسوم الشحن</td>
-        <td style="text-align:left;font-weight:600">${(order.est_shipping ?? 80).toLocaleString('ar-EG')} ج.م</td>
+        <td style="text-align:left;font-weight:600">${(order.est_shipping ?? 0).toLocaleString('ar-EG')} ج.م</td>
       </tr>
       <tr class="grand-total">
         <td>💰 الإجمالي الكلي</td>

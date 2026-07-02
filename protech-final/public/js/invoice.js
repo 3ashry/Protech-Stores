@@ -29,8 +29,9 @@ function printInvoice(id) {
   });
 
   // ── Compute totals ────────────────────────────────────────────────────────
-  // Shipping: prefer the admin-entered actual_shipping, fall back to estimate.
-  const shipCost = parseFloat(o.actual_shipping || 0) || parseFloat(o.est_shipping || 0) || 0;
+  // Invoice shows ONLY the shipping the customer actually pays (est_shipping) —
+  // never the merchant's actual Bosta cost.
+  const shipCost = parseFloat(o.est_shipping || 0) || 0;
 
   // Subtotal = products only, no shipping.
   const subtotal = items.reduce((s, it) => s + it.line, 0);
