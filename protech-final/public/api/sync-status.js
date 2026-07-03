@@ -10,6 +10,33 @@ const BOSTA_BASE_URL = process.env.BOSTA_BASE_URL || 'https://app.bosta.co/api/v
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
+// ── Actual Bosta shipping cost — same formula used at order creation (bosta.js) ──
+const CITY_MAP = {
+  'القاهرة':'EG-01','القاهره':'EG-01','الإسكندرية':'EG-02','الاسكندريه':'EG-02','الإسكندريه':'EG-02',
+  'الساحل الشمالي':'EG-03','البحيرة':'EG-04','البحيره':'EG-04','الدقهلية':'EG-05','الدقهليه':'EG-05',
+  'القليوبية':'EG-06','القليوبيه':'EG-06','الغربية':'EG-07','الغربيه':'EG-07','كفر الشيخ':'EG-08',
+  'المنوفية':'EG-09','المنوفيه':'EG-09','الشرقية':'EG-10','الشرقيه':'EG-10','الإسماعيلية':'EG-11',
+  'الاسماعيليه':'EG-11','الإسماعيليه':'EG-11','السويس':'EG-12','بورسعيد':'EG-13','بور سعيد':'EG-13',
+  'دمياط':'EG-14','الفيوم':'EG-15','بني سويف':'EG-16','أسيوط':'EG-17','اسيوط':'EG-17','سوهاج':'EG-18',
+  'المنيا':'EG-19','قنا':'EG-20','أسوان':'EG-21','اسوان':'EG-21','الأقصر':'EG-22','الاقصر':'EG-22',
+  'البحر الأحمر':'EG-23','البحر الاحمر':'EG-23','الوادي الجديد':'EG-24','الجيزة':'EG-25','الجيزه':'EG-25',
+  'جنوب سيناء':'EG-26','شمال سيناء':'EG-27','مرسي مطروح':'EG-28','مطروح':'EG-28',
+};
+const SHIPPING_RATES = {
+  'EG-01':118,'EG-25':118,'EG-02':124,'EG-04':124,'EG-05':131,'EG-06':131,'EG-07':131,'EG-08':131,
+  'EG-09':131,'EG-10':131,'EG-14':131,'EG-11':131,'EG-13':131,'EG-12':131,'EG-15':146,'EG-16':146,
+  'EG-19':146,'EG-17':146,'EG-18':146,'EG-20':162,'EG-22':162,'EG-21':162,'EG-23':162,'EG-28':162,
+  'EG-03':166,'EG-27':182,'EG-26':182,'EG-24':182,
+};
+// Bosta's real shipping cost (merchant expense) from the customer's city + COD total.
+function calcActualShipping(city, total) {
+  const baseRate = SHIPPING_RATES[CITY_MAP[city]] || 131;
+  const COD = parseFloat(total) || 0;
+  const codFee = Math.max(0, COD - 2000) * 0.01;
+  const vat = (baseRate + codFee) * 0.14;
+  return Math.ceil(baseRate + codFee + vat);
+}
+
 // Map a Bosta state value -> our status (null = leave unchanged / handle manually).
 function mapState(stateValue) {
   const v = (stateValue || '').toLowerCase();
@@ -118,18 +145,15 @@ export default async function handler(req, res) {
         else if (!mapped && d.state?.value) unknownStates.add(d.state.value);
       }
 
-      // 2) Actual shipping is only "real" once the order is Delivered or Returned.
-      //    (Return-in-transit "On its way to me" does NOT count yet.) We fill it in only
-      //    if it's still 0, so manual edits are never overwritten. Value = the Bosta cost
-      //    calculated at creation (calc_shipping); fall back to the API fee, then to the
-      //    customer est_shipping + 40 − open-package fee.
+      // 2) Actual shipping is only "real" once the order is Delivered or Returned
+      //    (return-in-transit "On its way to me" does NOT count). We set it to the exact
+      //    Bosta cost recomputed from the city + COD total — the same formula used when the
+      //    order was created — so it's always correct (including free-shipping orders).
       const effStatus = patch.status || o.status;
       const isFinal = effStatus === 'Delivered' || effStatus === 'Returned';
-      if (isFinal && !parseFloat(o.actual_shipping || 0)) {
-        let cost = parseFloat(o.calc_shipping || 0);
-        if (!cost) { const fee = await fetchDeliveryFee(o.bosta_id, d, feeLog); if (typeof fee === 'number' && fee > 0) cost = fee; }
-        if (!cost) cost = parseFloat(o.est_shipping || 0) + 40 - (o.allow_open ? 7 : 0);
-        if (cost > 0) patch.actual_shipping = Math.round(cost * 100) / 100;
+      if (isFinal) {
+        const cost = calcActualShipping(o.city, o.total);
+        if (cost > 0 && cost !== parseFloat(o.actual_shipping || 0)) patch.actual_shipping = cost;
       }
 
       if (Object.keys(patch).length) {
