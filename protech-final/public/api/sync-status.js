@@ -73,7 +73,9 @@ async function sbGet(path) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
   });
-  return r.json();
+  const data = await r.json().catch(() => null);
+  if (!r.ok) { console.error('sbGet failed', path, JSON.stringify(data)); throw new Error(data?.message || 'DB read failed'); }
+  return Array.isArray(data) ? data : [];
 }
 async function sbPatch(id, body) {
   return fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(id)}`, {
@@ -98,7 +100,9 @@ export default async function handler(req, res) {
       if (d.trackingNumber) byTrack[d.trackingNumber] = d;
     }
 
-    const orders = await sbGet('orders?select=id,code,ship_code,status,warehouse_confirmed,actual_shipping,calc_shipping,est_shipping,allow_open,bosta_id&limit=3000');
+    // select=* so a missing column (e.g. calc_shipping before its migration runs) never
+    // breaks the whole sync. Missing fields simply read as undefined below.
+    const orders = await sbGet('orders?select=*&limit=3000');
     const MANUAL = ['Returned', 'Cancelled'];
     const changes = [];
     const feeLog = [];

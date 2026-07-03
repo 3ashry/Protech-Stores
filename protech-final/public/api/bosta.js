@@ -328,7 +328,7 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: 'No tracking number returned', details: bostaData });
     }
 
-    const updateRes = await fetch(
+    const patchOrder = (body) => fetch(
       `${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`,
       {
         method: 'PATCH',
@@ -338,23 +338,24 @@ export default async function handler(req, res) {
           'Authorization': `Bearer ${SUPABASE_KEY}`,
           'Prefer': 'return=minimal',
         },
-        body: JSON.stringify({
-          ship_code: trackingNumber,
-          bosta_id: bostaId,
-          // Store the calculated Bosta shipping cost (the merchant's real expense) so the
-          // sync can apply it as actual_shipping ONCE the order is delivered/returned.
-          // actual_shipping stays 0 until then. Do NOT touch est_shipping (customer amount).
-          calc_shipping: shippingCost,
-          actual_shipping: 0,
-        }),
+        body: JSON.stringify(body),
       }
     );
 
+    // 1) Always-present columns first, so the ship code is saved no matter what.
+    const updateRes = await patchOrder({ ship_code: trackingNumber, bosta_id: bostaId, actual_shipping: 0 });
     if (!updateRes.ok) {
       const err = await updateRes.text();
       console.error('Supabase update error:', err);
       return res.status(502).json({ error: 'Supabase update failed', details: err });
     }
+    // 2) Store the calculated Bosta cost for the delivery-time actual_shipping. Best-effort:
+    //    if the calc_shipping column doesn't exist yet, this fails silently and the sync
+    //    falls back to (est_shipping + 40 − open-package fee).
+    try {
+      const r2 = await patchOrder({ calc_shipping: shippingCost });
+      if (!r2.ok) console.warn('calc_shipping not saved (column missing?):', await r2.text());
+    } catch (e) { console.warn('calc_shipping patch failed:', e.message); }
 
     return res.status(200).json({ success: true, trackingNumber, shippingCost });
 
