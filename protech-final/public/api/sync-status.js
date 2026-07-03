@@ -67,32 +67,34 @@ async function fetchAllDeliveries() {
   return all;
 }
 
-// Pull a shipping fee (number) out of a Bosta pricing object, trying the common fields.
-function pickFee(pricing) {
-  if (!pricing || typeof pricing !== 'object') return null;
+// Pull the actual shipping fee (number) out of a Bosta delivery object, trying the known
+// fee fields on the delivery and its pricing sub-object.
+function pickFee(del) {
+  if (!del || typeof del !== 'object') return null;
+  const p = del.pricing || {};
   const cands = [
-    pricing.priceAfterVat, pricing.total, pricing.businessAmount, pricing.priceBeforeVat,
-    pricing.shippingFee, pricing.deliveryFee, pricing.cost, pricing.amount,
+    p.priceAfterVat, p.total, p.businessAmount, p.priceBeforeVat, p.shippingFee, p.deliveryFee,
+    p.cost, p.amount, p.deliveryCost, p.finalPrice,
+    del.priceAfterVat, del.shippingFee, del.deliveryFee, del.price, del.cost,
   ];
-  for (const c of cands) { const n = parseFloat(c); if (!isNaN(n) && n > 0) return n; }
+  for (const c of cands) { const n = parseFloat(c && c.amount != null ? c.amount : c); if (!isNaN(n) && n > 0) return n; }
   return null;
 }
 
-// Get the actual shipping fee for a delivery. The list endpoint usually leaves pricing
-// empty, so fall back to the individual delivery detail (richer). Returns a number or null.
+// Get the ACTUAL shipping fee Bosta charged for a delivery, from the individual delivery
+// detail endpoint (the list/search leaves pricing empty). Returns a number or null.
 async function fetchDeliveryFee(bostaId, searchObj, feeLog) {
-  let fee = pickFee(searchObj && searchObj.pricing);
-  if (fee) return fee;
+  const fromSearch = pickFee(searchObj);
+  if (fromSearch) return fromSearch;
   if (!bostaId) return null;
   try {
-    const r = await fetch(`${BOSTA_BASE_URL}/deliveries/${encodeURIComponent(bostaId)}`, {
+    const r = await fetch(`${BOSTA_BASE_URL}/deliveries/business/${encodeURIComponent(bostaId)}`, {
       headers: { Authorization: BOSTA_API_KEY },
     });
     const d = await r.json().catch(() => null);
     const del = (d && d.data) ? d.data : d;
-    const pricing = del && del.pricing;
-    if (feeLog && pricing) feeLog.push({ id: bostaId, pricing });
-    return pickFee(pricing);
+    if (feeLog && del && del.pricing) feeLog.push({ id: bostaId, pricing: del.pricing });
+    return pickFee(del);
   } catch { return null; }
 }
 
@@ -151,14 +153,20 @@ export default async function handler(req, res) {
       //    order was created — so it's always correct (including free-shipping orders).
       const effStatus = patch.status || o.status;
       const isFinal = effStatus === 'Delivered' || effStatus === 'Returned';
+      let feeSrc = null;
       if (isFinal) {
-        const cost = calcActualShipping(o.city, o.total);
+        // Prefer the REAL fee from Bosta's dashboard/API; fall back to the formula only if
+        // Bosta doesn't expose it.
+        let cost = await fetchDeliveryFee(o.bosta_id, d, feeLog);
+        feeSrc = 'bosta';
+        if (!(typeof cost === 'number' && cost > 0)) { cost = calcActualShipping(o.city, o.total); feeSrc = 'formula'; }
         if (cost > 0 && cost !== parseFloat(o.actual_shipping || 0)) patch.actual_shipping = cost;
+        else feeSrc = null;
       }
 
       if (Object.keys(patch).length) {
         await sbPatch(o.id, patch);
-        changes.push({ code: o.code, from: o.status, bostaState: d.state?.value, ...patch });
+        changes.push({ code: o.code, from: o.status, bostaState: d.state?.value, ...patch, feeSrc });
       }
     }
     const result = { ok: true, bostaDeliveries: deliveries.length, ordersChecked: (orders || []).length, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8) };
