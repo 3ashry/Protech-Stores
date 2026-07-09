@@ -11,10 +11,10 @@
 //   SUPABASE_URL          - https://wljxplbcfoorqpoflcdz.supabase.co
 //   SUPABASE_KEY          - Supabase SECRET (service_role) key
 //   ALLOWED_ORIGINS       - (optional) comma-separated allowed browser origins
+import { sendConfirmTemplate } from './_wa.js';
+
 const WA_TOKEN = process.env.WA_TOKEN;
 const WA_PHONE_NUMBER_ID = process.env.WA_PHONE_NUMBER_ID;
-const WA_TEMPLATE_NAME = process.env.WA_TEMPLATE_NAME || 'order_confirm';
-const WA_TEMPLATE_LANG = process.env.WA_TEMPLATE_LANG || 'ar';
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
@@ -28,14 +28,6 @@ function setCors(req, res) {
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-}
-
-// Egypt: turn a local 01XXXXXXXXX into international 201XXXXXXXXX (no +).
-function waPhone(p) {
-  let s = String(p || '').replace(/\D/g, '');
-  if (s.startsWith('0')) s = '20' + s.slice(1);
-  else if (!s.startsWith('20')) s = '20' + s;
-  return s;
 }
 
 export default async function handler(req, res) {
@@ -53,48 +45,24 @@ export default async function handler(req, res) {
   if (!/^[A-Za-z0-9_-]+$/.test(String(orderId))) return res.status(400).json({ error: 'Invalid orderId' });
 
   try {
-    // Send the approved template. Two quick-reply buttons; we set their payloads here
-    // (index 0 = CONFIRM, index 1 = CANCEL) so the webhook gets a clean value.
-    const waRes = await fetch(`https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}/messages`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        to: waPhone(phone),
-        type: 'template',
-        template: {
-          name: WA_TEMPLATE_NAME,
-          language: { code: WA_TEMPLATE_LANG },
-          components: [
-            { type: 'body', parameters: [
-              { type: 'text', text: String(customerName || '') },
-              { type: 'text', text: String(code || orderId) },
-              { type: 'text', text: String(total ?? '') },
-            ]},
-            { type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: 'CONFIRM' }] },
-            { type: 'button', sub_type: 'quick_reply', index: '1', parameters: [{ type: 'payload', payload: 'CANCEL' }] },
-          ],
-        },
-      }),
-    });
-    const waData = await waRes.json();
-    if (!waRes.ok) {
-      console.error('wa-confirm send error:', JSON.stringify(waData));
-      return res.status(502).json({ error: 'WhatsApp send failed', details: waData });
+    // Send the approved template (shared with the automatic 6h sender).
+    const r = await sendConfirmTemplate({ phone, customerName, code: code || orderId, total });
+    if (!r.ok) {
+      console.error('wa-confirm send error:', JSON.stringify(r.error));
+      return res.status(502).json({ error: 'WhatsApp send failed', details: r.error });
     }
-    const msgId = waData?.messages?.[0]?.id || null;
+    const msgId = r.msgId;
 
-    // Store the sent message id on the order so the webhook can find it on reply.
-    if (msgId) {
-      await fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
-        method: 'PATCH',
-        headers: {
-          'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`,
-          'Content-Type': 'application/json', 'Prefer': 'return=minimal',
-        },
-        body: JSON.stringify({ wa_msg_id: msgId, customer_confirmed: null }),
-      });
-    }
+    // Store the sent message id on the order so the webhook can find it on reply,
+    // and stamp wa_sent_at so the automatic cron never re-sends this order.
+    await fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
+      method: 'PATCH',
+      headers: {
+        'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json', 'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify({ wa_msg_id: msgId, wa_sent_at: new Date().toISOString(), customer_confirmed: null }),
+    });
     return res.status(200).json({ success: true, messageId: msgId });
   } catch (e) {
     console.error('wa-confirm exception:', e.message);
