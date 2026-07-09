@@ -2193,7 +2193,13 @@ function renderAbandonedCarts() {
   const stats = document.getElementById('carts-stats');
   const body = document.getElementById('carts-body');
   if (!body) return;
-  const rows = cartsCache.rows || [];
+  // Keep only the latest open cart per phone (a phone can have more than one open row).
+  const byPhone = {};
+  for (const c of (cartsCache.rows || [])) {
+    const k = c.phone || c.id;
+    if (!byPhone[k] || (c.updated_at || '') > (byPhone[k].updated_at || '')) byPhone[k] = c;
+  }
+  const rows = Object.values(byPhone).sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
   const potential = rows.reduce((a, c) => a + parseFloat(c.total || 0), 0);
   if (stats) stats.innerHTML = `
     <div class="stat-card orange"><div class="stat-val">${rows.length}</div><div class="stat-label">Open Carts</div></div>
