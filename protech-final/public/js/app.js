@@ -1189,6 +1189,32 @@ function renderFinancials() {
       <td><button class="btn btn-danger btn-xs" onclick="delExpense('${e.id}')">✕</button></td>
     </tr>`).join('') : '<tr><td colspan="5"><div class="empty">No expenses recorded</div></td></tr>';
 
+  // Revenue Summary — realised money in/out on Delivered + Returned orders.
+  const rev = document.getElementById('fin-revenue');
+  if (rev) rev.innerHTML = `
+    <div class="fin-row"><span>Total collected (orders + shipping)</span><span class="fin-val">EGP ${fmt(totalCollected)}</span></div>
+    <div class="fin-row"><span>Total actual shipping cost</span><span class="fin-val deduct">− EGP ${fmt(totalActualShip)}</span></div>
+    <div class="fin-row subtotal"><span>Net amount from Bosta</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(netFromBosta)}</span></div>
+    <div style="height:10px"></div>
+    <div class="fin-row"><span>Return shipping cost</span><span class="fin-val deduct">− EGP ${fmt(retShipCost)}</span></div>
+    <div class="fin-row"><span>Total Elashry cost (goods + purchases)</span><span class="fin-val deduct">− EGP ${fmt(buyingCost)}</span></div>`;
+
+  // Net Profit Summary — realised profit now, plus the projected profit once the pipeline clears.
+  const net = document.getElementById('fin-net');
+  if (net) net.innerHTML = `
+    <div class="fin-row"><span>Net from Bosta</span><span class="fin-val">EGP ${fmt(netFromBosta)}</span></div>
+    <div class="fin-row"><span>Total Elashry cost (goods + purchases)</span><span class="fin-val deduct">− EGP ${fmt(buyingCost)}</span></div>
+    <div class="fin-row"><span>Total extra expenses</span><span class="fin-val deduct">− EGP ${fmt(totalExp)}</span></div>
+    <div class="fin-row"><span>Return shipping costs</span><span class="fin-val deduct">− EGP ${fmt(retShipCost)}</span></div>
+    <div class="fin-row ${netProfit >= 0 ? 'profit' : 'loss'}"><span>${netProfit >= 0 ? '🟢 Net Profit' : '🔴 Net Loss'}</span><span>EGP ${fmt(Math.abs(netProfit))}</span></div>
+    <div style="height:16px"></div>
+    <div class="fin-row"><span style="font-weight:800;color:var(--orange)">Projected — if all In-Transit deliver & returns restocked</span></div>
+    <div class="fin-row"><span>Projected revenue (delivered + in-transit, net of shipping)</span><span class="fin-val">EGP ${fmt(projRevenue)}</span></div>
+    <div class="fin-row"><span>Cost of those goods (returns excluded)</span><span class="fin-val deduct">− EGP ${fmt(projCOGS)}</span></div>
+    <div class="fin-row"><span>All expenses (ads, Elashry purchases, Bosta fees…)</span><span class="fin-val deduct">− EGP ${fmt(allExpenses)}</span></div>
+    <div class="fin-row"><span>Return shipping</span><span class="fin-val deduct">− EGP ${fmt(retShipCost)}</span></div>
+    <div class="fin-row ${projProfit >= 0 ? 'profit' : 'loss'}"><span>${projProfit >= 0 ? '🟢 Projected Profit' : '🔴 Projected Loss'}</span><span>EGP ${fmt(Math.abs(projProfit))}</span></div>`;
+
   // The two money sections (Bosta receivable + Elashry owed) render into their own containers.
   if (typeof renderBostaCash === 'function') renderBostaCash();
   if (typeof renderSupplierAccount === 'function') renderSupplierAccount();
