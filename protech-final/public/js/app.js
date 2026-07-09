@@ -1587,6 +1587,10 @@ function renderAnalytics() {
   // Total visitors = every unique session that did ANYTHING (landing 'visit' events plus
   // any product view / checkout / order), so it includes people who only browsed.
   const visitors = uniq(ev);
+  // Transparency: the actual date span + event count in this range. If 7d/30d/all show the
+  // same numbers, this reveals why (e.g. all data is within the last few days).
+  const _dates = ev.map(e => (e.created_at || '').slice(0, 10)).filter(Boolean).sort();
+  const dataSpan = _dates.length ? `${ev.length} events · ${_dates[0]} → ${_dates[_dates.length - 1]}` : 'no events in this range';
 
   const checkoutRate = upv ? Math.round(ucv / upv * 100) : 0;
   const convRate = ucv ? Math.round(uoc / ucv * 100) : 0;
@@ -1661,7 +1665,7 @@ function renderAnalytics() {
   el.innerHTML = `
     <div style="padding:20px 16px;max-width:1100px;margin:0 auto">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:18px">
-        <h2 style="margin:0;font-size:20px">📊 Analytics ${analyticsCache.loading ? '<span style="font-size:13px;color:var(--muted)">loading…</span>' : ''}</h2>
+        <h2 style="margin:0;font-size:20px">📊 Analytics ${analyticsCache.loading ? '<span style="font-size:13px;color:var(--muted)">loading…</span>' : ''}<div style="font-size:11px;color:var(--muted);font-weight:400;margin-top:2px">${esc(dataSpan)}</div></h2>
         <div style="display:flex;gap:6px;flex-wrap:wrap">${rangeBtns}
           <button class="btn btn-ghost btn-sm" onclick="loadAnalytics()">↻ Refresh</button>
         </div>
