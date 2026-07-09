@@ -1582,8 +1582,11 @@ function renderAnalytics() {
   const pv = ev.filter(e => e.event_type === 'product_view');
   const cv = ev.filter(e => e.event_type === 'checkout_view');
   const oc = ev.filter(e => e.event_type === 'order_confirmed');
-  const uniq = arr => new Set(arr.map(e => e.session_id)).size;
+  const uniq = arr => new Set(arr.map(e => e.session_id).filter(Boolean)).size;
   const upv = uniq(pv), ucv = uniq(cv), uoc = uniq(oc);
+  // Total visitors = every unique session that did ANYTHING (landing 'visit' events plus
+  // any product view / checkout / order), so it includes people who only browsed.
+  const visitors = uniq(ev);
 
   const checkoutRate = upv ? Math.round(ucv / upv * 100) : 0;
   const convRate = ucv ? Math.round(uoc / ucv * 100) : 0;
@@ -1665,6 +1668,7 @@ function renderAnalytics() {
       </div>
 
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:22px">
+        <div class="stat-card purple"><div class="stat-val">${visitors}</div><div class="stat-label">Store Visitors</div></div>
         <div class="stat-card blue"><div class="stat-val">${upv}</div><div class="stat-label">Product Viewers</div></div>
         <div class="stat-card orange"><div class="stat-val">${ucv}</div><div class="stat-label">Reached Checkout</div></div>
         <div class="stat-card green"><div class="stat-val">${uoc}</div><div class="stat-label">Orders Confirmed</div></div>
