@@ -60,7 +60,7 @@ export default async function handler(req, res) {
   try {
     // Old enough, never sent, not yet resolved, still in an early state, has a phone.
     const q = [
-      'select=id,code,phone,customer_name,total,created_at,status',
+      'select=id,code,phone,customer_name,total,est_shipping,allow_open,ship_code,products,created_at,status',
       `created_at=lte.${encodeURIComponent(cutoff)}`,
       `created_at=gte.${encodeURIComponent(floor)}`,
       'wa_sent_at=is.null',
@@ -74,7 +74,7 @@ export default async function handler(req, res) {
 
     const sent = [], failed = [];
     for (const o of orders) {
-      const r = await sendConfirmTemplate({ phone: o.phone, customerName: o.customer_name, code: o.code, total: o.total });
+      const r = await sendConfirmTemplate(o);
       if (r.ok) {
         // Mark sent so the next run doesn't message the same order again.
         await sbPatch(o.id, { wa_msg_id: r.msgId, wa_sent_at: new Date().toISOString() });

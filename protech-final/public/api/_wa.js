@@ -27,27 +27,53 @@ export function waPhone(p) {
   return s;
 }
 
-// Send the approved order-confirmation template.
-// Body params: {{1}} customer name, {{2}} order code, {{3}} total.
+// Number with thousands separators, Latin digits (safe inside a template var).
+function fmtNum(n) {
+  const v = Number(n) || 0;
+  return v.toLocaleString('en-US');
+}
+
+// Build the single-line items summary for {{2}}. Meta forbids newlines, tabs and
+// runs of >4 spaces inside a template variable, so products are comma-joined on
+// one line: "اسم المنتج × 2 — 1,000 ج.م ، منتج آخر × 1 — 500 ج.م".
+function itemsSummary(products) {
+  const list = Array.isArray(products) ? products : [];
+  const s = list
+    .map(p => `${p.name || p.code || 'منتج'} × ${p.qty || 1} — ${fmtNum((p.sell_price || p.price || 0) * (p.qty || 1))} ج.م`)
+    .join(' ، ')
+    .replace(/[\n\t]+/g, ' ')
+    .replace(/ {2,}/g, ' ')
+    .trim();
+  return s || '—';
+}
+
+// Send the approved order-confirmation template. Pass an order row (DB shape).
+// Body params, in order:
+//   {{1}} customer name   {{2}} items summary   {{3}} shipping fee (customer)
+//   {{4}} grand total     {{5}} open-package    {{6}} shipping code
 // Two quick-reply buttons: index 0 -> CONFIRM, index 1 -> CANCEL (payloads the
 // webhook reads back). Returns { ok, msgId, error }.
-export async function sendConfirmTemplate({ phone, customerName, code, total }) {
+export async function sendConfirmTemplate(order = {}) {
+  const params = [
+    String(order.customer_name || 'عميلنا العزيز'),
+    itemsSummary(order.products),
+    fmtNum(order.est_shipping || 0),
+    fmtNum(order.total || 0),
+    order.allow_open ? 'متاح' : 'غير متاح',
+    String(order.ship_code || 'سيتم إرساله قريباً'),
+  ];
   const r = await fetch(`https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}/messages`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       messaging_product: 'whatsapp',
-      to: waPhone(phone),
+      to: waPhone(order.phone),
       type: 'template',
       template: {
         name: WA_TEMPLATE_NAME,
         language: { code: WA_TEMPLATE_LANG },
         components: [
-          { type: 'body', parameters: [
-            { type: 'text', text: String(customerName || '') },
-            { type: 'text', text: String(code || '') },
-            { type: 'text', text: String(total ?? '') },
-          ]},
+          { type: 'body', parameters: params.map(text => ({ type: 'text', text })) },
           { type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: 'CONFIRM' }] },
           { type: 'button', sub_type: 'quick_reply', index: '1', parameters: [{ type: 'payload', payload: 'CANCEL' }] },
         ],

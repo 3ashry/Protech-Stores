@@ -40,13 +40,22 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Server not configured' });
   }
 
-  const { orderId, phone, customerName, code, total } = req.body || {};
-  if (!orderId || !phone) return res.status(400).json({ error: 'Missing orderId or phone' });
+  const { orderId } = req.body || {};
+  if (!orderId) return res.status(400).json({ error: 'Missing orderId' });
   if (!/^[A-Za-z0-9_-]+$/.test(String(orderId))) return res.status(400).json({ error: 'Invalid orderId' });
 
   try {
+    // Load the full order so the message carries the same itemised details
+    // (products, shipping, total, open-package, ship code) as the automatic sender.
+    const oRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}&select=id,code,phone,customer_name,total,est_shipping,allow_open,ship_code,products&limit=1`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+    const order = (await oRes.json().catch(() => []))[0];
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (!order.phone) return res.status(400).json({ error: 'Order has no phone' });
+
     // Send the approved template (shared with the automatic 6h sender).
-    const r = await sendConfirmTemplate({ phone, customerName, code: code || orderId, total });
+    const r = await sendConfirmTemplate(order);
     if (!r.ok) {
       console.error('wa-confirm send error:', JSON.stringify(r.error));
       return res.status(502).json({ error: 'WhatsApp send failed', details: r.error });
