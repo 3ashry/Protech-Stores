@@ -18,7 +18,7 @@ import { sendConfirmTemplate, waConfigured } from './_wa.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
-const CRON_SECRET = process.env.CRON_SECRET;
+const CRON_SECRET = (process.env.CRON_SECRET || '').trim();
 const DELAY_HOURS = parseFloat(process.env.WA_CONFIRM_DELAY_HOURS || '6');
 // TEST SAFETY VALVE: when set (e.g. "01034482071"), the automation messages ONLY
 // this phone number and ignores every other order — so you can safely shorten the
@@ -46,9 +46,9 @@ async function sbPatch(id, body) {
 
 function authorized(req) {
   if (!CRON_SECRET) return true; // no secret set -> allow (you should set one)
-  const auth = req.headers.authorization || '';
+  const auth = (req.headers.authorization || '').trim();
   if (auth === `Bearer ${CRON_SECRET}`) return true;
-  const key = (req.query && (req.query.key || req.query.secret)) || '';
+  const key = ((req.query && (req.query.key || req.query.secret)) || '').toString().trim();
   return key === CRON_SECRET;
 }
 
