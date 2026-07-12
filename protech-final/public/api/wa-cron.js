@@ -53,8 +53,11 @@ export default async function handler(req, res) {
   if (!SUPABASE_URL || !SUPABASE_KEY) return res.status(500).json({ error: 'DB not configured' });
   if (!waConfigured()) return res.status(500).json({ error: 'WhatsApp not configured' });
 
+  // ?test=1 fires immediately: ignores the 6h wait and only messages the single
+  // newest eligible order, so you can confirm the whole chain right after ordering.
+  const test = !!(req.query && (req.query.test || req.query.now));
   const now = Date.now();
-  const cutoff = new Date(now - DELAY_HOURS * 3600 * 1000).toISOString();
+  const cutoff = new Date(now - (test ? 0 : DELAY_HOURS * 3600 * 1000)).toISOString();
   const floor = new Date(now - 72 * 3600 * 1000).toISOString(); // skip orders older than 3 days
 
   try {
@@ -67,8 +70,8 @@ export default async function handler(req, res) {
       'customer_confirmed=is.null',
       'status=not.in.(Cancelled,Returned,Delivered)',
       'phone=not.is.null',
-      'order=created_at.asc',
-      'limit=50',
+      `order=created_at.${test ? 'desc' : 'asc'}`,
+      `limit=${test ? 1 : 50}`,
     ].join('&');
     const orders = await sbGet(`orders?${q}`);
 
@@ -83,7 +86,7 @@ export default async function handler(req, res) {
         failed.push({ code: o.code, error: r.error });
       }
     }
-    const result = { ok: true, candidates: orders.length, sent: sent.length, failed: failed.length, details: { sent, failed: failed.slice(0, 5) } };
+    const result = { ok: true, test, candidates: orders.length, sent: sent.length, failed: failed.length, details: { sent, failed: failed.slice(0, 5) } };
     console.log('wa-cron', JSON.stringify(result));
     return res.status(200).json(result);
   } catch (e) {
