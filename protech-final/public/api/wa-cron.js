@@ -20,6 +20,10 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const CRON_SECRET = process.env.CRON_SECRET;
 const DELAY_HOURS = parseFloat(process.env.WA_CONFIRM_DELAY_HOURS || '6');
+// TEST SAFETY VALVE: when set (e.g. "01034482071"), the automation messages ONLY
+// this phone number and ignores every other order — so you can safely shorten the
+// delay and test end-to-end without messaging real customers. Remove after testing.
+const ONLY_PHONE = (process.env.WA_ONLY_PHONE || '').replace(/\D/g, '');
 
 async function sbGet(path) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
@@ -62,7 +66,7 @@ export default async function handler(req, res) {
 
   try {
     // Old enough, never sent, not yet resolved, still in an early state, has a phone.
-    const q = [
+    const qparts = [
       'select=id,code,phone,customer_name,total,est_shipping,allow_open,ship_code,products,created_at,status',
       `created_at=lte.${encodeURIComponent(cutoff)}`,
       `created_at=gte.${encodeURIComponent(floor)}`,
@@ -70,9 +74,10 @@ export default async function handler(req, res) {
       'customer_confirmed=is.null',
       'status=not.in.(Cancelled,Returned,Delivered)',
       'phone=not.is.null',
-      `order=created_at.${test ? 'desc' : 'asc'}`,
-      `limit=${test ? 1 : 50}`,
-    ].join('&');
+    ];
+    if (ONLY_PHONE) qparts.push(`phone=eq.${encodeURIComponent(ONLY_PHONE)}`);
+    qparts.push(`order=created_at.${test ? 'desc' : 'asc'}`, `limit=${test ? 1 : 50}`);
+    const q = qparts.join('&');
     const orders = await sbGet(`orders?${q}`);
 
     const sent = [], failed = [];
@@ -86,7 +91,7 @@ export default async function handler(req, res) {
         failed.push({ code: o.code, error: r.error });
       }
     }
-    const result = { ok: true, test, candidates: orders.length, sent: sent.length, failed: failed.length, details: { sent, failed: failed.slice(0, 5) } };
+    const result = { ok: true, test, onlyPhone: ONLY_PHONE || null, delayHours: DELAY_HOURS, candidates: orders.length, sent: sent.length, failed: failed.length, details: { sent, failed: failed.slice(0, 5) } };
     console.log('wa-cron', JSON.stringify(result));
     return res.status(200).json(result);
   } catch (e) {
