@@ -96,7 +96,7 @@ export default async function handler(req, res) {
       if (!updated.length) {
         const from = String(msg.from || '').replace(/\D/g, '');
         if (from) {
-          const rows = await sbGet('orders?select=id,phone,wa_sent_at&customer_confirmed=is.null&wa_msg_id=not.is.null&order=wa_sent_at.desc&limit=100');
+          const rows = await sbGet('orders?select=id,phone,wa_sent_at&customer_confirmed=is.null&wa_sent_at=not.is.null&order=wa_sent_at.desc&limit=100');
           const match = rows.find(o => waPhone(o.phone) === from);
           if (match) await sbPatchRep(`orders?id=eq.${encodeURIComponent(match.id)}`, update);
         }
