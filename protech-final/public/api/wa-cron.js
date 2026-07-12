@@ -80,8 +80,12 @@ export default async function handler(req, res) {
     const q = qparts.join('&');
     const orders = await sbGet(`orders?${q}`);
 
-    const sent = [], failed = [];
+    const sent = [], failed = [], waitingShipCode = [];
     for (const o of orders) {
+      // Wait until Bosta has assigned the ship code before messaging, so the customer
+      // always gets the real tracking code (not the "سيتم إرساله قريباً" placeholder).
+      // No ship code yet -> leave it unsent; a later run picks it up once it's assigned.
+      if (!(o.ship_code && String(o.ship_code).trim())) { waitingShipCode.push(o.code); continue; }
       const r = await sendConfirmTemplate(o);
       if (r.ok) {
         // Mark sent so the next run doesn't message the same order again.
@@ -91,7 +95,7 @@ export default async function handler(req, res) {
         failed.push({ code: o.code, error: r.error });
       }
     }
-    const result = { ok: true, test, onlyPhone: ONLY_PHONE || null, delayHours: DELAY_HOURS, candidates: orders.length, sent: sent.length, failed: failed.length, details: { sent, failed: failed.slice(0, 5) } };
+    const result = { ok: true, test, onlyPhone: ONLY_PHONE || null, delayHours: DELAY_HOURS, candidates: orders.length, sent: sent.length, failed: failed.length, waitingShipCode: waitingShipCode.length, details: { sent, failed: failed.slice(0, 5), waitingShipCode: waitingShipCode.slice(0, 5) } };
     console.log('wa-cron', JSON.stringify(result));
     return res.status(200).json(result);
   } catch (e) {
