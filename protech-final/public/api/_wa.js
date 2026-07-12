@@ -27,6 +27,24 @@ export function waPhone(p) {
   return s;
 }
 
+// Send a plain text message. Only allowed within the 24h customer-service window
+// (i.e. right after the customer messages us) — which is exactly when we use it,
+// to auto-reply after a confirm/cancel. Returns { ok, data }.
+export async function sendText(to, body) {
+  const r = await fetch(`https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to: waPhone(to),
+      type: 'text',
+      text: { body: String(body || '') },
+    }),
+  });
+  const data = await r.json().catch(() => null);
+  return { ok: r.ok, data };
+}
+
 // Number with thousands separators, Latin digits (safe inside a template var).
 function fmtNum(n) {
   const v = Number(n) || 0;

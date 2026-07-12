@@ -13,7 +13,11 @@
 //   WA_VERIFY_TOKEN  - the random string you also paste into Meta's webhook config
 //   SUPABASE_URL     - https://wljxplbcfoorqpoflcdz.supabase.co
 //   SUPABASE_KEY     - Supabase SECRET (service_role) key
-import { waPhone } from './_wa.js';
+import { waPhone, sendText } from './_wa.js';
+
+// Auto-replies sent back to the customer after they confirm / cancel.
+const CONFIRM_REPLY = 'شكراً لطلبك من بروتيك ❤️\nمدة الشحن المتوقعة 3 أيام عمل.\nللاستفسار ابعتلنا على واتساب على الرقم ده: 01034482071';
+const CANCEL_REPLY = 'تم إلغاء طلبك.';
 
 const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN;
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -101,6 +105,9 @@ export default async function handler(req, res) {
           if (match) await sbPatchRep(`orders?id=eq.${encodeURIComponent(match.id)}`, update);
         }
       }
+
+      // 3) Auto-reply to the customer (the 24h window is open since they just messaged us).
+      if (msg.from) await sendText(msg.from, intent === 'confirm' ? CONFIRM_REPLY : CANCEL_REPLY);
     }
   } catch (e) {
     console.error('wa-webhook error:', e.message);
