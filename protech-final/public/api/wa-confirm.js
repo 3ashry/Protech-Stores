@@ -35,6 +35,13 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') return res.status(405).end();
 
+  // Immediate order-confirmation sending is DISABLED. Confirmations are sent ~6h
+  // after the order by the scheduled sender (/api/wa-cron), which waits for the
+  // Bosta ship code. Cached storefront builds may still call this endpoint at
+  // checkout — return a no-op so no message is sent before the ship code exists.
+  return res.status(200).json({ disabled: true, note: 'confirmation is sent by the 6h scheduler (wa-cron)' });
+
+  /* eslint-disable no-unreachable */
   if (!WA_TOKEN || !WA_PHONE_NUMBER_ID || !SUPABASE_URL || !SUPABASE_KEY) {
     console.error('wa-confirm: missing env config');
     return res.status(500).json({ error: 'Server not configured' });
