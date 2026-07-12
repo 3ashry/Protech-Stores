@@ -16,7 +16,7 @@
 import { waPhone, sendText } from './_wa.js';
 
 // Auto-replies sent back to the customer after they confirm / cancel.
-const CONFIRM_REPLY = 'شكراً لطلبك من بروتيك ❤️\nمدة الشحن المتوقعة 3 أيام عمل.\nللاستفسار ابعتلنا على واتساب على الرقم ده: 01034482071';
+const CONFIRM_REPLY = 'شكراً لطلبك من بروتيك 😊\nمدة الشحن المتوقعة 3 أيام عمل.\nللاستفسار ابعتلنا على واتساب على الرقم ده: 01034482071';
 const CANCEL_REPLY = 'تم إلغاء طلبك.';
 
 const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN;
