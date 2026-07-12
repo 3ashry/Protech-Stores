@@ -3,14 +3,14 @@
 // reply to the order-confirmation message on the order (customer_confirmed),
 // which the dashboard shows as "✅ العميل أكد الحجز".
 //
-// Handles two reply styles:
-//   1) Quick-reply BUTTON tap (CONFIRM / CANCEL) — mapped precisely via the
-//      stored message id (wa_msg_id) that the confirmation was sent with.
-//   2) Free-TEXT reply (customer types "تأكيد" / "إلغاء") — mapped to that
-//      phone number's most recent order still awaiting a reply.
+// Recognises the reply whether it arrives as:
+//   - a quick-reply BUTTON tap (payload CONFIRM/CANCEL, or the Arabic button text), or
+//   - a free-TEXT message ("تأكيد" / "إلغاء").
+// Matches it to the order first by the stored message id (wa_msg_id), and if that
+// misses, by the sender's phone number (newest order still awaiting a reply).
 //
 // Required Vercel env vars:
-//   WA_VERIFY_TOKEN  - any random string you also paste into Meta's webhook config
+//   WA_VERIFY_TOKEN  - the random string you also paste into Meta's webhook config
 //   SUPABASE_URL     - https://wljxplbcfoorqpoflcdz.supabase.co
 //   SUPABASE_KEY     - Supabase SECRET (service_role) key
 import { waPhone } from './_wa.js';
@@ -26,15 +26,18 @@ async function sbGet(path) {
   const d = await r.json().catch(() => null);
   return Array.isArray(d) ? d : [];
 }
-async function sbPatch(path, body) {
-  return fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+// PATCH and return the affected rows, so we can tell whether anything matched.
+async function sbPatchRep(path, body) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     method: 'PATCH',
     headers: {
       apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`,
-      'Content-Type': 'application/json', Prefer: 'return=minimal',
+      'Content-Type': 'application/json', Prefer: 'return=representation',
     },
     body: JSON.stringify(body),
   });
+  const rows = await r.json().catch(() => []);
+  return Array.isArray(rows) ? rows : [];
 }
 
 const CONFIRM_RE = /تأكيد|تاكيد|أكد|اكد|confirm|نعم|موافق|تمام|أوافق/i;
@@ -51,7 +54,6 @@ export default async function handler(req, res) {
     }
     return res.status(403).end();
   }
-
   if (req.method !== 'POST') return res.status(405).end();
 
   // Always 200 quickly so Meta doesn't retry; do the work inside try.
@@ -61,33 +63,42 @@ export default async function handler(req, res) {
     const msg = change?.messages?.[0];
     if (!msg || !SUPABASE_URL || !SUPABASE_KEY) return res.status(200).json({ received: true });
 
-    // ── 1) Quick-reply button tap (precise: mapped by the sent message id) ──
+    // Work out the customer's intent from a button tap OR a typed message.
+    let intent = null; // 'confirm' | 'cancel'
     if (msg.type === 'button') {
-      const payload = msg.button?.payload || msg.button?.text || '';
-      const repliedToId = msg.context?.id; // id of the template message we sent
-      if (repliedToId) {
-        const update =
-          payload === 'CONFIRM' ? { customer_confirmed: true }
-          : payload === 'CANCEL' ? { customer_confirmed: false, status: 'Cancelled' }
-          : null;
-        if (update) await sbPatch(`orders?wa_msg_id=eq.${encodeURIComponent(repliedToId)}`, update);
-      }
-      return res.status(200).json({ received: true });
+      const payload = msg.button?.payload || '';
+      const text = msg.button?.text || '';
+      if (payload === 'CONFIRM' || CONFIRM_RE.test(text)) intent = 'confirm';
+      else if (payload === 'CANCEL' || CANCEL_RE.test(text)) intent = 'cancel';
+    } else if (msg.type === 'interactive') {
+      // Interactive reply-button style, just in case.
+      const br = msg.interactive?.button_reply || {};
+      const id = br.id || '', title = br.title || '';
+      if (id === 'CONFIRM' || CONFIRM_RE.test(title)) intent = 'confirm';
+      else if (id === 'CANCEL' || CANCEL_RE.test(title)) intent = 'cancel';
+    } else if (msg.type === 'text') {
+      const body = (msg.text?.body || '').trim();
+      if (CONFIRM_RE.test(body)) intent = 'confirm';
+      else if (CANCEL_RE.test(body)) intent = 'cancel';
     }
 
-    // ── 2) Free-text reply ("تأكيد" / "إلغاء") — match by sender phone ──
-    if (msg.type === 'text') {
-      const body = (msg.text?.body || '').trim();
-      const isConfirm = CONFIRM_RE.test(body);
-      const isCancel = CANCEL_RE.test(body);
-      if (isConfirm || isCancel) {
+    if (intent) {
+      const update = intent === 'confirm'
+        ? { customer_confirmed: true }
+        : { customer_confirmed: false, status: 'Cancelled' };
+
+      // 1) Precise: match the order by the id of the template message we sent.
+      let updated = [];
+      const repliedToId = msg.context?.id;
+      if (repliedToId) updated = await sbPatchRep(`orders?wa_msg_id=eq.${encodeURIComponent(repliedToId)}`, update);
+
+      // 2) Fallback: match by the sender's phone → newest messaged, unresolved order.
+      if (!updated.length) {
         const from = String(msg.from || '').replace(/\D/g, '');
-        // Newest order from this number that we've messaged and is still awaiting a reply.
-        const rows = await sbGet('orders?select=id,phone,wa_sent_at&customer_confirmed=is.null&wa_msg_id=not.is.null&order=wa_sent_at.desc&limit=100');
-        const match = rows.find(o => waPhone(o.phone) === from);
-        if (match) {
-          await sbPatch(`orders?id=eq.${encodeURIComponent(match.id)}`,
-            isConfirm ? { customer_confirmed: true } : { customer_confirmed: false, status: 'Cancelled' });
+        if (from) {
+          const rows = await sbGet('orders?select=id,phone,wa_sent_at&customer_confirmed=is.null&wa_msg_id=not.is.null&order=wa_sent_at.desc&limit=100');
+          const match = rows.find(o => waPhone(o.phone) === from);
+          if (match) await sbPatchRep(`orders?id=eq.${encodeURIComponent(match.id)}`, update);
         }
       }
     }
