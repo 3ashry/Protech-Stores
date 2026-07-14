@@ -19,7 +19,13 @@ import { sendConfirmTemplate, waConfigured } from './_wa.js';
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const CRON_SECRET = (process.env.CRON_SECRET || '').trim();
-const DELAY_HOURS = parseFloat(process.env.WA_CONFIRM_DELAY_HOURS || '6');
+// Hours to wait after an order before sending the confirmation. Production is 6h.
+// A leftover sub-1-hour value (used while testing the flow) is IGNORED and falls
+// back to 6, so the schedule can never be accidentally left firing minutes after
+// checkout. To test the whole chain immediately, hit the endpoint with ?test=1
+// (that path ignores the delay entirely) — don't shorten this.
+const RAW_DELAY_HOURS = parseFloat(process.env.WA_CONFIRM_DELAY_HOURS || '6');
+const DELAY_HOURS = (Number.isFinite(RAW_DELAY_HOURS) && RAW_DELAY_HOURS >= 1) ? RAW_DELAY_HOURS : 6;
 // TEST SAFETY VALVE: when set (e.g. "01034482071"), the automation messages ONLY
 // this phone number and ignores every other order — so you can safely shorten the
 // delay and test end-to-end without messaging real customers. Remove after testing.
