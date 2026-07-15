@@ -408,6 +408,9 @@ function renderAll() {
   renderFinancials();
   renderInvoices();
   renderAnalytics();
+  // If the abandoned-carts view is already loaded, re-render it too so a cart
+  // disappears as soon as its owner's order lands in the 30s data refresh.
+  if (typeof cartsCache !== 'undefined' && cartsCache.loaded) renderAbandonedCarts();
 }
 
 // ── HOME ──
@@ -2225,7 +2228,19 @@ function renderAbandonedCarts() {
     const k = c.phone || c.id;
     if (!byPhone[k] || (c.updated_at || '') > (byPhone[k].updated_at || '')) byPhone[k] = c;
   }
-  const rows = Object.values(byPhone).sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+  // Hide carts from customers who already placed an order. An order row exists
+  // only after a completed checkout, so if this phone appears in cache.orders the
+  // cart is done — drop it. Normalize both sides (strip spaces/+/leading 0 or 20)
+  // so "01034482071", "201034482071" and "+20 103…" all match the same person.
+  const corePhone = (p) => {
+    let d = String(p || '').replace(/\D/g, '').replace(/^0+/, '');
+    if (d.length > 10 && d.startsWith('20')) d = d.slice(2);
+    return d;
+  };
+  const orderedPhones = new Set((cache.orders || []).map(o => corePhone(o.phone)).filter(Boolean));
+  const rows = Object.values(byPhone)
+    .filter(c => { const k = corePhone(c.phone); return !k || !orderedPhones.has(k); })
+    .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
   const potential = rows.reduce((a, c) => a + parseFloat(c.total || 0), 0);
   if (stats) stats.innerHTML = `
     <div class="stat-card orange"><div class="stat-val">${rows.length}</div><div class="stat-label">Open Carts</div></div>
