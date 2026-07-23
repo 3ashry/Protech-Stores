@@ -624,6 +624,7 @@ function editProduct(id) {
     document.getElementById('p-offer-price').value = p.offer_price || '';
     document.getElementById('p-offer-row').style.display = p.is_offer ? 'block' : 'none';
     document.getElementById('p-is-published').checked = p.is_published !== false;
+    document.getElementById('p-free-shipping').checked = !!p.free_shipping;
     const cats = Array.isArray(p.categories) ? p.categories : (p.category ? [p.category] : []);
     document.querySelectorAll('.p-cat-cb').forEach(cb => { cb.checked = cats.includes(cb.value); });
     document.getElementById('p-idx').value = id;
@@ -643,6 +644,7 @@ async function saveProduct() {
   const is_offer = document.getElementById('p-is-offer').checked;
   const offer_price = is_offer ? (parseFloat(document.getElementById('p-offer-price').value || 0) || null) : null;
   const is_published = document.getElementById('p-is-published').checked;
+  const free_shipping = document.getElementById('p-free-shipping').checked;
   const categories = Array.from(document.querySelectorAll('.p-cat-cb:checked')).map(cb => cb.value);
   // Keep first category in 'category' field for backward compatibility with store
   const category = categories[0] || null;
@@ -651,7 +653,7 @@ async function saveProduct() {
   if (is_offer && !offer_price) { showToast('Please enter the discounted price'); return; }
 
   const id = document.getElementById('p-idx').value;
-const payload = { code, name, qty, price, buy_price, brand, description, is_offer, offer_price, is_published, categories, category, images: currentProductImages };
+const payload = { code, name, qty, price, buy_price, brand, description, is_offer, offer_price, is_published, free_shipping, categories, category, images: currentProductImages };
   try {
     if (id) {
       await dbUpdate('products', id, payload);
