@@ -233,7 +233,13 @@ function _openInventorySync() {
           <label style="display:flex;align-items:center;gap:8px;margin-top:14px;font-size:13px;cursor:pointer">
             <input type="checkbox" id="inv-sync-zero-missing" onchange="_invRefreshPreview()">
             <span>Also set store products NOT in the file to qty = 0
-              <span style="color:#dc2626;font-weight:700">(destructive — leave off unless the file is your <u>full</u> warehouse stock)</span>
+              <span style="color:#dc2626;font-weight:700">(leave off unless the file is your <u>full</u> warehouse stock)</span>
+            </span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="inv-sync-hide-missing" onchange="_invRefreshPreview()">
+            <span>Also <b>hide</b> store products NOT in the file (set Published = No)
+              <span style="color:#f97316;font-weight:700">(reversible — customers won't see them but the DB row + images stay)</span>
             </span>
           </label>
           <div id="inv-sync-status" style="margin-top:14px;color:#666;font-size:13px">Waiting for a file…</div>
@@ -282,6 +288,7 @@ function _invRefreshPreview() {
   if (!_invParsed.length) return;
   const previewEl = document.getElementById('inv-sync-preview');
   const zeroMissing = !!document.getElementById('inv-sync-zero-missing')?.checked;
+  const hideMissing = !!document.getElementById('inv-sync-hide-missing')?.checked;
 
   const dbByCode = new Map();
   for (const p of (cache.products || [])) {
@@ -303,6 +310,7 @@ function _invRefreshPreview() {
     else changes.push({ product: p, oldQty, newQty });
   }
   const zeroed = [];
+  const toHide = [];
   const dbNotInFile = [];
   for (const c of dbCodes) {
     if (!fileCodes.has(c)) {
@@ -311,11 +319,19 @@ function _invRefreshPreview() {
       if (zeroMissing && oldQty !== 0) {
         zeroed.push({ product: p, oldQty, newQty: 0 });
       }
+      // Only queue a hide if the product is currently published.
+      if (hideMissing && (p.is_published === true || p.is_published === 'Yes' || p.is_published === undefined)) {
+        toHide.push({ product: p });
+      }
       dbNotInFile.push(c);
     }
   }
-  const allChanges = changes.concat(zeroed);
-  _invPending = allChanges.map(c => ({ id: c.product.id, code: c.product.code, newQty: c.newQty }));
+  const qtyChanges = changes.concat(zeroed);
+  // Build the unified pending list: qty updates + hides (some products may need both).
+  const pending = qtyChanges.map(c => ({ kind: 'qty', id: c.product.id, code: c.product.code, newQty: c.newQty }));
+  for (const h of toHide) pending.push({ kind: 'hide', id: h.product.id, code: h.product.code });
+  _invPending = pending;
+  const allChanges = qtyChanges;
 
   const chgRows = allChanges.length
     ? allChanges.slice(0, 500).map(c => `
@@ -335,9 +351,12 @@ function _invRefreshPreview() {
          <div style="font-family:monospace;font-size:12px;max-height:140px;overflow:auto;white-space:pre-wrap;user-select:all;background:#fff;padding:8px;border-radius:6px">${_invEsc(unmatched.map(u => `${u.code}  qty=${u.newQty}`).join('\n'))}</div>
        </div>` : '';
 
+  const orphanNote = [];
+  if (zeroMissing) orphanNote.push('<span style="color:#dc2626">will be set to qty=0</span>');
+  if (hideMissing) orphanNote.push(`<span style="color:#f97316">${toHide.length} will be hidden</span>`);
   const orphanBlock = dbNotInFile.length
     ? `<div style="margin-top:8px;background:#f3f4f6;border:1px solid #d1d5db;border-radius:8px;padding:10px">
-         <div style="font-weight:700;color:#374151;margin-bottom:6px">ℹ️ ${dbNotInFile.length} store products not in the file ${zeroMissing ? '<span style="color:#dc2626">— will be set to 0</span>' : '(unchanged)'}:</div>
+         <div style="font-weight:700;color:#374151;margin-bottom:6px">ℹ️ ${dbNotInFile.length} store products not in the file ${orphanNote.length ? '— ' + orphanNote.join(' · ') : '(unchanged)'}:</div>
          <div style="font-family:monospace;font-size:11px;max-height:110px;overflow:auto;white-space:pre-wrap;user-select:all;background:#fff;padding:8px;border-radius:6px">${_invEsc(dbNotInFile.slice(0, 600).join('\n'))}${dbNotInFile.length > 600 ? '\n…' : ''}</div>
        </div>` : '';
 
@@ -392,12 +411,18 @@ async function _applyInventorySync() {
   for (const it of items) {
     btn.textContent = `Applying ${++done}/${total}…`;
     try {
-      await dbUpdate('products', it.id, { qty: it.newQty });
-      const i = cache.products.findIndex(p => p.id === it.id);
-      if (i >= 0) cache.products[i] = { ...cache.products[i], qty: it.newQty };
+      if (it.kind === 'hide') {
+        await dbUpdate('products', it.id, { is_published: false });
+        const i = cache.products.findIndex(p => p.id === it.id);
+        if (i >= 0) cache.products[i] = { ...cache.products[i], is_published: false };
+      } else {
+        await dbUpdate('products', it.id, { qty: it.newQty });
+        const i = cache.products.findIndex(p => p.id === it.id);
+        if (i >= 0) cache.products[i] = { ...cache.products[i], qty: it.newQty };
+      }
     } catch (e) {
       failed++;
-      failedCodes.push(it.code);
+      failedCodes.push(it.code + (it.kind === 'hide' ? ' (hide)' : ''));
       console.warn('inventory sync failed for', it.code, e);
     }
   }
