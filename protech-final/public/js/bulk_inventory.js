@@ -230,18 +230,20 @@ function _openInventorySync() {
             Matching is by exact <code>code</code> (case-insensitive, trimmed; hyphens preserved).
             Only products whose <em>quantity actually changes</em> will be updated. Nothing else is touched — buy price, sell price, name, everything else stays exactly as it is.
           </div>
-          <label style="display:flex;align-items:center;gap:8px;margin-top:14px;font-size:13px;cursor:pointer">
-            <input type="checkbox" id="inv-sync-zero-missing" onchange="_invRefreshPreview()">
-            <span>Also set store products NOT in the file to qty = 0
+          <div style="display:flex;align-items:flex-start;gap:10px;margin-top:14px;font-size:13px;padding:8px;border-radius:8px;background:#fafafa;cursor:pointer" onclick="var cb=this.querySelector('input');cb.checked=!cb.checked;_invRefreshPreview()">
+            <input type="checkbox" id="inv-sync-zero-missing" onclick="event.stopPropagation()" onchange="_invRefreshPreview()"
+                   style="width:20px !important;height:20px !important;min-width:20px;flex:0 0 20px;margin:0;padding:0;border:1px solid #d1d5db;appearance:auto;-webkit-appearance:checkbox;cursor:pointer">
+            <span style="user-select:none">Also set store products NOT in the file to <b>qty = 0</b>
               <span style="color:#dc2626;font-weight:700">(leave off unless the file is your <u>full</u> warehouse stock)</span>
             </span>
-          </label>
-          <label style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:13px;cursor:pointer">
-            <input type="checkbox" id="inv-sync-hide-missing" onchange="_invRefreshPreview()">
-            <span>Also <b>hide</b> store products NOT in the file (set Published = No)
+          </div>
+          <div style="display:flex;align-items:flex-start;gap:10px;margin-top:6px;font-size:13px;padding:8px;border-radius:8px;background:#fafafa;cursor:pointer" onclick="var cb=this.querySelector('input');cb.checked=!cb.checked;_invRefreshPreview()">
+            <input type="checkbox" id="inv-sync-hide-missing" onclick="event.stopPropagation()" onchange="_invRefreshPreview()"
+                   style="width:20px !important;height:20px !important;min-width:20px;flex:0 0 20px;margin:0;padding:0;border:1px solid #d1d5db;appearance:auto;-webkit-appearance:checkbox;cursor:pointer">
+            <span style="user-select:none">Also <b>hide</b> store products NOT in the file (set Published = No)
               <span style="color:#f97316;font-weight:700">(reversible — customers won't see them but the DB row + images stay)</span>
             </span>
-          </label>
+          </div>
           <div id="inv-sync-status" style="margin-top:14px;color:#666;font-size:13px">Waiting for a file…</div>
           <div id="inv-sync-preview" style="margin-top:14px"></div>
         </div>
