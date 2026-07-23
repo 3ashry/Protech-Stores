@@ -105,25 +105,34 @@ function _invRowsFromText(rawText) {
   };
 
   if (strictRows) {
-    // Strict El-Ashry-جرد mode.
-    for (let i = 0; i < lines.length; i++) {
-      if (!isRowStart[i]) continue;
-      // Balance = the last non-zero NN.NN decimal on the row-start line.
-      DEC_RE.lastIndex = 0;
-      const decs = []; let m;
-      while ((m = DEC_RE.exec(lines[i]))) decs.push(parseFloat(m[1]));
-      const nz = decs.filter(d => d !== 0.00);
-      const qty = nz.length ? nz[nz.length - 1] : 0;
-      // PREFER codes from WRAP lines (usually just the product code, isolated).
-      // Only fall back to inline codes if wrap lines have none. This avoids
-      // grabbing spec tokens like "PSI160" or "MAX" that appear in the name.
-      const wrapCodes = [];
-      let j = i + 1;
-      while (j < lines.length && !isRowStart[j] && j - i <= 4) {
-        wrapCodes.push(...findAllCodes(lines[j]));
-        j++;
+    // Strict El-Ashry-جرد mode. Every row occupies a "body" that starts at a
+    // row-start line ("0.00 ..." — the empty invoice columns) and ends just
+    // before the next row-start. Some rows fit on one line, others wrap onto
+    // 2-4 lines. WADFOW-brand rows in particular put the quantity/name on the
+    // line AFTER the row-start, so we MUST look at the whole body — not just
+    // the row-start line — for both qty and code.
+    const rowStartIdx = [];
+    for (let k = 0; k < lines.length; k++) if (isRowStart[k]) rowStartIdx.push(k);
+    for (let idx = 0; idx < rowStartIdx.length; idx++) {
+      const i = rowStartIdx[idx];
+      const end = idx + 1 < rowStartIdx.length ? rowStartIdx[idx + 1] : lines.length;
+      const body = lines.slice(i, end);
+
+      // qty = last non-zero NN.NN decimal from ANY body line
+      const allDecs = [];
+      for (const bl of body) {
+        DEC_RE.lastIndex = 0;
+        let m;
+        while ((m = DEC_RE.exec(bl))) allDecs.push(parseFloat(m[1]));
       }
-      const inlineCodes = findAllCodes(lines[i]);
+      const nz = allDecs.filter(d => d !== 0.00);
+      const qty = nz.length ? nz[nz.length - 1] : 0;
+
+      // code: prefer wrap-line codes (body[1..]) so we skip spec tokens like
+      // "PSI160" or "MAX" that sometimes appear in the row-start's name text.
+      const wrapCodes = [];
+      for (const bl of body.slice(1)) wrapCodes.push(...findAllCodes(bl));
+      const inlineCodes = findAllCodes(body[0]);
       const code = wrapCodes.length ? wrapCodes[wrapCodes.length - 1]
                  : (inlineCodes.length ? inlineCodes[inlineCodes.length - 1] : null);
       if (code) rows.push({ code, qty });
