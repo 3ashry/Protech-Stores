@@ -93,6 +93,17 @@ function _invRowsFromText(rawText) {
 
   const rows = [];
 
+  // Collect ALL code candidates from a line (in order), not just the first.
+  const findAllCodes = (line) => {
+    CODE_RE.lastIndex = 0;
+    const out = []; let m;
+    while ((m = CODE_RE.exec(line))) {
+      const c = m[1];
+      if (c !== 'TOTAL' && c !== 'WADFOW' && c !== 'WADFO') out.push(c);
+    }
+    return out;
+  };
+
   if (strictRows) {
     // Strict El-Ashry-جرد mode.
     for (let i = 0; i < lines.length; i++) {
@@ -103,13 +114,18 @@ function _invRowsFromText(rawText) {
       while ((m = DEC_RE.exec(lines[i]))) decs.push(parseFloat(m[1]));
       const nz = decs.filter(d => d !== 0.00);
       const qty = nz.length ? nz[nz.length - 1] : 0;
-      // Code on this line or wrap lines (until the next row-start).
-      let code = findCode(lines[i]);
+      // PREFER codes from WRAP lines (usually just the product code, isolated).
+      // Only fall back to inline codes if wrap lines have none. This avoids
+      // grabbing spec tokens like "PSI160" or "MAX" that appear in the name.
+      const wrapCodes = [];
       let j = i + 1;
-      while (!code && j < lines.length && !isRowStart[j] && j - i <= 4) {
-        code = findCode(lines[j]);
+      while (j < lines.length && !isRowStart[j] && j - i <= 4) {
+        wrapCodes.push(...findAllCodes(lines[j]));
         j++;
       }
+      const inlineCodes = findAllCodes(lines[i]);
+      const code = wrapCodes.length ? wrapCodes[wrapCodes.length - 1]
+                 : (inlineCodes.length ? inlineCodes[inlineCodes.length - 1] : null);
       if (code) rows.push({ code, qty });
     }
   } else {
