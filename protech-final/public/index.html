@@ -116,6 +116,7 @@
       <button class="btn btn-primary" onclick="openAddProduct()">+ Add Product</button>
       <button class="btn btn-ghost btn-sm" onclick="downloadInventoryExcel()" style="margin-inline-start:8px">📥 Excel</button>
       <button class="btn btn-ghost btn-sm" onclick="_openBuyPricePreview()" style="margin-inline-start:8px" title="Upload a supplier price list (PDF / Excel / CSV) to bulk-update buy prices">💰 Import buy prices</button>
+      <button class="btn btn-ghost btn-sm" onclick="_openInventorySync()" style="margin-inline-start:8px" title="Upload a stock-take file (PDF / Excel / CSV) to sync quantities">📦 Sync inventory</button>
     </div>
     <div class="stat-grid" id="inv-stats"></div>
     <div class="card">
@@ -478,6 +479,7 @@
 <script src="js/app.js"></script>
 <script src="js/invoice.js"></script>
 <script src="js/bulk_buy_price.js"></script>
+<script src="js/bulk_inventory.js"></script>
 </body>
 </html>
 
