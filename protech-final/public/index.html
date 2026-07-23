@@ -117,6 +117,7 @@
       <button class="btn btn-ghost btn-sm" onclick="downloadInventoryExcel()" style="margin-inline-start:8px">📥 Excel</button>
       <button class="btn btn-ghost btn-sm" onclick="_openBuyPricePreview()" style="margin-inline-start:8px" title="Upload a supplier price list (PDF / Excel / CSV) to bulk-update buy prices">💰 Import buy prices</button>
       <button class="btn btn-ghost btn-sm" onclick="_openInventorySync()" style="margin-inline-start:8px" title="Upload a stock-take file (PDF / Excel / CSV) to sync quantities">📦 Sync inventory</button>
+      <button class="btn btn-ghost btn-sm" onclick="_openSellPricePreview()" style="margin-inline-start:8px" title="Upload a price file (Excel / CSV / PDF) to bulk-update selling prices">💵 Sync sell prices</button>
     </div>
     <div class="stat-grid" id="inv-stats"></div>
     <div class="card">
@@ -480,6 +481,7 @@
 <script src="js/invoice.js"></script>
 <script src="js/bulk_buy_price.js"></script>
 <script src="js/bulk_inventory.js"></script>
+<script src="js/bulk_sell_price.js"></script>
 </body>
 </html>
 
