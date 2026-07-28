@@ -205,6 +205,9 @@ async function loadAll() {
       dbFetch('feedbacks', { order: 'created_at.desc' })
     ]);
     cache.products = products || [];
+    // Seed the notification "seen" set with everything present at login so we
+    // don't fire N notifications for orders that were already there.
+    try { if (typeof notifyForNewOrders === 'function') notifyForNewOrders(orders || []); } catch(_) {}
     cache.orders = orders || [];
     cache.expenses = expenses || [];
     cache.feedbacks = feedbacks || [];
@@ -228,6 +231,10 @@ async function loadAll() {
           dbFetch('feedbacks', { order: 'created_at.desc' })
         ]);
         cache.products = products || [];
+        // Fire browser push notifications for any newly-arrived orders BEFORE
+        // updating the cache (notifyForNewOrders seeds on first call and only
+        // fires on subsequent refreshes for order IDs not seen before).
+        try { if (typeof notifyForNewOrders === 'function') notifyForNewOrders(orders || []); } catch(_) {}
         cache.orders = orders || [];
         cache.expenses = expenses || [];
         cache.feedbacks = feedbacks || [];
