@@ -3,6 +3,8 @@
 //
 // Secrets are read from environment variables (Vercel → Project → Settings →
 // Environment Variables). Never hardcode keys here — this file is in source control.
+import { tgNotifyOrder } from './_telegram.js';
+
 const BOSTA_API_KEY = process.env.BOSTA_API_KEY;
 const BOSTA_BASE_URL = process.env.BOSTA_BASE_URL || 'https://app.bosta.co/api/v2';
 
@@ -232,6 +234,12 @@ export default async function handler(req, res) {
   // Decrement stock server-side (client can't, RLS blocks anonymous product writes).
   // Runs before the ship_code is set, so the idempotency guard works on retries.
   await decrementStockForOrder(orderId);
+
+  // Fire-and-forget Telegram alert — best-effort, never blocks or breaks the
+  // Bosta flow. tgNotifyOrder no-ops silently if TELEGRAM_BOT_TOKEN / _CHAT_ID
+  // aren't set in Vercel env vars.
+  tgNotifyOrder({ orderId, customerName, phone, city, address, total, allowOpen })
+    .catch(e => console.warn('telegram notify failed:', e && e.message));
 
   const cityCode = CITY_MAP[city];
   if (!cityCode) {
