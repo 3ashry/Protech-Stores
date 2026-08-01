@@ -1202,6 +1202,12 @@ function renderFinancials() {
       <td><button class="btn btn-danger btn-xs" onclick="delExpense('${e.id}')">✕</button></td>
     </tr>`).join('') : '<tr><td colspan="5"><div class="empty">No expenses recorded</div></td></tr>';
 
+  // Pure Bosta-minus-Elashry balance — the single number the owner cares
+  // about: "what I should receive from Bosta MINUS what I should pay to
+  // Elashry". Ignores ads / media buyer / other expenses. If positive, that's
+  // the cash you actually keep from those orders' supplier cycle.
+  const bostaMinusElashry = netFromBosta - buyingCost - retShipCost;
+
   // Revenue Summary — realised money in/out on Delivered + Returned orders.
   const rev = document.getElementById('fin-revenue');
   if (rev) rev.innerHTML = `
@@ -1210,7 +1216,12 @@ function renderFinancials() {
     <div class="fin-row subtotal"><span>Net amount from Bosta</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(netFromBosta)}</span></div>
     <div style="height:10px"></div>
     <div class="fin-row"><span>Return shipping cost</span><span class="fin-val deduct">− EGP ${fmt(retShipCost)}</span></div>
-    <div class="fin-row"><span>Total Elashry cost (goods + purchases)</span><span class="fin-val deduct">− EGP ${fmt(buyingCost)}</span></div>`;
+    <div class="fin-row"><span>Total Elashry cost (goods + purchases)</span><span class="fin-val deduct">− EGP ${fmt(buyingCost)}</span></div>
+    <div style="height:12px"></div>
+    <div class="fin-row ${bostaMinusElashry >= 0 ? 'profit' : 'loss'}" style="border-top:2px solid var(--line);padding-top:12px;font-size:1.05rem">
+      <span>${bostaMinusElashry >= 0 ? '🟢 Net (Bosta − Elashry)' : '🔴 Net (Bosta − Elashry)'}</span>
+      <span>EGP ${fmt(Math.abs(bostaMinusElashry))}</span>
+    </div>`;
 
   // Net Profit Summary — realised profit now, plus the projected profit once the pipeline clears.
   const net = document.getElementById('fin-net');
