@@ -1242,6 +1242,9 @@ function renderFinancials() {
   // The two money sections (Bosta receivable + Elashry owed) render into their own containers.
   if (typeof renderBostaCash === 'function') renderBostaCash();
   if (typeof renderSupplierAccount === 'function') renderSupplierAccount();
+
+  // Weekly projected-profit chart (since June).
+  if (typeof renderWeeklyProfitChart === 'function') renderWeeklyProfitChart();
 }
 
 // ── EXPENSES ──
