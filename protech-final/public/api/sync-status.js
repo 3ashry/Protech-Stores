@@ -37,16 +37,68 @@ function calcActualShipping(city, total) {
   return Math.ceil(baseRate + codFee + vat);
 }
 
-// Map a Bosta state value -> our status (null = leave unchanged / handle manually).
-function mapState(stateValue) {
-  const v = (stateValue || '').toLowerCase();
+// Pull the COD amount from a Bosta delivery object. Returns 0 if no cash is
+// being collected on this leg (which — combined with an "in progress" state
+// — is Bosta's way of saying the parcel is on the return trip back to us).
+function extractCOD(d) {
+  const cands = [
+    d?.cod, d?.codAmount, d?.paymentAmount,
+    d?.pricing?.cod, d?.pricing?.codAmount, d?.pricing?.cashOnDelivery,
+  ];
+  for (const c of cands) {
+    if (c == null) continue;
+    const n = parseFloat(typeof c === 'object' ? (c.amount ?? c.value) : c);
+    if (!isNaN(n)) return n;
+  }
+  return null; // unknown → don't use for return-leg inference
+}
+
+// Map a Bosta delivery -> our status (null = leave unchanged / unknown state).
+// Takes the whole delivery so we can use the COD-is-zero signal to detect the
+// return leg (Bosta shows it as "in progress" with no cash to collect).
+function mapState(d) {
+  const v = (d?.state?.value || '').toLowerCase();
   if (!v) return null;
-  if (v.includes('deliver')) return 'Delivered';                         // Delivered
-  if (v.includes('return')) return 'On its way to me';                   // any return = coming back
-  if (v.includes('cancel') || v.includes('terminat')) return null;       // manual
-  if (v.includes('exception') || v.includes('awaiting') || v.includes('on hold') || v.includes('action') || v.includes('issue')) return 'Awaiting Action';
-  if (v.includes('transit') || v.includes('picked') || v.includes('out for delivery') || v.includes('received at') || v.includes('on its way') || v.includes('heading') || v.includes('dispatch')) return 'In Transit';
-  if (v.includes('created') || v.includes('pending') || v.includes('pickup requested') || v.includes('awaiting pickup')) return 'Processing';
+
+  // 1) TERMINAL states first — order arrived at its final destination.
+  //    Returned-to-business / warehouse / merchant / sender = the parcel is
+  //    physically back with us.
+  if (v.includes('returned to business') || v.includes('returned to sender')
+      || v.includes('returned to merchant') || v.includes('returned to warehouse')
+      || v === 'returned') return 'Returned';
+  if (v.includes('deliver')) return 'Delivered';
+
+  // 2) Customer refused / order cancelled by anyone — auto-set so the
+  //    dashboard reflects reality. (Manual protection lives in the caller:
+  //    if the order is ALREADY Cancelled or Returned it won't be re-touched.)
+  if (v.includes('cancel') || v.includes('terminat') || v.includes('rejected')) return 'Cancelled';
+
+  // 3) Awaiting merchant action.
+  if (v.includes('exception') || v.includes('awaiting your action')
+      || v.includes('awaiting action') || v.includes('on hold')
+      || v.includes('action required') || v.includes('issue')) return 'Awaiting Action';
+
+  // 4) Return leg heading BACK to the merchant. Two signals:
+  //    a) explicit "return" word (returning / on return / return to)
+  //    b) currently in-transit AT ALL with COD === 0 → nothing to collect,
+  //       so this trip is not going TO the customer.
+  const cod = extractCOD(d);
+  const inTransitLike = v.includes('transit') || v.includes('progress')
+      || v.includes('picked') || v.includes('warehouse')
+      || v.includes('heading') || v.includes('out for delivery')
+      || v.includes('on its way') || v.includes('dispatch');
+  if (v.includes('return') || v.includes('back to')) return 'On its way to me';
+  if (inTransitLike && cod === 0) return 'On its way to me';
+
+  // 5) Normal outbound in-transit — includes "heading to customer",
+  //    "out for delivery", "picked up", "received at warehouse", etc.
+  if (inTransitLike) return 'In Transit';
+
+  // 6) Not-yet-picked-up.
+  if (v.includes('created') || v.includes('pending') || v === 'new'
+      || v.includes('pickup requested') || v.includes('awaiting pickup')
+      || v.includes('ready to')) return 'Processing';
+
   return null; // unknown -> leave unchanged (logged below)
 }
 
@@ -132,17 +184,21 @@ export default async function handler(req, res) {
     // select=* so a missing column (e.g. calc_shipping before its migration runs) never
     // breaks the whole sync. Missing fields simply read as undefined below.
     const orders = await sbGet('orders?select=*&limit=3000');
-    const MANUAL = ['Returned', 'Cancelled'];
+    // Once an order is Returned AND has been received back into the warehouse
+    // (warehouse_confirmed=true), it's fully closed — don't let the sync
+    // overwrite it with anything else. Everything else (including Cancelled)
+    // is fair game so Bosta's authoritative state stays in sync.
     const changes = [];
     const feeLog = [];
     for (const o of (orders || [])) {
       const d = byRef[o.id] || (o.ship_code && byTrack[o.ship_code]);
       if (!d) continue;
-      const mapped = mapState(d.state?.value);
+      const mapped = mapState(d);
       const patch = {};
 
-      // 1) Auto-advance status (never for manual Returned/Cancelled or already-restocked).
-      if (!o.warehouse_confirmed && !MANUAL.includes(o.status)) {
+      // 1) Auto-advance status (skip only if warehouse has already reclaimed
+      //    the parcel — a full close, nothing more to sync).
+      if (!o.warehouse_confirmed) {
         if (mapped && mapped !== o.status) patch.status = mapped;
         else if (!mapped && d.state?.value) unknownStates.add(d.state.value);
       }
