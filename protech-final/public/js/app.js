@@ -1170,27 +1170,33 @@ function renderFinancials() {
   // Delivered product sales (excl. shipping) — used by the media buyer fee.
   const productSalesDelivered = delivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
 
-  // Media buyer fee: only what accrued SINCE the last payment. Each payment
-  // resets the cycle. Uses precise `created_at` timestamps on both sides so
-  // an order/ad logged the same day the media buyer was paid falls on the
-  // right side of the boundary — anything with a timestamp strictly greater
-  // than the payment's timestamp goes into the new cycle.
+  // Media buyer cycle: what accrued strictly AFTER the last Media Buyer
+  // payment AND on/before the configured cycle-end date. `MB_CYCLE_END_ISO`
+  // is a hard cutoff (change/remove it whenever the next cycle opens); we
+  // use the end-of-day so anything logged on 31 July is included.
+  const MB_CYCLE_END_ISO = '2026-07-31T23:59:59';
   const mbPayments = cache.expenses.filter(e => e.category === 'Media Buyer');
   const lastPaymentAt = mbPayments.reduce((max, e) => {
     const t = String(e.created_at || e.date || '');
     return t > max ? t : max;
   }, '');
-  const afterPayment = (t) => !lastPaymentAt || String(t || '') > lastPaymentAt;
+  const inCycle = (t) => {
+    const s = String(t || '');
+    if (!s) return false;
+    if (lastPaymentAt && s <= lastPaymentAt) return false;   // before last payment → prev cycle
+    if (MB_CYCLE_END_ISO && s > MB_CYCLE_END_ISO) return false; // after cutoff → next cycle
+    return true;
+  };
 
-  // Paid-ads expenses logged after the payment.
+  // Paid-ads expenses inside the cycle window.
   const paidAdsCycle = cache.expenses
-    .filter(e => e.category === 'Paid Ads' && afterPayment(e.created_at || e.date))
+    .filter(e => e.category === 'Paid Ads' && inCycle(e.created_at || e.date))
     .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
 
-  // ONLY orders whose status is 'Delivered' AND which were placed after the
-  // payment — the media buyer is rewarded for deliveries in this cycle, not
-  // for orders that only reached in-transit / cancelled / awaiting action.
-  const cycleDelivered = delivered.filter(o => afterPayment(o.created_at || o.date));
+  // ONLY orders whose status is 'Delivered' AND which were placed inside the
+  // cycle window — the media buyer is rewarded for deliveries in this cycle,
+  // not for orders that only reached in-transit / cancelled / awaiting action.
+  const cycleDelivered = delivered.filter(o => inCycle(o.created_at || o.date));
   const cycleSales = cycleDelivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
 
   const adsShare = paidAdsCycle * 0.20;
@@ -1199,18 +1205,19 @@ function renderFinancials() {
   const mbOwed = Math.round(Math.max(0, mediaBuyerFee) * 100) / 100;
 
   // Header label so the admin knows the cycle boundary.
+  const cutoffDay = MB_CYCLE_END_ISO ? MB_CYCLE_END_ISO.slice(0, 10) : '';
   const lastPaidTxt = lastPaymentAt
-    ? `آخر دفعة: ${lastPaymentAt.slice(0, 10)}`
-    : 'لم يتم دفع أي دفعة سابقة — يحسب من البداية';
+    ? `من ${lastPaymentAt.slice(0, 10)} إلى ${cutoffDay}`
+    : `من البداية إلى ${cutoffDay}`;
 
   const mbEl = document.getElementById('fin-mediabuyer');
   if (mbEl) mbEl.innerHTML = `
     <div class="fin-row" style="opacity:.75;font-size:12px"><span>${lastPaidTxt}</span><span>${cycleDelivered.length} <b>delivered</b> orders in this cycle</span></div>
     <div class="fin-row"><span>Paid ads spend (this cycle)</span><span class="fin-val">EGP ${fmt(paidAdsCycle)}</span></div>
     <div class="fin-row"><span>20% of paid ads</span><span class="fin-val">EGP ${fmt(adsShare)}</span></div>
-    <div class="fin-row"><span><b>Delivered</b> product sales (this cycle, excl. shipping)</span><span class="fin-val">EGP ${fmt(cycleSales)}</span></div>
+    <div class="fin-row"><span><b>Delivered</b> product sales (this cycle, excl. shipping, up to ${cutoffDay})</span><span class="fin-val">EGP ${fmt(cycleSales)}</span></div>
     <div class="fin-row"><span>1% of delivered sales</span><span class="fin-val">EGP ${fmt(salesShare)}</span></div>
-    <div class="fin-row subtotal"><span>Owed now (since last payment)</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(mbOwed)}</span></div>
+    <div class="fin-row subtotal"><span>Owed now (cycle ends ${cutoffDay})</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(mbOwed)}</span></div>
     <div style="margin-top:12px">
       <button class="btn btn-primary btn-sm" ${mbOwed > 0 ? '' : 'disabled'} onclick="payMediaBuyer(${mbOwed})">✅ Mark as paid (record EGP ${fmt(mbOwed)} to expenses)</button>
     </div>`;
