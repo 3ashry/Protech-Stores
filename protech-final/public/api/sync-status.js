@@ -119,17 +119,30 @@ async function fetchAllDeliveries() {
   return all;
 }
 
-// Pull the actual shipping fee (number) out of a Bosta delivery object, trying the known
-// fee fields on the delivery and its pricing sub-object.
+// Pull the ACTUAL shipping fee Bosta charged out of a delivery object.
+// The reliable field is top-level `shipmentFees` on the detail endpoint —
+// it's the base fee BEFORE VAT (Egypt VAT = 14%). We add VAT so what we
+// store on `actual_shipping` matches what Bosta actually debits (e.g. a
+// Borg ElArab→Cairo shipment shows shipmentFees:112 → 112×1.14 = 127.68 → 128,
+// which matches Bosta's dashboard within 1 EGP rounding).
+// Falls back to the older `pricing.*` fields if a future response uses them.
+const VAT_RATE = 0.14;
 function pickFee(del) {
   if (!del || typeof del !== 'object') return null;
+  // 1) Primary source — top-level shipmentFees (base, pre-VAT).
+  const base = parseFloat(del.shipmentFees);
+  if (!isNaN(base) && base > 0) return Math.round(base * (1 + VAT_RATE));
+  // 2) Fallbacks — some responses include a pricing sub-object.
   const p = del.pricing || {};
   const cands = [
-    p.priceAfterVat, p.total, p.businessAmount, p.priceBeforeVat, p.shippingFee, p.deliveryFee,
+    p.priceAfterVat, p.total, p.businessAmount, p.shippingFee, p.deliveryFee,
     p.cost, p.amount, p.deliveryCost, p.finalPrice,
     del.priceAfterVat, del.shippingFee, del.deliveryFee, del.price, del.cost,
   ];
   for (const c of cands) { const n = parseFloat(c && c.amount != null ? c.amount : c); if (!isNaN(n) && n > 0) return n; }
+  // 3) pricing.priceBeforeVat — treat like shipmentFees (add VAT).
+  const preVat = parseFloat(p.priceBeforeVat);
+  if (!isNaN(preVat) && preVat > 0) return Math.round(preVat * (1 + VAT_RATE));
   return null;
 }
 
@@ -211,12 +224,19 @@ export default async function handler(req, res) {
       const isFinal = effStatus === 'Delivered' || effStatus === 'Returned';
       let feeSrc = null;
       if (isFinal) {
-        // Prefer the REAL fee from Bosta's dashboard/API; fall back to the formula only if
-        // Bosta doesn't expose it.
+        // Prefer the REAL fee from Bosta's dashboard/API (shipmentFees × 1.14);
+        // fall back to the formula only if Bosta hasn't populated it yet.
+        // When Bosta gives us a real number, ALWAYS write it — previous values
+        // were formula-guesses and were commonly over-counting.
         let cost = await fetchDeliveryFee(o.bosta_id, d, feeLog);
         feeSrc = 'bosta';
         if (!(typeof cost === 'number' && cost > 0)) { cost = calcActualShipping(o.city, o.total); feeSrc = 'formula'; }
-        if (cost > 0 && cost !== parseFloat(o.actual_shipping || 0)) patch.actual_shipping = cost;
+        const currentStored = parseFloat(o.actual_shipping || 0);
+        // Bosta value: always write when it differs. Formula value: only write when we have none.
+        const shouldWrite = feeSrc === 'bosta'
+          ? (cost !== currentStored)
+          : (currentStored <= 0 && cost > 0);
+        if (shouldWrite) patch.actual_shipping = cost;
         else feeSrc = null;
       }
 
