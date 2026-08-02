@@ -1170,23 +1170,41 @@ function renderFinancials() {
   // Delivered product sales (excl. shipping) — used by the media buyer fee.
   const productSalesDelivered = delivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
 
-  // Media buyer fee = 20% of paid-ads spend + 1% of DELIVERED product sales (no shipping).
-  const paidAds = cache.expenses.filter(e => e.category === 'Paid Ads').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-  const adsShare = paidAds * 0.20;
-  const salesShare = productSalesDelivered * 0.01;
+  // Media buyer fee: only what accrued SINCE the last payment. Each payment
+  // "resets" the cycle so we're not always subtracting the running total from
+  // the running fee — just look at ads spend + delivered sales after the most
+  // recent Media Buyer expense date. Falls back to all-time if never paid.
+  const mbPayments = cache.expenses.filter(e => e.category === 'Media Buyer');
+  const lastPaymentDate = mbPayments.reduce((max, e) => {
+    const d = String(e.date || e.created_at || '');
+    return d > max ? d : max;
+  }, '');
+  const cycleFilter = (dateStr) => !lastPaymentDate || String(dateStr || '') > lastPaymentDate;
+
+  const paidAdsCycle = cache.expenses
+    .filter(e => e.category === 'Paid Ads' && cycleFilter(e.date || e.created_at))
+    .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const cycleDelivered = delivered.filter(o => cycleFilter(o.date || o.created_at));
+  const cycleSales = cycleDelivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
+
+  const adsShare = paidAdsCycle * 0.20;
+  const salesShare = cycleSales * 0.01;
   const mediaBuyerFee = adsShare + salesShare;
-  // Already paid = sum of "Media Buyer" expenses. Owed now = total fee to date − already paid.
-  const mbPaid = cache.expenses.filter(e => e.category === 'Media Buyer').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-  const mbOwed = Math.round(Math.max(0, mediaBuyerFee - mbPaid) * 100) / 100;
+  const mbOwed = Math.round(Math.max(0, mediaBuyerFee) * 100) / 100;
+
+  // Header label so the admin knows the cycle boundary.
+  const lastPaidTxt = lastPaymentDate
+    ? `آخر دفعة: ${lastPaymentDate.slice(0, 10)}`
+    : 'لم يتم دفع أي دفعة سابقة — يحسب من البداية';
+
   const mbEl = document.getElementById('fin-mediabuyer');
   if (mbEl) mbEl.innerHTML = `
-    <div class="fin-row"><span>Total paid ads (expense category "Paid Ads")</span><span class="fin-val">EGP ${fmt(paidAds)}</span></div>
+    <div class="fin-row" style="opacity:.75;font-size:12px"><span>${lastPaidTxt}</span><span>${cycleDelivered.length} orders in this cycle</span></div>
+    <div class="fin-row"><span>Paid ads (this cycle)</span><span class="fin-val">EGP ${fmt(paidAdsCycle)}</span></div>
     <div class="fin-row"><span>20% of paid ads</span><span class="fin-val">EGP ${fmt(adsShare)}</span></div>
-    <div class="fin-row"><span>Delivered product sales (excl. shipping)</span><span class="fin-val">EGP ${fmt(productSalesDelivered)}</span></div>
+    <div class="fin-row"><span>Delivered product sales (this cycle, excl. shipping)</span><span class="fin-val">EGP ${fmt(cycleSales)}</span></div>
     <div class="fin-row"><span>1% of delivered sales</span><span class="fin-val">EGP ${fmt(salesShare)}</span></div>
-    <div class="fin-row subtotal"><span>Total fee to date</span><span class="fin-val">EGP ${fmt(mediaBuyerFee)}</span></div>
-    <div class="fin-row"><span>Already paid to media buyer</span><span class="fin-val deduct">− EGP ${fmt(mbPaid)}</span></div>
-    <div class="fin-row subtotal"><span>Owed now</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(mbOwed)}</span></div>
+    <div class="fin-row subtotal"><span>Owed now (since last payment)</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(mbOwed)}</span></div>
     <div style="margin-top:12px">
       <button class="btn btn-primary btn-sm" ${mbOwed > 0 ? '' : 'disabled'} onclick="payMediaBuyer(${mbOwed})">✅ Mark as paid (record EGP ${fmt(mbOwed)} to expenses)</button>
     </div>`;
