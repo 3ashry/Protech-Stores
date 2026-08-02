@@ -14,7 +14,7 @@
 //
 // Env: WA_* (see _wa.js), SUPABASE_URL, SUPABASE_KEY (service_role), CRON_SECRET,
 //      optional WA_CONFIRM_DELAY_HOURS (default 6).
-import { sendConfirmTemplate, waConfigured } from './_wa.js';
+import { sendConfirmTemplate, sendFeedbackTemplate, waConfigured } from './_wa.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
@@ -101,7 +101,37 @@ export default async function handler(req, res) {
         failed.push({ code: o.code, error: r.error });
       }
     }
-    const result = { ok: true, test, onlyPhone: ONLY_PHONE || null, delayHours: DELAY_HOURS, candidates: orders.length, sent: sent.length, failed: failed.length, waitingShipCode: waitingShipCode.length, details: { sent, failed: failed.slice(0, 5), waitingShipCode: waitingShipCode.slice(0, 5) } };
+    // ─────────────────────────────────────────────────────────────────
+    //  FEEDBACK PASS — for orders now Delivered, ask the customer to rate.
+    //  Fired ASAP after the delivery status flips. `wa_feedback_sent_at`
+    //  prevents re-sending. Phone-lock (WA_ONLY_PHONE) still respected.
+    // ─────────────────────────────────────────────────────────────────
+    const fbParts = [
+      'select=id,code,phone,customer_name',
+      'status=eq.Delivered',
+      'wa_feedback_sent_at=is.null',
+      'phone=not.is.null',
+    ];
+    if (ONLY_PHONE) fbParts.push(`phone=eq.${encodeURIComponent(ONLY_PHONE)}`);
+    fbParts.push('order=updated_at.desc', 'limit=100');
+    const fbOrders = await sbGet(`orders?${fbParts.join('&')}`);
+    const fbSent = [], fbFailed = [];
+    for (const o of fbOrders) {
+      const r = await sendFeedbackTemplate(o);
+      if (r.ok) {
+        await sbPatch(o.id, { wa_feedback_sent_at: new Date().toISOString(), wa_feedback_msg_id: r.msgId });
+        fbSent.push({ code: o.code, msgId: r.msgId });
+      } else {
+        fbFailed.push({ code: o.code, error: r.error });
+      }
+    }
+
+    const result = { ok: true, test, onlyPhone: ONLY_PHONE || null, delayHours: DELAY_HOURS,
+      confirm: { candidates: orders.length, sent: sent.length, failed: failed.length, waitingShipCode: waitingShipCode.length,
+        details: { sent, failed: failed.slice(0, 5), waitingShipCode: waitingShipCode.slice(0, 5) } },
+      feedback: { candidates: fbOrders.length, sent: fbSent.length, failed: fbFailed.length,
+        details: { sent: fbSent.slice(0, 10), failed: fbFailed.slice(0, 5) } },
+    };
     console.log('wa-cron', JSON.stringify(result));
     return res.status(200).json(result);
   } catch (e) {

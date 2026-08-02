@@ -14,6 +14,8 @@ const WA_TOKEN = process.env.WA_TOKEN;
 const WA_PHONE_NUMBER_ID = process.env.WA_PHONE_NUMBER_ID;
 const WA_TEMPLATE_NAME = process.env.WA_TEMPLATE_NAME || 'order_confirm';
 const WA_TEMPLATE_LANG = process.env.WA_TEMPLATE_LANG || 'ar';
+// Post-delivery feedback template. Approved separately in Meta Business Manager.
+const WA_FEEDBACK_TEMPLATE = process.env.WA_FEEDBACK_TEMPLATE || 'order_feedback';
 
 export function waConfigured() {
   return !!(WA_TOKEN && WA_PHONE_NUMBER_ID);
@@ -94,6 +96,39 @@ export async function sendConfirmTemplate(order = {}) {
           { type: 'body', parameters: params.map(text => ({ type: 'text', text })) },
           { type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: 'CONFIRM' }] },
           { type: 'button', sub_type: 'quick_reply', index: '1', parameters: [{ type: 'payload', payload: 'CANCEL' }] },
+        ],
+      },
+    }),
+  });
+  const data = await r.json().catch(() => null);
+  if (!r.ok) return { ok: false, error: data };
+  return { ok: true, msgId: data?.messages?.[0]?.id || null };
+}
+
+// Post-delivery feedback template. Two body variables (customer name, order
+// code) + three quick-reply rating buttons. Payloads RATING_5/3/1 are handled
+// by wa-webhook.js which auto-saves the rating and sends a thank-you back.
+// Returns { ok, msgId, error }.
+export async function sendFeedbackTemplate(order = {}) {
+  const params = [
+    String(order.customer_name || 'عميلنا العزيز'),
+    String(order.code || ''),
+  ];
+  const r = await fetch(`https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to: waPhone(order.phone),
+      type: 'template',
+      template: {
+        name: WA_FEEDBACK_TEMPLATE,
+        language: { code: WA_TEMPLATE_LANG },
+        components: [
+          { type: 'body', parameters: params.map(text => ({ type: 'text', text })) },
+          { type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: 'RATING_5' }] },
+          { type: 'button', sub_type: 'quick_reply', index: '1', parameters: [{ type: 'payload', payload: 'RATING_3' }] },
+          { type: 'button', sub_type: 'quick_reply', index: '2', parameters: [{ type: 'payload', payload: 'RATING_1' }] },
         ],
       },
     }),

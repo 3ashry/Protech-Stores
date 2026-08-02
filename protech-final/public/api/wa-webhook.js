@@ -18,6 +18,10 @@ import { waPhone, sendText } from './_wa.js';
 // Auto-replies sent back to the customer after they confirm / cancel.
 const CONFIRM_REPLY = 'شكراً لطلبك من بروتيك 😊\nمدة الشحن المتوقعة 3 أيام عمل.\nللاستفسار ابعتلنا على واتساب على الرقم ده: 01034482071';
 const CANCEL_REPLY = 'تم إلغاء طلبك.';
+// Auto-reply after a rating tap on the feedback template.
+const FEEDBACK_THANKS_HIGH = 'شكراً جداً لتقييمك 🌟\nيسعدنا خدمتك دائماً، ولو محتاج أي حاجة إحنا معاك.';
+const FEEDBACK_THANKS_MID  = 'شكراً على تقييمك 🙏\nلو عندك أي ملاحظة تحب تشاركنا بيها، اكتبها هنا أو كلمنا على 01034482071.';
+const FEEDBACK_THANKS_LOW  = 'شكراً على وقتك وصراحتك 🙏\nحابين نفهم إيه اللي مضايقك عشان نصلحه — اكتب لنا هنا أو كلمنا على 01034482071.';
 
 const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN;
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -68,22 +72,57 @@ export default async function handler(req, res) {
     if (!msg || !SUPABASE_URL || !SUPABASE_KEY) return res.status(200).json({ received: true });
 
     // Work out the customer's intent from a button tap OR a typed message.
-    let intent = null; // 'confirm' | 'cancel'
+    // Intent is one of: 'confirm' | 'cancel' | 'rating' (with .rating = 5/3/1).
+    let intent = null;
+    let rating = null;
+    const readRatingPayload = (p) => {
+      if (p === 'RATING_5') return 5;
+      if (p === 'RATING_3') return 3;
+      if (p === 'RATING_1') return 1;
+      return null;
+    };
     if (msg.type === 'button') {
       const payload = msg.button?.payload || '';
       const text = msg.button?.text || '';
-      if (payload === 'CONFIRM' || CONFIRM_RE.test(text)) intent = 'confirm';
+      const r = readRatingPayload(payload);
+      if (r != null) { intent = 'rating'; rating = r; }
+      else if (payload === 'CONFIRM' || CONFIRM_RE.test(text)) intent = 'confirm';
       else if (payload === 'CANCEL' || CANCEL_RE.test(text)) intent = 'cancel';
     } else if (msg.type === 'interactive') {
-      // Interactive reply-button style, just in case.
       const br = msg.interactive?.button_reply || {};
       const id = br.id || '', title = br.title || '';
-      if (id === 'CONFIRM' || CONFIRM_RE.test(title)) intent = 'confirm';
+      const r = readRatingPayload(id);
+      if (r != null) { intent = 'rating'; rating = r; }
+      else if (id === 'CONFIRM' || CONFIRM_RE.test(title)) intent = 'confirm';
       else if (id === 'CANCEL' || CANCEL_RE.test(title)) intent = 'cancel';
     } else if (msg.type === 'text') {
       const body = (msg.text?.body || '').trim();
       if (CONFIRM_RE.test(body)) intent = 'confirm';
       else if (CANCEL_RE.test(body)) intent = 'cancel';
+    }
+
+    // ── Feedback rating branch ─────────────────────────────────────────
+    if (intent === 'rating') {
+      const patch = { feedback_rating: rating, feedback_at: new Date().toISOString() };
+      let updated = [];
+      // 1) Match by the id of the feedback template message we sent.
+      const repliedToId = msg.context?.id;
+      if (repliedToId) updated = await sbPatchRep(`orders?wa_feedback_msg_id=eq.${encodeURIComponent(repliedToId)}`, patch);
+      // 2) Fallback: newest delivered order sent to this phone still without a rating.
+      if (!updated.length) {
+        const from = String(msg.from || '').replace(/\D/g, '');
+        if (from) {
+          const rows = await sbGet('orders?select=id,phone&status=eq.Delivered&feedback_rating=is.null&wa_feedback_sent_at=not.is.null&order=wa_feedback_sent_at.desc&limit=50');
+          const match = rows.find(o => waPhone(o.phone) === from);
+          if (match) await sbPatchRep(`orders?id=eq.${encodeURIComponent(match.id)}`, patch);
+        }
+      }
+      // 3) Auto-reply: tailor the thank-you to how happy they said they were.
+      if (msg.from) {
+        const reply = rating >= 5 ? FEEDBACK_THANKS_HIGH : (rating >= 3 ? FEEDBACK_THANKS_MID : FEEDBACK_THANKS_LOW);
+        await sendText(msg.from, reply);
+      }
+      return res.status(200).json({ received: true });
     }
 
     if (intent) {
