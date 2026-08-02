@@ -1,10 +1,25 @@
 // protech-final/public/api/bosta-debug.js
-// One-off diagnostic: fetch a single delivery from Bosta by tracking number
-// and return the raw response so we can see WHERE the actual fee lives.
+// Diagnostic: fetch a specific delivery from Bosta by tracking number.
 // Usage: /api/bosta-debug?track=7813516714
-// Delete this file (or leave it, it only reads) after we've fixed pickFee.
 const BOSTA_API_KEY = process.env.BOSTA_API_KEY;
 const BOSTA_BASE_URL = process.env.BOSTA_BASE_URL || 'https://app.bosta.co/api/v2';
+
+// Paginate through the search endpoint until we find the exact tracking match.
+async function findByTracking(track) {
+  for (let page = 1; page <= 15; page++) {
+    const r = await fetch(`${BOSTA_BASE_URL}/deliveries/search`, {
+      method: 'POST',
+      headers: { Authorization: BOSTA_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limit: 100, page, pageNumber: page }),
+    });
+    const d = await r.json().catch(() => null);
+    const list = d?.data?.deliveries || [];
+    const hit = list.find(x => x.trackingNumber === track);
+    if (hit) return hit;
+    if (list.length < 100) break;
+  }
+  return null;
+}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -13,37 +28,34 @@ export default async function handler(req, res) {
   if (!track) return res.status(400).json({ error: 'pass ?track=<tracking number>' });
 
   try {
-    // 1) Find the delivery via search (this is what sync-status uses to enumerate).
-    const searchRes = await fetch(`${BOSTA_BASE_URL}/deliveries/search`, {
-      method: 'POST',
-      headers: { Authorization: BOSTA_API_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ trackingNumber: track, limit: 5, page: 1 }),
+    const searchHit = await findByTracking(track);
+    if (!searchHit) return res.status(404).json({ error: `No delivery found for tracking ${track}` });
+    const bostaId = searchHit._id;
+
+    // Detail endpoint (this is where `shipmentFees` lives).
+    const dr = await fetch(`${BOSTA_BASE_URL}/deliveries/business/${encodeURIComponent(bostaId)}`, {
+      headers: { Authorization: BOSTA_API_KEY },
     });
-    const searchJson = await searchRes.json().catch(() => null);
-    const searchHit = (searchJson?.data?.deliveries || []).find(d => d.trackingNumber === track)
-      || searchJson?.data?.deliveries?.[0] || null;
-    const bostaId = searchHit?._id;
+    const detail = await dr.json().catch(() => null);
+    const del = detail?.data || detail;
 
-    // 2) Also hit the detail endpoint (usually has pricing that search omits).
-    let detail = null;
-    if (bostaId) {
-      const dr = await fetch(`${BOSTA_BASE_URL}/deliveries/business/${encodeURIComponent(bostaId)}`, {
-        headers: { Authorization: BOSTA_API_KEY },
-      });
-      detail = await dr.json().catch(() => null);
-    }
+    // Compute what our current sync would produce.
+    const shipmentFees = parseFloat(del?.shipmentFees);
+    const computedActual = !isNaN(shipmentFees) && shipmentFees > 0
+      ? Math.round(shipmentFees * 1.14)
+      : null;
 
-    // 3) Return EVERY top-level key + the pricing object from both, so we can
-    //    spot which field holds the real 127 EGP fee.
     return res.status(200).json({
       track,
+      matchedTracking: searchHit.trackingNumber,
       bostaId,
-      searchHit_topLevelKeys: searchHit ? Object.keys(searchHit) : null,
-      searchHit_pricing: searchHit?.pricing || null,
-      searchHit_state: searchHit?.state || null,
-      detail_topLevelKeys: detail?.data ? Object.keys(detail.data) : (detail ? Object.keys(detail) : null),
-      detail_pricing: (detail?.data?.pricing || detail?.pricing) || null,
-      detail_fullResponse: detail,
+      state: del?.state?.value || searchHit?.state?.value,
+      cod: del?.cod ?? searchHit?.cod,
+      city: del?.dropOffAddress?.city?.nameAr || del?.dropOffAddress?.city?.name,
+      shipmentFees_raw: del?.shipmentFees,
+      pricing: del?.pricing || null,
+      computedActualShipping_withVat: computedActual,
+      note: 'computedActualShipping_withVat = shipmentFees × 1.14 (what our sync writes).',
     });
   } catch (e) {
     return res.status(500).json({ error: e.message });
