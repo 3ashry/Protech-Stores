@@ -1211,16 +1211,43 @@ function renderFinancials() {
     : `من البداية إلى ${cutoffDay}`;
 
   const mbEl = document.getElementById('fin-mediabuyer');
-  if (mbEl) mbEl.innerHTML = `
+  if (mbEl) {
+    const ordersRows = cycleDelivered.length
+      ? cycleDelivered.map(o => `
+          <tr>
+            <td>${esc(o.code || '')}</td>
+            <td style="opacity:.75">${esc(String(o.created_at || o.date || '').slice(0, 10))}</td>
+            <td>${esc(o.customer_name || '')}</td>
+            <td style="text-align:right">EGP ${fmt(parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0))}</td>
+          </tr>`).join('')
+      : `<tr><td colspan="4" style="text-align:center;opacity:.6;padding:12px">No delivered orders in this cycle yet</td></tr>`;
+    mbEl.innerHTML = `
     <div class="fin-row" style="opacity:.75;font-size:12px"><span>${lastPaidTxt}</span><span>${cycleDelivered.length} <b>delivered</b> orders in this cycle</span></div>
     <div class="fin-row"><span>Paid ads spend (this cycle)</span><span class="fin-val">EGP ${fmt(paidAdsCycle)}</span></div>
     <div class="fin-row"><span>20% of paid ads</span><span class="fin-val">EGP ${fmt(adsShare)}</span></div>
     <div class="fin-row"><span><b>Delivered</b> product sales (this cycle, excl. shipping, up to ${cutoffDay})</span><span class="fin-val">EGP ${fmt(cycleSales)}</span></div>
     <div class="fin-row"><span>1% of delivered sales</span><span class="fin-val">EGP ${fmt(salesShare)}</span></div>
     <div class="fin-row subtotal"><span>Owed now (cycle ends ${cutoffDay})</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(mbOwed)}</span></div>
+    <details style="margin-top:12px;border:1px solid var(--line);border-radius:8px;padding:8px 12px">
+      <summary style="cursor:pointer;font-weight:600">📋 Delivered orders in this cycle (${cycleDelivered.length})</summary>
+      <div style="max-height:280px;overflow:auto;margin-top:8px">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead>
+            <tr style="text-align:right;border-bottom:1px solid var(--line)">
+              <th style="text-align:left;padding:6px 4px">Code</th>
+              <th style="text-align:left;padding:6px 4px">Date</th>
+              <th style="text-align:left;padding:6px 4px">Customer</th>
+              <th style="text-align:right;padding:6px 4px">Product sales</th>
+            </tr>
+          </thead>
+          <tbody>${ordersRows}</tbody>
+        </table>
+      </div>
+    </details>
     <div style="margin-top:12px">
       <button class="btn btn-primary btn-sm" ${mbOwed > 0 ? '' : 'disabled'} onclick="payMediaBuyer(${mbOwed})">✅ Mark as paid (record EGP ${fmt(mbOwed)} to expenses)</button>
     </div>`;
+  }
 
   // General expenses list — exclude "Elashry" (shown in the Elashry supplier box instead).
   const generalExpenses = cache.expenses.filter(e => e.category !== 'Elashry');
@@ -1533,19 +1560,44 @@ function financeData() {
   const notReturnedCost = returned.filter(o => !o.warehouse_confirmed)
     .reduce((a, o) => a + (o.products || []).reduce((b, p) => b + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0), 0);
 
-  // Media buyer
+  // Media buyer — MUST mirror the cycle logic used in renderFinancials so the
+  // Excel export shows the same numbers as the dashboard card.
+  const MB_CYCLE_END_ISO = '2026-07-31T23:59:59';
   const productSalesDelivered = delivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
-  const paidAds = expenses.filter(e => e.category === 'Paid Ads').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-  const adsShare = paidAds * 0.20;
-  const salesShare = productSalesDelivered * 0.01;
+  const paidAdsAll = expenses.filter(e => e.category === 'Paid Ads').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const mbPayments = expenses.filter(e => e.category === 'Media Buyer');
+  const lastPaymentAt = mbPayments.reduce((max, e) => {
+    const t = String(e.created_at || e.date || '');
+    return t > max ? t : max;
+  }, '');
+  const inCycle = (t) => {
+    const s = String(t || '');
+    if (!s) return false;
+    if (lastPaymentAt && s <= lastPaymentAt) return false;
+    if (MB_CYCLE_END_ISO && s > MB_CYCLE_END_ISO) return false;
+    return true;
+  };
+  const cycleDelivered = delivered
+    .filter(o => inCycle(o.created_at || o.date))
+    .slice()
+    .sort((a, b) => String(a.created_at || a.date || '').localeCompare(String(b.created_at || b.date || '')));
+  const cycleSales = cycleDelivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
+  const paidAdsCycle = expenses
+    .filter(e => e.category === 'Paid Ads' && inCycle(e.created_at || e.date))
+    .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const adsShare = paidAdsCycle * 0.20;
+  const salesShare = cycleSales * 0.01;
   const mbFee = adsShare + salesShare;
-  const mbPaid = expenses.filter(e => e.category === 'Media Buyer').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-  const mbOwed = Math.max(0, mbFee - mbPaid);
+  const mbPaid = mbPayments.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const mbOwed = Math.max(0, mbFee);
+  const cycleFrom = lastPaymentAt ? lastPaymentAt.slice(0, 10) : '(beginning)';
+  const cycleTo = MB_CYCLE_END_ISO.slice(0, 10);
 
   const generalExpenses = expenses.filter(e => e.category !== 'Elashry');
   return { collected, delShip, retShip, shouldReceive, receipts, received, bostaRemaining,
     goodsOwed, purchases, purchasesTotal, owed, payments, paid, elashryRemaining, notReturnedCost,
-    productSalesDelivered, paidAds, adsShare, salesShare, mbFee, mbPaid, mbOwed, generalExpenses };
+    productSalesDelivered, paidAds: paidAdsAll, paidAdsCycle, adsShare, salesShare, mbFee, mbPaid, mbOwed,
+    cycleDelivered, cycleSales, cycleFrom, cycleTo, generalExpenses };
 }
 
 const r2 = n => Math.round((parseFloat(n) || 0) * 100) / 100;
@@ -1576,13 +1628,24 @@ function _finAoa(section, d) {
   ];
   if (section === 'mediabuyer') return [
     ['Media Buyer Payment (20% ads + 1% delivered sales)'], [],
-    ['Total paid ads', r2(d.paidAds)],
+    [`Cycle window: ${d.cycleFrom} → ${d.cycleTo}`], [],
+    ['Paid ads spend (this cycle)', r2(d.paidAdsCycle)],
     ['20% of paid ads', r2(d.adsShare)],
-    ['Delivered product sales (excl. shipping)', r2(d.productSalesDelivered)],
+    ['Delivered product sales (this cycle, excl. shipping)', r2(d.cycleSales)],
     ['1% of delivered sales', r2(d.salesShare)],
-    ['Total fee to date', r2(d.mbFee)],
-    ['Already paid to media buyer', r2(d.mbPaid)],
-    ['Owed now', r2(d.mbOwed)],
+    ['Total owed now', r2(d.mbOwed)], [],
+    [`Delivered orders in this cycle (${d.cycleDelivered.length})`], [],
+    ['Order code', 'Date', 'Customer', 'Phone', 'City', 'Total (EGP)', 'Shipping (EGP)', 'Product sales (EGP)'],
+    ...d.cycleDelivered.map(o => [
+      o.code || '',
+      String(o.created_at || o.date || '').slice(0, 10),
+      o.customer_name || '',
+      o.phone || '',
+      o.city || '',
+      r2(o.total),
+      r2(o.est_shipping),
+      r2(parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)),
+    ]),
   ];
   if (section === 'expenses') return [
     ['Expenses'], [],
@@ -1596,7 +1659,11 @@ function _dlWb(wb, filename) {
   XLSX.writeFile(wb, filename);
   showToast('Excel downloaded ✓');
 }
-function _sheet(aoa) { const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [{ wch: 44 }, { wch: 18 }, { wch: 28 }]; return ws; }
+function _sheet(aoa) {
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{ wch: 22 }, { wch: 14 }, { wch: 26 }, { wch: 16 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 16 }];
+  return ws;
+}
 const _today = () => new Date().toISOString().slice(0, 10);
 
 function downloadBostaExcel() { const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, _sheet(_finAoa('bosta', financeData())), 'Bosta'); _dlWb(wb, `Protech_Bosta_${_today()}.xlsx`); }
