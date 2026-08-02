@@ -1266,6 +1266,16 @@ function renderFinancials() {
   // the cash you actually keep from those orders' supplier cycle.
   const bostaMinusElashry = netFromBosta - buyingCost - retShipCost;
 
+  // ── Delivered-only profit ─────────────────────────────────────────────
+  // Answers: "did the orders that actually delivered make money, BEFORE any
+  // other costs (ads, media buyer, expenses, returns)?"  Only looks at
+  // Delivered orders: money received from Bosta for them vs. their Elashry
+  // buy cost.  Nothing else added, nothing else subtracted.
+  const deliveredElashryOwed = delivered.reduce((a, o) =>
+    a + (o.products || []).reduce((b, p) =>
+      b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
+  const deliveredGrossProfit = netFromBosta - deliveredElashryOwed;
+
   // Revenue Summary — realised money in/out on Delivered + Returned orders.
   const rev = document.getElementById('fin-revenue');
   if (rev) rev.innerHTML = `
@@ -1279,6 +1289,19 @@ function renderFinancials() {
     <div class="fin-row ${bostaMinusElashry >= 0 ? 'profit' : 'loss'}" style="border-top:2px solid var(--line);padding-top:12px;font-size:1.05rem">
       <span>${bostaMinusElashry >= 0 ? '🟢 Net (Bosta − Elashry)' : '🔴 Net (Bosta − Elashry)'}</span>
       <span>EGP ${fmt(Math.abs(bostaMinusElashry))}</span>
+    </div>
+    <div style="height:18px"></div>
+    <div style="border:1px dashed var(--line);border-radius:10px;padding:12px;background:rgba(255,255,255,.02)">
+      <div class="fin-row" style="font-weight:800;color:var(--orange);margin-bottom:6px">
+        <span>📦 Delivered orders only — before any other costs</span>
+        <span style="opacity:.7;font-weight:500;font-size:12px">${delivered.length} orders</span>
+      </div>
+      <div class="fin-row"><span>Received from Bosta (delivered, net of shipping)</span><span class="fin-val">EGP ${fmt(netFromBosta)}</span></div>
+      <div class="fin-row"><span>Owed to Elashry (buy cost of delivered goods)</span><span class="fin-val deduct">− EGP ${fmt(deliveredElashryOwed)}</span></div>
+      <div class="fin-row ${deliveredGrossProfit >= 0 ? 'profit' : 'loss'}" style="border-top:1px solid var(--line);padding-top:8px;margin-top:4px">
+        <span>${deliveredGrossProfit >= 0 ? '🟢 Gross profit on delivered orders' : '🔴 Gross loss on delivered orders'}</span>
+        <span>EGP ${fmt(Math.abs(deliveredGrossProfit))}</span>
+      </div>
     </div>`;
 
   // Net Profit Summary — realised profit now, plus the projected profit once the pipeline clears.
@@ -1545,6 +1568,12 @@ function financeData() {
   const delShip = delivered.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
   const retShip = returned.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
   const shouldReceive = collected - delShip - retShip;
+  // Delivered-only figures (used by the "Delivered orders profit before other costs" block).
+  const deliveredNet = collected - delShip;
+  const deliveredElashryOwed = delivered.reduce((a, o) =>
+    a + (o.products || []).reduce((b, p) =>
+      b + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0), 0);
+  const deliveredGrossProfit = deliveredNet - deliveredElashryOwed;
   const receipts = (typeof bostaCashCache !== 'undefined' && bostaCashCache.receipts) ? bostaCashCache.receipts : [];
   const received = receipts.reduce((a, r) => a + parseFloat(r.amount || 0), 0);
   const bostaRemaining = shouldReceive - received;
@@ -1595,6 +1624,7 @@ function financeData() {
 
   const generalExpenses = expenses.filter(e => e.category !== 'Elashry');
   return { collected, delShip, retShip, shouldReceive, receipts, received, bostaRemaining,
+    deliveredNet, deliveredElashryOwed, deliveredGrossProfit, deliveredCount: delivered.length,
     goodsOwed, purchases, purchasesTotal, owed, payments, paid, elashryRemaining, notReturnedCost,
     productSalesDelivered, paidAds: paidAdsAll, paidAdsCycle, adsShare, salesShare, mbFee, mbPaid, mbOwed,
     cycleDelivered, cycleSales, cycleFrom, cycleTo, generalExpenses };
@@ -1610,6 +1640,10 @@ function _finAoa(section, d) {
     ['= Total I should receive from Bosta', r2(d.shouldReceive)],
     ['Received so far', r2(d.received)],
     ['Still to collect', r2(d.bostaRemaining)], [],
+    [`Delivered orders only — profit before any other costs (${d.deliveredCount} orders)`], [],
+    ['Received from Bosta (delivered, net of shipping)', r2(d.deliveredNet)],
+    ['Owed to Elashry (buy cost of delivered goods)', -r2(d.deliveredElashryOwed)],
+    ['Gross profit on delivered orders', r2(d.deliveredGrossProfit)], [],
     ['Payments received from Bosta'], ['Date', 'Amount (EGP)', 'Note'],
     ...d.receipts.map(x => [x.date || '', r2(x.amount), x.note || '']),
   ];
