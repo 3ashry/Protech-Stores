@@ -242,5 +242,20 @@ async function loadAll() {
       } catch(e) {}
     }, 30000);
   }
+
+  // Silent background sync with Bosta so `status` and `actual_shipping` update
+  // automatically once an order is delivered — no dashboard button press
+  // needed. Runs once ~5s after login (giving the initial render a beat),
+  // then every 5 minutes while the tab is open. Silent: no toast, no reload
+  // spam (the 30s auto-refresh above picks up any DB changes it produces).
+  if (!window._bostaAutoSyncStarted) {
+    window._bostaAutoSyncStarted = true;
+    const silentBostaSync = async () => {
+      if (document.hidden) return; // don't hammer Bosta from a backgrounded tab
+      try { await fetch('/api/sync-status', { method: 'POST' }); } catch(_) {}
+    };
+    setTimeout(silentBostaSync, 5000);
+    setInterval(silentBostaSync, 5 * 60 * 1000);
+  }
 }
 
