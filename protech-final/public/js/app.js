@@ -1171,20 +1171,26 @@ function renderFinancials() {
   const productSalesDelivered = delivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
 
   // Media buyer fee: only what accrued SINCE the last payment. Each payment
-  // "resets" the cycle so we're not always subtracting the running total from
-  // the running fee — just look at ads spend + delivered sales after the most
-  // recent Media Buyer expense date. Falls back to all-time if never paid.
+  // resets the cycle. Uses precise `created_at` timestamps on both sides so
+  // an order/ad logged the same day the media buyer was paid falls on the
+  // right side of the boundary — anything with a timestamp strictly greater
+  // than the payment's timestamp goes into the new cycle.
   const mbPayments = cache.expenses.filter(e => e.category === 'Media Buyer');
-  const lastPaymentDate = mbPayments.reduce((max, e) => {
-    const d = String(e.date || e.created_at || '');
-    return d > max ? d : max;
+  const lastPaymentAt = mbPayments.reduce((max, e) => {
+    const t = String(e.created_at || e.date || '');
+    return t > max ? t : max;
   }, '');
-  const cycleFilter = (dateStr) => !lastPaymentDate || String(dateStr || '') > lastPaymentDate;
+  const afterPayment = (t) => !lastPaymentAt || String(t || '') > lastPaymentAt;
 
+  // Paid-ads expenses logged after the payment.
   const paidAdsCycle = cache.expenses
-    .filter(e => e.category === 'Paid Ads' && cycleFilter(e.date || e.created_at))
+    .filter(e => e.category === 'Paid Ads' && afterPayment(e.created_at || e.date))
     .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-  const cycleDelivered = delivered.filter(o => cycleFilter(o.date || o.created_at));
+
+  // ONLY orders whose status is 'Delivered' AND which were placed after the
+  // payment — the media buyer is rewarded for deliveries in this cycle, not
+  // for orders that only reached in-transit / cancelled / awaiting action.
+  const cycleDelivered = delivered.filter(o => afterPayment(o.created_at || o.date));
   const cycleSales = cycleDelivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
 
   const adsShare = paidAdsCycle * 0.20;
@@ -1193,16 +1199,16 @@ function renderFinancials() {
   const mbOwed = Math.round(Math.max(0, mediaBuyerFee) * 100) / 100;
 
   // Header label so the admin knows the cycle boundary.
-  const lastPaidTxt = lastPaymentDate
-    ? `آخر دفعة: ${lastPaymentDate.slice(0, 10)}`
+  const lastPaidTxt = lastPaymentAt
+    ? `آخر دفعة: ${lastPaymentAt.slice(0, 10)}`
     : 'لم يتم دفع أي دفعة سابقة — يحسب من البداية';
 
   const mbEl = document.getElementById('fin-mediabuyer');
   if (mbEl) mbEl.innerHTML = `
-    <div class="fin-row" style="opacity:.75;font-size:12px"><span>${lastPaidTxt}</span><span>${cycleDelivered.length} orders in this cycle</span></div>
-    <div class="fin-row"><span>Paid ads (this cycle)</span><span class="fin-val">EGP ${fmt(paidAdsCycle)}</span></div>
+    <div class="fin-row" style="opacity:.75;font-size:12px"><span>${lastPaidTxt}</span><span>${cycleDelivered.length} <b>delivered</b> orders in this cycle</span></div>
+    <div class="fin-row"><span>Paid ads spend (this cycle)</span><span class="fin-val">EGP ${fmt(paidAdsCycle)}</span></div>
     <div class="fin-row"><span>20% of paid ads</span><span class="fin-val">EGP ${fmt(adsShare)}</span></div>
-    <div class="fin-row"><span>Delivered product sales (this cycle, excl. shipping)</span><span class="fin-val">EGP ${fmt(cycleSales)}</span></div>
+    <div class="fin-row"><span><b>Delivered</b> product sales (this cycle, excl. shipping)</span><span class="fin-val">EGP ${fmt(cycleSales)}</span></div>
     <div class="fin-row"><span>1% of delivered sales</span><span class="fin-val">EGP ${fmt(salesShare)}</span></div>
     <div class="fin-row subtotal"><span>Owed now (since last payment)</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(mbOwed)}</span></div>
     <div style="margin-top:12px">
