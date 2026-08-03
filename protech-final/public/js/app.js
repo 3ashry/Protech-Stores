@@ -701,7 +701,7 @@ function renderOrders() {
   const visibleOrders = cache.orders.filter(o => o.status !== 'Cancelled');
   document.getElementById('orders-tbody').innerHTML = visibleOrders.length ? visibleOrders.map(o => `
     <tr${o.status === 'Awaiting Action' ? ' style="background:#fff4f4"' : ''}>
-      <td><span class="badge b-orange">${esc(o.code)}</span> ${orderProgressBadge(o)}${o.allow_open ? ' <span class="badge b-warning" title="يريد فتح الشحنة">📦</span>' : ''}${o.status === 'Returned' && !o.warehouse_confirmed ? ' <span class="badge b-danger" title="مرتجع — لم يُرجع للمخزن بعد">↩️ لم يُرجع للمخزن</span>' : ''}</td>
+      <td><span class="badge b-orange">${esc(o.code)}</span> ${orderProgressBadge(o)}${o.allow_open ? ' <span class="badge b-warning" title="يريد فتح الشحنة">📦</span>' : ''}${o.status === 'Returned' && !o.warehouse_confirmed ? ' <span class="badge b-danger" title="مرتجع — لم يُرجع للمخزن بعد">↩️ لم يُرجع للمخزن</span>' : ''}${cashCycleBadge(o)}</td>
       <td><strong>${esc(o.customer_name)}</strong></td>
       <td>${esc(o.phone)}</td>
       <td>EGP ${fmt(o.total)}</td>
@@ -2548,4 +2548,17 @@ function orderProgressBadge(o) {
   return `<span style="display:inline-flex;align-items:center;gap:1px;vertical-align:middle;margin-right:4px">
     ${dot(c, 'Confirmation sent')}${dot(d, 'Delivered')}${dot(f, 'Feedback sent')}
   </span>`;
+}
+
+// Small badge next to the order code showing Bosta's cash-cycle status.
+//  🔒 green  = cash cycle closed (definitive invoice, actual_shipping is exact)
+//  🕒 amber  = delivered but cash cycle still open (actual_shipping is estimated)
+// Nothing shown for orders that aren't Delivered/Returned yet.
+function cashCycleBadge(o) {
+  const isFinal = o.status === 'Delivered' || o.status === 'Returned';
+  if (!isFinal) return '';
+  if (o.cash_cycle_closed === true) {
+    return ' <span title="Bosta cash cycle closed — this is the exact invoiced amount" style="display:inline-block;background:#dcfce7;color:#166534;font-weight:700;font-size:11px;padding:2px 6px;border-radius:10px;border:1px solid #86efac;margin-right:4px">🔒 مؤكد</span>';
+  }
+  return ' <span title="Cash cycle not closed yet — actual shipping is still an estimate; Bosta will finalise within ~2 days" style="display:inline-block;background:#fef3c7;color:#92400e;font-weight:700;font-size:11px;padding:2px 6px;border-radius:10px;border:1px solid #fcd34d;margin-right:4px">🕒 تقديري</span>';
 }

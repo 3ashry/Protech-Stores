@@ -154,11 +154,13 @@ function pickFee(del) {
 }
 
 // Get the ACTUAL shipping fee Bosta charged for a delivery, from the individual delivery
-// detail endpoint (the list/search leaves pricing empty). Returns a number or null.
+// detail endpoint (the list/search leaves pricing empty). Returns { fee, cashCycleClosed }.
 async function fetchDeliveryFee(bostaId, searchObj, feeLog) {
   const fromSearch = pickFee(searchObj);
-  if (fromSearch) return fromSearch;
-  if (!bostaId) return null;
+  // Cash cycle is on the detail endpoint; the search hit never has it. So if we
+  // short-circuit on the search fee, mark cashCycleClosed=false.
+  if (fromSearch) return { fee: fromSearch, cashCycleClosed: false };
+  if (!bostaId) return { fee: null, cashCycleClosed: false };
   try {
     const r = await fetch(`${BOSTA_BASE_URL}/deliveries/business/${encodeURIComponent(bostaId)}`, {
       headers: { Authorization: BOSTA_API_KEY },
@@ -166,8 +168,10 @@ async function fetchDeliveryFee(bostaId, searchObj, feeLog) {
     const d = await r.json().catch(() => null);
     const del = (d && d.data) ? d.data : d;
     if (feeLog && del && del.pricing) feeLog.push({ id: bostaId, pricing: del.pricing });
-    return pickFee(del);
-  } catch { return null; }
+    const walletFee = parseFloat(del?.wallet?.cashCycle?.bosta_fees);
+    const cashCycleClosed = !isNaN(walletFee) && walletFee > 0;
+    return { fee: pickFee(del), cashCycleClosed };
+  } catch { return { fee: null, cashCycleClosed: false }; }
 }
 
 async function sbGet(path) {
@@ -231,13 +235,18 @@ export default async function handler(req, res) {
       const isFinal = effStatus === 'Delivered' || effStatus === 'Returned';
       let feeSrc = null;
       if (isFinal) {
-        // Prefer the REAL fee from Bosta's dashboard/API (shipmentFees × 1.14);
-        // fall back to the formula only if Bosta hasn't populated it yet.
-        // When Bosta gives us a real number, ALWAYS write it — previous values
-        // were formula-guesses and were commonly over-counting.
-        let cost = await fetchDeliveryFee(o.bosta_id, d, feeLog);
+        // Prefer the REAL fee from Bosta's dashboard/API (wallet.cashCycle.bosta_fees,
+        // then shipmentFees × 1.14); fall back to the formula only if Bosta hasn't
+        // populated either yet. When Bosta gives us a real number, ALWAYS overwrite.
+        const feeInfo = await fetchDeliveryFee(o.bosta_id, d, feeLog);
+        let cost = feeInfo.fee;
+        let cashCycleClosed = feeInfo.cashCycleClosed;
         feeSrc = 'bosta';
-        if (!(typeof cost === 'number' && cost > 0)) { cost = calcActualShipping(o.city, o.total); feeSrc = 'formula'; }
+        if (!(typeof cost === 'number' && cost > 0)) {
+          cost = calcActualShipping(o.city, o.total);
+          feeSrc = 'formula';
+          cashCycleClosed = false;
+        }
         const currentStored = parseFloat(o.actual_shipping || 0);
         // Bosta value: always write when it differs. Formula value: only write when we have none.
         const shouldWrite = feeSrc === 'bosta'
@@ -245,10 +254,19 @@ export default async function handler(req, res) {
           : (currentStored <= 0 && cost > 0);
         if (shouldWrite) patch.actual_shipping = cost;
         else feeSrc = null;
+        // Always keep the cash-cycle flag fresh so the dashboard badge is accurate,
+        // even on runs where the fee itself didn't change.
+        if (o.cash_cycle_closed !== cashCycleClosed) patch.cash_cycle_closed = cashCycleClosed;
       }
 
       if (Object.keys(patch).length) {
-        await sbPatch(o.id, patch);
+        const r = await sbPatch(o.id, patch);
+        // If cash_cycle_closed column doesn't exist yet (migration not run),
+        // retry without it so the rest of the sync still succeeds.
+        if (!r.ok && 'cash_cycle_closed' in patch) {
+          const { cash_cycle_closed, ...rest } = patch;
+          if (Object.keys(rest).length) await sbPatch(o.id, rest);
+        }
         changes.push({ code: o.code, from: o.status, bostaState: d.state?.value, ...patch, feeSrc });
       }
     }
