@@ -242,7 +242,18 @@ async function _onBulkFileChosen(ev) {
     _bulkParsed = rows;
     let msg = `✅ Parsed ${rows.length} rows from ${file.name}.`;
     if (dupes.length) msg += `  (${dupes.length} codes appeared multiple times with different prices — kept the last: ${dupes.slice(0, 8).join(', ')}${dupes.length > 8 ? '…' : ''})`;
-    statusEl.innerHTML = `<span style="color:#166534;font-weight:700">${_bulkEsc(msg)}</span>`;
+    // Diagnostic block: parser version, raw text stats, TWS sample.
+    const rawLen = (window._bulkRawPdfText || '').length;
+    const rawLines = (window._bulkRawPdfText || '').split('\n').length;
+    const twsRows = rows.filter(r => r.code.startsWith('TWS'));
+    const twsSample = twsRows.slice(0, 8).map(r => `${r.code}=${r.price}`).join(', ') || 'none';
+    const diag = `
+      <div style="margin-top:8px;padding:8px 10px;background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;font-size:11px;font-family:monospace;color:#374151">
+        <div>🔧 parser v${window._bulkParserVersion || 'OLD (browser cache)'}</div>
+        <div>📄 raw PDF text: ${rawLen.toLocaleString()} chars, ${rawLines.toLocaleString()} lines</div>
+        <div>🔍 TWS codes found (${twsRows.length}): ${_bulkEsc(twsSample)}</div>
+      </div>`;
+    statusEl.innerHTML = `<span style="color:#166534;font-weight:700">${_bulkEsc(msg)}</span>${diag}`;
     _bulkRefreshPreview();
   } catch (e) {
     console.error(e);
