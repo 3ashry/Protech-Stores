@@ -45,6 +45,24 @@ export default async function handler(req, res) {
       ? Math.round(shipmentFees * 1.14)
       : null;
 
+    // Also try the /pricing endpoint (some Bosta APIs expose invoice-level fees there).
+    let pricingDetail = null;
+    try {
+      const pr = await fetch(`${BOSTA_BASE_URL}/deliveries/${encodeURIComponent(bostaId)}/pricing`, {
+        headers: { Authorization: BOSTA_API_KEY },
+      });
+      pricingDetail = await pr.json().catch(() => null);
+    } catch {}
+
+    // Also try the invoices/wallet endpoint for the actual charged amount.
+    let walletDetail = null;
+    try {
+      const wr = await fetch(`${BOSTA_BASE_URL}/deliveries/business/${encodeURIComponent(bostaId)}/wallet`, {
+        headers: { Authorization: BOSTA_API_KEY },
+      });
+      walletDetail = await wr.json().catch(() => null);
+    } catch {}
+
     return res.status(200).json({
       track,
       matchedTracking: searchHit.trackingNumber,
@@ -56,6 +74,10 @@ export default async function handler(req, res) {
       pricing: del?.pricing || null,
       computedActualShipping_withVat: computedActual,
       note: 'computedActualShipping_withVat = shipmentFees × 1.14 (what our sync writes).',
+      // Full raw payloads so we can grep for the true 127 EGP fee.
+      fullDetail: del,
+      pricingDetail,
+      walletDetail,
     });
   } catch (e) {
     return res.status(500).json({ error: e.message });
