@@ -61,8 +61,14 @@ async function _parsePdfFile(file) {
     }
     text += '\n\n';
   }
+  // Diagnostics — stash the raw extracted text on window so it can be
+  // inspected from DevTools when the parser output looks wrong.
+  try { window._bulkRawPdfText = text; } catch (_) {}
   return _rowsFromText(text);
 }
+
+// Marker so we can see in DevTools which version of the parser is loaded.
+window._bulkParserVersion = 3;
 
 // Turn arbitrary extracted text into {code, price} pairs. Handles the
 // El Ashry layout (serial + type + code + name + carton + price + stock),
