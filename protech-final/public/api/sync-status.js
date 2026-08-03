@@ -274,7 +274,52 @@ export default async function handler(req, res) {
         changes.push({ code: o.code, from: o.status, bostaState: d.state?.value, ...patch, feeSrc });
       }
     }
-    const result = { ok: true, bostaDeliveries: deliveries.length, ordersChecked: (orders || []).length, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8) };
+    // ─── BACKFILL PASS ──────────────────────────────────────────────
+    // The search endpoint only returns the last ~1500 deliveries. Older
+    // Delivered/Returned orders never get inspected by the main loop, so
+    // their cash_cycle_closed flag would forever stay false. This second
+    // pass hits Bosta's detail endpoint directly for any Delivered/Returned
+    // order that (a) has a stored bosta_id, and (b) isn't yet marked as
+    // closed — filling in the correct flag + refreshing actual_shipping.
+    // Cap at 200 orders per run so a huge backlog doesn't blow the function's
+    // execution budget; the next scheduled run picks up where this left off.
+    const seenIds = new Set(Object.values(byRef).map(d => d._id).filter(Boolean));
+    const backfillCandidates = (orders || []).filter(o =>
+      o.bosta_id
+      && (o.status === 'Delivered' || o.status === 'Returned')
+      && o.cash_cycle_closed !== true
+      && !seenIds.has(o.bosta_id) // not already processed by main loop
+    ).slice(0, 200);
+    const backfillChanges = [];
+    for (const o of backfillCandidates) {
+      try {
+        const r = await fetch(`${BOSTA_BASE_URL}/deliveries/business/${encodeURIComponent(o.bosta_id)}`, {
+          headers: { Authorization: BOSTA_API_KEY },
+        });
+        if (!r.ok) continue;
+        const d = await r.json().catch(() => null);
+        const del = d?.data || d;
+        if (!del) continue;
+        const walletFee = parseFloat(del?.wallet?.cashCycle?.bosta_fees);
+        const cashCycleClosed = !isNaN(walletFee) && walletFee > 0;
+        const cost = pickFee(del);
+        const patch = {};
+        if (typeof cost === 'number' && cost > 0 && cost !== parseFloat(o.actual_shipping || 0)) {
+          patch.actual_shipping = cost;
+        }
+        if (o.cash_cycle_closed !== cashCycleClosed) patch.cash_cycle_closed = cashCycleClosed;
+        if (Object.keys(patch).length) {
+          const pr = await sbPatch(o.id, patch);
+          if (!pr.ok && 'cash_cycle_closed' in patch) {
+            const { cash_cycle_closed, ...rest } = patch;
+            if (Object.keys(rest).length) await sbPatch(o.id, rest);
+          }
+          backfillChanges.push({ code: o.code, ...patch });
+        }
+      } catch { /* skip on error, next run will retry */ }
+    }
+
+    const result = { ok: true, bostaDeliveries: deliveries.length, ordersChecked: (orders || []).length, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8), backfill: { checked: backfillCandidates.length, updated: backfillChanges.length, changes: backfillChanges.slice(0, 20) } };
     console.log('sync-status', JSON.stringify(result));
     return res.status(200).json(result);
   } catch (e) {
