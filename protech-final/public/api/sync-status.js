@@ -238,7 +238,11 @@ export default async function handler(req, res) {
         // Prefer the REAL fee from Bosta's dashboard/API (wallet.cashCycle.bosta_fees,
         // then shipmentFees × 1.14); fall back to the formula only if Bosta hasn't
         // populated either yet. When Bosta gives us a real number, ALWAYS overwrite.
-        const feeInfo = await fetchDeliveryFee(o.bosta_id, d, feeLog);
+        // Use Bosta's internal id from the search hit if the order doesn't have one
+        // stored (older orders may pre-date the bosta_id column being populated).
+        const bostaId = o.bosta_id || d._id;
+        if (!o.bosta_id && d._id) patch.bosta_id = d._id;
+        const feeInfo = await fetchDeliveryFee(bostaId, d, feeLog);
         let cost = feeInfo.fee;
         let cashCycleClosed = feeInfo.cashCycleClosed;
         feeSrc = 'bosta';
