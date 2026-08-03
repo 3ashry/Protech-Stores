@@ -1304,6 +1304,44 @@ function renderFinancials() {
       </div>
     </div>`;
 
+  // ── Confirmed Profit — cash-cycle closed only ──────────────────────
+  // Answers: "for orders where Bosta has already invoiced (cash cycle
+  // closed), what's my actual profit before ads/expenses?"
+  //   Collected (delivered COD, 0 for returned)
+  //   − Buying cost (Elashry buy price × qty)
+  //   − Actual shipping (real Bosta invoice, both outbound and return legs)
+  // Uses ONLY orders whose cash_cycle_closed = true, so every number is
+  // definitive (no formula estimates leaking in).
+  const closedFinal = orders.filter(o =>
+    (o.status === 'Delivered' || o.status === 'Returned') && o.cash_cycle_closed === true
+  );
+  const closedDelivered = closedFinal.filter(o => o.status === 'Delivered');
+  const closedReturned = closedFinal.filter(o => o.status === 'Returned');
+  const cfCollected = closedDelivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
+  const cfBuying = closedFinal.reduce((a, o) =>
+    a + (o.products || []).reduce((b, p) =>
+      b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
+  const cfShipping = closedFinal.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
+  const cfProfit = cfCollected - cfBuying - cfShipping;
+  const confEl = document.getElementById('fin-confirmed');
+  if (confEl) confEl.innerHTML = `
+    <div class="fin-row" style="opacity:.75;font-size:12px">
+      <span>${closedFinal.length} orders (${closedDelivered.length} delivered · ${closedReturned.length} returned)</span>
+      <span>Cash-cycle closed — Bosta invoiced ✓</span>
+    </div>
+    <div class="fin-row"><span>Collected from customers (delivered only)</span><span class="fin-val">EGP ${fmt(cfCollected)}</span></div>
+    <div class="fin-row"><span>Total buying cost (Elashry)</span><span class="fin-val deduct">− EGP ${fmt(cfBuying)}</span></div>
+    <div class="fin-row"><span>Total actual shipping (Bosta invoice)</span><span class="fin-val deduct">− EGP ${fmt(cfShipping)}</span></div>
+    <div class="fin-row ${cfProfit >= 0 ? 'profit' : 'loss'}" style="border-top:2px solid var(--line);padding-top:12px;font-size:1.05rem">
+      <span>${cfProfit >= 0 ? '🟢 Confirmed profit (before expenses)' : '🔴 Confirmed loss (before expenses)'}</span>
+      <span>EGP ${fmt(Math.abs(cfProfit))}</span>
+    </div>
+    <div style="margin-top:10px;font-size:11px;opacity:.7;line-height:1.5">
+      Only orders where Bosta has finalised the invoice count here.
+      Ads, media buyer, and other expenses are excluded — this is the
+      raw margin on shipments that have already settled.
+    </div>`;
+
   // Net Profit Summary — realised profit now, plus the projected profit once the pipeline clears.
   const net = document.getElementById('fin-net');
   if (net) net.innerHTML = `
