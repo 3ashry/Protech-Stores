@@ -48,27 +48,47 @@ async function _parsePdfFile(file) {
   const pdfjs = await _loadPdfJs();
   const buf = await file.arrayBuffer();
   const pdf = await pdfjs.getDocument({ data: buf }).promise;
-  let text = '';
+  const allLines = [];
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
-    let prevY = null;
+    // Bucket items by y-coordinate (visual row). PDF.js reading order
+    // interleaves items; grouping by y reconstructs proper rows.
+    const rowMap = new Map(); // y-bucket -> [{str, x, width}]
     for (const it of content.items) {
-      const y = it.transform ? it.transform[5] : null;
-      if (prevY != null && y != null && Math.abs(prevY - y) > 3) text += '\n';
-      text += (it.str || '') + ' ';
-      prevY = y;
+      const s = (it.str || '');
+      if (!s.trim()) continue;
+      const y = it.transform ? it.transform[5] : 0;
+      const x = it.transform ? it.transform[4] : 0;
+      const w = it.width || 0;
+      const yBucket = Math.round(y / 5) * 5; // 5-px buckets
+      if (!rowMap.has(yBucket)) rowMap.set(yBucket, []);
+      rowMap.get(yBucket).push({ str: s, x, width: w });
     }
-    text += '\n\n';
+    // Sort rows top-to-bottom (Y decreases going down in PDF space).
+    const yKeys = Array.from(rowMap.keys()).sort((a, b) => b - a);
+    for (const y of yKeys) {
+      const items = rowMap.get(y).sort((a, b) => a.x - b.x);
+      // Concatenate items — add a space only if there's a visible gap
+      // (next item's x is measurably past the previous item's right edge).
+      let line = '';
+      let prevRight = null;
+      for (const it of items) {
+        if (prevRight != null && it.x - prevRight > 1.5) line += ' ';
+        line += it.str;
+        prevRight = it.x + it.width;
+      }
+      if (line.trim()) allLines.push(line);
+    }
+    allLines.push(''); // blank line between pages
   }
-  // Diagnostics — stash the raw extracted text on window so it can be
-  // inspected from DevTools when the parser output looks wrong.
+  const text = allLines.join('\n');
   try { window._bulkRawPdfText = text; } catch (_) {}
   return _rowsFromText(text);
 }
 
 // Marker so we can see in DevTools which version of the parser is loaded.
-window._bulkParserVersion = 3;
+window._bulkParserVersion = 4;
 
 // Turn arbitrary extracted text into {code, price} pairs. Handles the
 // El Ashry layout (serial + type + code + name + carton + price + stock),
