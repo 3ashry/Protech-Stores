@@ -120,19 +120,27 @@ async function fetchAllDeliveries() {
 }
 
 // Pull the ACTUAL shipping fee Bosta charged out of a delivery object.
-// The reliable field is top-level `shipmentFees` on the detail endpoint —
-// it's the base fee BEFORE VAT (Egypt VAT = 14%). We add VAT so what we
-// store on `actual_shipping` matches what Bosta actually debits (e.g. a
-// Borg ElArab→Cairo shipment shows shipmentFees:112 → 112×1.14 = 127.68 → 128,
-// which matches Bosta's dashboard within 1 EGP rounding).
-// Falls back to the older `pricing.*` fields if a future response uses them.
+// Priority:
+//   1) wallet.cashCycle.bosta_fees   — THE authoritative field. This is the
+//      total Bosta actually deducted from the COD (shipping + collection +
+//      opening_package + VAT), i.e. `cod − deposited_amt`. Only populated
+//      once Bosta has closed the cash cycle for the shipment (i.e. after
+//      delivery + confirmation). Includes any mid-trip reclassifications
+//      (package resize, destination-sector correction, etc.).
+//   2) top-level shipmentFees × 1.14 — the current price before VAT for the
+//      delivery. Available earlier than the wallet, but changes if Bosta
+//      reclassifies the package en-route (so may not match the invoice).
+//   3) pricing.priceAfterVat / other legacy pricing fields.
 const VAT_RATE = 0.14;
 function pickFee(del) {
   if (!del || typeof del !== 'object') return null;
-  // 1) Primary source — top-level shipmentFees (base, pre-VAT).
+  // 1) Definitive — actual amount deducted, straight from the cash cycle.
+  const walletFee = parseFloat(del.wallet?.cashCycle?.bosta_fees);
+  if (!isNaN(walletFee) && walletFee > 0) return Math.round(walletFee);
+  // 2) shipmentFees (base, pre-VAT) — reliable but changes if repriced.
   const base = parseFloat(del.shipmentFees);
   if (!isNaN(base) && base > 0) return Math.round(base * (1 + VAT_RATE));
-  // 2) Fallbacks — some responses include a pricing sub-object.
+  // 3) Fallbacks — pricing sub-object.
   const p = del.pricing || {};
   const cands = [
     p.priceAfterVat, p.total, p.businessAmount, p.shippingFee, p.deliveryFee,
@@ -140,7 +148,6 @@ function pickFee(del) {
     del.priceAfterVat, del.shippingFee, del.deliveryFee, del.price, del.cost,
   ];
   for (const c of cands) { const n = parseFloat(c && c.amount != null ? c.amount : c); if (!isNaN(n) && n > 0) return n; }
-  // 3) pricing.priceBeforeVat — treat like shipmentFees (add VAT).
   const preVat = parseFloat(p.priceBeforeVat);
   if (!isNaN(preVat) && preVat > 0) return Math.round(preVat * (1 + VAT_RATE));
   return null;
