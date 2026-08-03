@@ -92,18 +92,24 @@ async function _spParseCsv(file) { return _spRowsFromText(await file.text()); }
 
 function _spRowsFromText(text) {
   const cleaned = String(text).replace(_SP_BIDI_RE, '');
-  const CODE_RE = /(?<![A-Z0-9])([A-Z][A-Z0-9\-]{2,25})(?![A-Z0-9])/;
+  // Match ALL code tokens on the line, then skip TYPE/header words when
+  // choosing the product code — otherwise "TOTAL" or "WADFOW" from the TYPE
+  // column get captured as the code.
+  const CODE_ALL_RE = /(?<![A-Z0-9])([A-Z][A-Z0-9\-]{2,25})(?![A-Z0-9])/g;
   const PRICE_RE = /(\d{1,6}(?:\.\d{1,2})?)/g;
+  const NON_CODE = /^(TOTAL|WADFOW|WADFO|TYBE|TYPE|EL|ASHRY|GROUP|SINCE|ONE|STOP|TOOLS|STATION|CODE|NAME|PRICE|STOCK|QTY)$/i;
   const rows = [];
   for (const ln of cleaned.split(/\r?\n/)) {
-    const cm = ln.match(CODE_RE);
-    if (!cm) continue;
+    CODE_ALL_RE.lastIndex = 0;
+    let code = null, m;
+    while ((m = CODE_ALL_RE.exec(ln))) { if (!NON_CODE.test(m[1])) { code = m[1]; break; } }
+    if (!code) continue;
     const prices = [];
-    let m; PRICE_RE.lastIndex = 0;
+    PRICE_RE.lastIndex = 0;
     while ((m = PRICE_RE.exec(ln))) prices.push(parseFloat(m[1]));
     const valid = prices.filter(p => p > 0 && p < 1e7);
     if (!valid.length) continue;
-    rows.push({ code: cm[1].toUpperCase(), price: Math.max(...valid) });
+    rows.push({ code: code.toUpperCase(), price: Math.max(...valid) });
   }
   const map = new Map();
   for (const r of rows) map.set(r.code, r.price);

@@ -74,26 +74,37 @@ function _rowsFromText(rawText) {
   const rows = [];
   let carry = null;
 
-  const CODE_RE = /\b([A-Z][A-Z0-9\-]{2,25})\b/;
+  const CODE_ALL_RE = /\b([A-Z][A-Z0-9\-]{2,25})\b/g;
   const PRICE_RE = /\b(\d{1,6}\.\d{2})\b/g;
+  // TYPE/header tokens that live on the same line as the code — must be skipped
+  // when picking the "first uppercase token" as the product code.
+  const NON_CODE = /^(TOTAL|WADFOW|WADFO|TYBE|TYPE|EL|ASHRY|GROUP|SINCE|ONE|STOP|TOOLS|STATION|CODE|NAME|PRICE|STOCK|QTY)$/i;
+  const pickCode = (ln) => {
+    CODE_ALL_RE.lastIndex = 0;
+    let m;
+    while ((m = CODE_ALL_RE.exec(ln))) {
+      if (!NON_CODE.test(m[1])) return m[1];
+    }
+    return null;
+  };
 
   for (const ln of lines) {
-    // El Ashry pattern first.
+    // El Ashry pattern first (works when serial + TOTAL/WADFOW + code all land in order).
     const strict = ln.match(
       /^\s*\d{1,4}\s+(?:TOTAL|WADFOW|WADFO)\s+([A-Z][A-Z0-9\-]{2,25}).*?(\d{1,6}\.\d{2})/i
     );
     if (strict) { rows.push({ code: strict[1].toUpperCase(), price: parseFloat(strict[2]) }); carry = null; continue; }
 
-    const cm = ln.match(CODE_RE);
+    const code = pickCode(ln);
     PRICE_RE.lastIndex = 0;
     const prices = [];
     let m; while ((m = PRICE_RE.exec(ln))) prices.push(parseFloat(m[1]));
-    if (cm && prices.length) {
+    if (code && prices.length) {
       // Sale price is virtually always the largest decimal on the row.
-      rows.push({ code: cm[1].toUpperCase(), price: Math.max(...prices) });
+      rows.push({ code: code.toUpperCase(), price: Math.max(...prices) });
       carry = null;
-    } else if (cm && !prices.length) {
-      carry = { code: cm[1].toUpperCase() };
+    } else if (code && !prices.length) {
+      carry = { code: code.toUpperCase() };
     } else if (carry && prices.length) {
       rows.push({ code: carry.code, price: Math.max(...prices) });
       carry = null;
