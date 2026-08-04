@@ -1503,10 +1503,20 @@ function downloadInventoryExcel() {
 function downloadOrdersExcel() {
   const now = new Date();
   const monthName = now.toLocaleString('en', { month: 'long', year: 'numeric' });
+  const products = cache.products || [];
   const rows = cache.orders.map(o => {
-    const products = Array.isArray(o.products)
-      ? o.products.map(p => `${p.name || p.code} ×${p.qty || 1} @${p.sell_price || p.price || 0}`).join(' | ')
-      : '';
+    const items = Array.isArray(o.products) ? o.products : [];
+    const productsStr = items
+      .map(p => `${p.name || p.code} ×${p.qty || 1} @${p.sell_price || p.price || 0}`)
+      .join(' | ');
+    const buyCost = items.reduce((a, p) =>
+      a + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0);
+    // Only Delivered orders bring in cash (customers pay COD). Returned /
+    // Cancelled orders collect nothing, so "collected" is 0 for them.
+    const collected = o.status === 'Delivered' ? parseFloat(o.total || 0) : 0;
+    const cashCycleStatus = (o.status === 'Delivered' || o.status === 'Returned')
+      ? (o.cash_cycle_closed === true ? 'Closed (final invoice)' : 'Open (estimated)')
+      : 'N/A';
     return {
       'Order Code': o.code || '',
       'Date': o.date || '',
@@ -1515,14 +1525,32 @@ function downloadOrdersExcel() {
       'Phone': o.phone || '',
       'City': o.city || '',
       'Status': o.status || '',
-      'Products': products,
-      'Subtotal (EGP)': parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0),
-      'Shipping (EGP)': parseFloat(o.est_shipping || 0),
-      'Total (EGP)': parseFloat(o.total || 0),
+      'Cash Cycle': cashCycleStatus,
+      'Products': productsStr,
+      'Total Buying Cost (EGP)': Math.round(buyCost * 100) / 100,
+      'Total Collected (EGP)': Math.round(collected * 100) / 100,
+      'Actual Shipping Cost (EGP)': parseFloat(o.actual_shipping || 0),
+      'Order Total (EGP)': parseFloat(o.total || 0),
+      'Est. Shipping charged to customer (EGP)': parseFloat(o.est_shipping || 0),
     };
   });
   const ws = XLSX.utils.json_to_sheet(rows);
-  ws['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 50 }, { wch: 14 }, { wch: 14 }, { wch: 14 }];
+  ws['!cols'] = [
+    { wch: 14 }, // Order Code
+    { wch: 12 }, // Date
+    { wch: 14 }, // Shipping Code
+    { wch: 24 }, // Customer Name
+    { wch: 14 }, // Phone
+    { wch: 14 }, // City
+    { wch: 14 }, // Status
+    { wch: 22 }, // Cash Cycle
+    { wch: 55 }, // Products
+    { wch: 18 }, // Buying Cost
+    { wch: 18 }, // Collected
+    { wch: 18 }, // Actual Shipping
+    { wch: 16 }, // Order Total
+    { wch: 22 }, // Est Shipping
+  ];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Orders');
   XLSX.writeFile(wb, `Protech_Orders_${monthName.replace(' ', '_')}.xlsx`);
