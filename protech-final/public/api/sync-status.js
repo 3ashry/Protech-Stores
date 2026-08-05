@@ -87,18 +87,25 @@ function mapState(d) {
       || v.includes('awaiting action') || v.includes('on hold')
       || v.includes('action required') || v.includes('issue')) return 'Awaiting Action';
 
-  // 4) Return leg heading BACK to the merchant. Two signals:
-  //    a) explicit "return" word (returning / on return / return to)
-  //    b) currently in-transit AT ALL with COD === 0 → nothing to collect,
-  //       so this trip is not going TO the customer.
+  // 4) Return leg heading BACK to the merchant.
+  //    Signals — any of these means the parcel is coming back to us:
+  //      a) explicit "return" / "back to" word in the state value
+  //      b) an in-transit-like state with COD === 0 (no cash to collect,
+  //         so this trip is not going TO the customer)
+  //      c) an in-transit-like state where Bosta already tried the customer
+  //         (deliveryAttemptsLength > 0) and nothing was collected
+  //         (cod_collectedAmount === 0) — the parcel is now on the way back.
   const cod = extractCOD(d);
+  const attempts = parseInt(d?.deliveryAttemptsLength || d?.attemptsCount || 0) || 0;
+  const collected = parseFloat(d?.cod_collectedAmount);
+  const alreadyTriedAndFailed = attempts > 0 && !isNaN(collected) && collected === 0;
   const headingToCustomer = v.includes('heading') || v.includes('out for delivery')
       || v.includes('on its way to') || code === 41;
   const inTransitLike = v.includes('transit') || v.includes('progress')
       || v.includes('picked') || v.includes('warehouse')
       || v.includes('dispatch') || headingToCustomer;
   if (v.includes('return') || v.includes('back to')) return 'On its way to me';
-  if (inTransitLike && cod === 0) return 'On its way to me';
+  if (inTransitLike && (cod === 0 || alreadyTriedAndFailed)) return 'On its way to me';
 
   // 5a) The parcel is out on the last mile — a courier has it and is
   //     actively going TO the customer (Bosta state.code 41 or wording
