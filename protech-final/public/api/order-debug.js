@@ -96,6 +96,7 @@ export default async function handler(req, res) {
     const wouldChange = mapped && mapped !== dbRow.status;
 
     return res.status(200).json({
+      buildMarker: 'v6-stationary-hub-check',
       code,
       db: {
         status: dbRow.status,
