@@ -248,14 +248,12 @@ export default async function handler(req, res) {
 
       // The search response leaves `deliveryAttemptsLength` and
       // `cod_collectedAmount` off the object — so mapState on it cannot
-      // tell a return leg from a normal in-transit trip. If the search
-      // hit maps to a non-terminal status AND the state is post-attempt
-      // (in a warehouse or between hubs), fetch the detail and re-map
-      // so we catch orders that are actually on their way back.
-      const needsDetail = mapped && mapped !== 'Delivered' && mapped !== 'Returned'
-        && mapped !== 'Cancelled' && mapped !== 'Heading to Customer'
-        && d.deliveryAttemptsLength == null;
-      if (needsDetail && (o.bosta_id || d._id)) {
+      // tell a return leg from a normal in-transit trip. Whenever the
+      // search hit maps to an in-transit-like non-terminal, non-heading
+      // status, re-fetch the detail endpoint (which has the attempt
+      // count and cod_collectedAmount) and re-map against that.
+      const inTransitLike = mapped === 'In Transit' || mapped === 'Processing';
+      if (inTransitLike && (o.bosta_id || d._id)) {
         try {
           const dr = await fetch(`${BOSTA_BASE_URL}/deliveries/business/${encodeURIComponent(o.bosta_id || d._id)}`, {
             headers: { Authorization: BOSTA_API_KEY },
