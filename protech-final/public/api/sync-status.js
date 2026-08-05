@@ -122,7 +122,7 @@ function mapState(d) {
   if (inTransitLike) return 'In Transit';
 
   // 6) Not-yet-picked-up.
-  if (v.includes('created') || v.includes('pending') || v === 'new'
+  if (v === 'processing' || v.includes('created') || v.includes('pending') || v === 'new'
       || v.includes('pickup requested') || v.includes('awaiting pickup')
       || v.includes('ready to')) return 'Processing';
 
@@ -131,7 +131,10 @@ function mapState(d) {
 
 async function fetchAllDeliveries() {
   const all = [];
-  for (let page = 1; page <= 15; page++) {
+  // Bosta's `count` field is the current page size, not the grand total,
+  // so paginate purely on "did we get a full page?" until we hit an empty
+  // page or the safety cap.
+  for (let page = 1; page <= 20; page++) {
     const r = await fetch(`${BOSTA_BASE_URL}/deliveries/search`, {
       method: 'POST',
       headers: { 'Authorization': BOSTA_API_KEY, 'Content-Type': 'application/json' },
@@ -140,8 +143,7 @@ async function fetchAllDeliveries() {
     const d = await r.json().catch(() => null);
     const list = d?.data?.deliveries || [];
     all.push(...list);
-    const count = d?.data?.count || 0;
-    if (list.length < 100 || all.length >= count) break;
+    if (list.length < 100) break;
   }
   return all;
 }
@@ -345,15 +347,16 @@ export default async function handler(req, res) {
       && !seenIds.has(o.bosta_id)
     ).slice(0, 200);
     const backfillChanges = [];
+    const backfillErrors = [];
     for (const o of backfillCandidates) {
       try {
         const r = await fetch(`${BOSTA_BASE_URL}/deliveries/business/${encodeURIComponent(o.bosta_id)}`, {
           headers: { Authorization: BOSTA_API_KEY },
         });
-        if (!r.ok) continue;
+        if (!r.ok) { backfillErrors.push({ code: o.code, why: `fetch ${r.status}` }); continue; }
         const d = await r.json().catch(() => null);
         const del = d?.data || d;
-        if (!del) continue;
+        if (!del) { backfillErrors.push({ code: o.code, why: 'empty response' }); continue; }
         const patch = {};
         // 1) Status — same mapping logic as the main loop.
         if (!o.warehouse_confirmed) {
@@ -379,11 +382,13 @@ export default async function handler(req, res) {
             if (Object.keys(rest).length) await sbPatch(o.id, rest);
           }
           backfillChanges.push({ code: o.code, from: o.status, ...patch });
+        } else {
+          backfillErrors.push({ code: o.code, why: 'no patch', bostaState: del?.state?.value, currentStatus: o.status });
         }
-      } catch { /* skip on error, next run will retry */ }
+      } catch (e) { backfillErrors.push({ code: o.code, why: 'exception: ' + e.message }); }
     }
 
-    const result = { ok: true, bostaDeliveries: deliveries.length, ordersChecked: (orders || []).length, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8), backfill: { checked: backfillCandidates.length, updated: backfillChanges.length, changes: backfillChanges.slice(0, 20) } };
+    const result = { ok: true, bostaDeliveries: deliveries.length, ordersChecked: (orders || []).length, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8), backfill: { checked: backfillCandidates.length, updated: backfillChanges.length, changes: backfillChanges.slice(0, 20), errors: backfillErrors.slice(0, 20) } };
     console.log('sync-status', JSON.stringify(result));
     return res.status(200).json(result);
   } catch (e) {
