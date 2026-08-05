@@ -302,20 +302,26 @@ export default async function handler(req, res) {
       }
     }
     // ─── BACKFILL PASS ──────────────────────────────────────────────
-    // The search endpoint only returns the last ~1500 deliveries. Older
-    // Delivered/Returned orders never get inspected by the main loop, so
-    // their cash_cycle_closed flag would forever stay false. This second
-    // pass hits Bosta's detail endpoint directly for any Delivered/Returned
-    // order that (a) has a stored bosta_id, and (b) isn't yet marked as
-    // closed — filling in the correct flag + refreshing actual_shipping.
-    // Cap at 200 orders per run so a huge backlog doesn't blow the function's
-    // execution budget; the next scheduled run picks up where this left off.
+    // The search endpoint only returns the last ~1500 deliveries. Any
+    // order that has a stored bosta_id but wasn't in that batch never
+    // gets inspected by the main loop, so both its status AND the
+    // cash-cycle flag stay stale. This second pass hits Bosta's detail
+    // endpoint directly for every not-yet-fully-closed order, running
+    // the same mapState + fee logic. Cap at 200 per run so a huge
+    // backlog gets processed over multiple runs.
     const seenIds = new Set(Object.values(byRef).map(d => d._id).filter(Boolean));
+    const isTerminal = (o) => {
+      if (o.status === 'Cancelled') return true;
+      // Delivered + cash cycle closed = fully settled, nothing to refresh.
+      if (o.status === 'Delivered' && o.cash_cycle_closed === true) return true;
+      // Returned + warehouse confirmed = goods returned to supplier, fully closed.
+      if (o.status === 'Returned' && o.warehouse_confirmed) return true;
+      return false;
+    };
     const backfillCandidates = (orders || []).filter(o =>
       o.bosta_id
-      && (o.status === 'Delivered' || o.status === 'Returned')
-      && o.cash_cycle_closed !== true
-      && !seenIds.has(o.bosta_id) // not already processed by main loop
+      && !isTerminal(o)
+      && !seenIds.has(o.bosta_id)
     ).slice(0, 200);
     const backfillChanges = [];
     for (const o of backfillCandidates) {
@@ -327,21 +333,31 @@ export default async function handler(req, res) {
         const d = await r.json().catch(() => null);
         const del = d?.data || d;
         if (!del) continue;
-        const walletFee = parseFloat(del?.wallet?.cashCycle?.bosta_fees);
-        const cashCycleClosed = !isNaN(walletFee) && walletFee > 0;
-        const cost = pickFee(del);
         const patch = {};
-        if (typeof cost === 'number' && cost > 0 && cost !== parseFloat(o.actual_shipping || 0)) {
-          patch.actual_shipping = cost;
+        // 1) Status — same mapping logic as the main loop.
+        if (!o.warehouse_confirmed) {
+          const mapped = mapState(del);
+          if (mapped && mapped !== o.status) patch.status = mapped;
         }
-        if (o.cash_cycle_closed !== cashCycleClosed) patch.cash_cycle_closed = cashCycleClosed;
+        // 2) Actual shipping + cash-cycle flag (only meaningful once the
+        //    order has reached a final state).
+        const effStatus = patch.status || o.status;
+        if (effStatus === 'Delivered' || effStatus === 'Returned') {
+          const walletFee = parseFloat(del?.wallet?.cashCycle?.bosta_fees);
+          const cashCycleClosed = !isNaN(walletFee) && walletFee > 0;
+          const cost = pickFee(del);
+          if (typeof cost === 'number' && cost > 0 && cost !== parseFloat(o.actual_shipping || 0)) {
+            patch.actual_shipping = cost;
+          }
+          if (o.cash_cycle_closed !== cashCycleClosed) patch.cash_cycle_closed = cashCycleClosed;
+        }
         if (Object.keys(patch).length) {
           const pr = await sbPatch(o.id, patch);
           if (!pr.ok && 'cash_cycle_closed' in patch) {
             const { cash_cycle_closed, ...rest } = patch;
             if (Object.keys(rest).length) await sbPatch(o.id, rest);
           }
-          backfillChanges.push({ code: o.code, ...patch });
+          backfillChanges.push({ code: o.code, from: o.status, ...patch });
         }
       } catch { /* skip on error, next run will retry */ }
     }
