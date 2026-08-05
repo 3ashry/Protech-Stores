@@ -92,13 +92,14 @@ function mapState(d) {
   //      a) explicit "return" / "back to" word in the state value
   //      b) an in-transit-like state with COD === 0 (no cash to collect,
   //         so this trip is not going TO the customer)
-  //      c) an in-transit-like state where Bosta already tried the customer
-  //         (deliveryAttemptsLength > 0) and nothing was collected
-  //         (cod_collectedAmount === 0) — the parcel is now on the way back.
+  //      c) an in-transit-like state where Bosta already tried the
+  //         customer (deliveryAttemptsLength > 0). By this point we've
+  //         already ruled out Delivered / Returned above, so if the
+  //         parcel is still moving AND has been to the customer at least
+  //         once, it's on its way back to us.
   const cod = extractCOD(d);
   const attempts = parseInt(d?.deliveryAttemptsLength || d?.attemptsCount || 0) || 0;
-  const collected = parseFloat(d?.cod_collectedAmount);
-  const alreadyTriedAndFailed = attempts > 0 && !isNaN(collected) && collected === 0;
+  const alreadyTriedAndFailed = attempts > 0;
   const headingToCustomer = v.includes('heading') || v.includes('out for delivery')
       || v.includes('on its way to') || code === 41;
   const inTransitLike = v.includes('transit') || v.includes('progress')

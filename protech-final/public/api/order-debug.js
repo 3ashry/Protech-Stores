@@ -40,8 +40,7 @@ function mapState(d) {
       || v.includes('action required') || v.includes('issue')) return 'Awaiting Action';
   const cod = extractCOD(d);
   const attempts = parseInt(d?.deliveryAttemptsLength || d?.attemptsCount || 0) || 0;
-  const collected = parseFloat(d?.cod_collectedAmount);
-  const alreadyTriedAndFailed = attempts > 0 && !isNaN(collected) && collected === 0;
+  const alreadyTriedAndFailed = attempts > 0;
   const headingToCustomer = v.includes('heading') || v.includes('out for delivery')
       || v.includes('on its way to') || code === 41;
   const inTransitLike = v.includes('transit') || v.includes('progress')
