@@ -40,15 +40,15 @@ function mapState(d) {
       || v.includes('action required') || v.includes('issue')) return 'Awaiting Action';
   const cod = extractCOD(d);
   const attempts = parseInt(d?.deliveryAttemptsLength || d?.attemptsCount || 0) || 0;
-  const alreadyTriedAndFailed = attempts > 0;
   const headingToCustomer = v.includes('heading') || v.includes('out for delivery')
       || v.includes('on its way to') || code === 41;
   const inTransitLike = v.includes('transit') || v.includes('progress')
       || v.includes('picked') || v.includes('warehouse')
       || v.includes('dispatch') || headingToCustomer;
   if (v.includes('return') || v.includes('back to')) return 'On its way to me';
-  if (inTransitLike && (cod === 0 || alreadyTriedAndFailed)) return 'On its way to me';
   if (headingToCustomer) return 'Heading to Customer';
+  const alreadyTriedAndFailed = attempts > 0;
+  if (inTransitLike && (cod === 0 || alreadyTriedAndFailed)) return 'On its way to me';
   if (inTransitLike) return 'In Transit';
   if (v.includes('created') || v.includes('pending') || v === 'new'
       || v.includes('pickup requested') || v.includes('awaiting pickup')

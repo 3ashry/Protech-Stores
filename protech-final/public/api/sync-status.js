@@ -99,19 +99,23 @@ function mapState(d) {
   //         once, it's on its way back to us.
   const cod = extractCOD(d);
   const attempts = parseInt(d?.deliveryAttemptsLength || d?.attemptsCount || 0) || 0;
-  const alreadyTriedAndFailed = attempts > 0;
   const headingToCustomer = v.includes('heading') || v.includes('out for delivery')
       || v.includes('on its way to') || code === 41;
   const inTransitLike = v.includes('transit') || v.includes('progress')
       || v.includes('picked') || v.includes('warehouse')
       || v.includes('dispatch') || headingToCustomer;
   if (v.includes('return') || v.includes('back to')) return 'On its way to me';
-  if (inTransitLike && (cod === 0 || alreadyTriedAndFailed)) return 'On its way to me';
 
-  // 5a) The parcel is out on the last mile — a courier has it and is
-  //     actively going TO the customer (Bosta state.code 41 or wording
-  //     like "out for delivery" / "heading to customer").
+  // 5a) Courier is actively going TO the customer — takes priority over
+  //     the "already tried" check because a re-attempt is still an
+  //     outbound trip, not a return leg.
   if (headingToCustomer) return 'Heading to Customer';
+
+  // 5b) A failed attempt + still moving (but NOT out for delivery again)
+  //     = coming back to us. `cod === 0` also flags return legs where
+  //     Bosta zeroed the cash-to-collect.
+  const alreadyTriedAndFailed = attempts > 0;
+  if (inTransitLike && (cod === 0 || alreadyTriedAndFailed)) return 'On its way to me';
 
   // 5b) Otherwise, generic outbound in-transit — "picked up",
   //     "received at warehouse", "in transit between hubs", etc.
