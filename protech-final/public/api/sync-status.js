@@ -243,29 +243,41 @@ export default async function handler(req, res) {
     // is fair game so Bosta's authoritative state stays in sync.
     const changes = [];
     const feeLog = [];
+    const detailFetchStats = { attempted: 0, ok: 0, failed: 0, remapped: 0, errors: [] };
     for (const o of (orders || [])) {
       let d = byRef[o.id] || (o.ship_code && byTrack[o.ship_code]);
       if (!d) continue;
       let mapped = mapState(d);
 
-      // The search response leaves `deliveryAttemptsLength` and
-      // `cod_collectedAmount` off the object — so mapState on it cannot
-      // tell a return leg from a normal in-transit trip. Whenever the
-      // search hit maps to an in-transit-like non-terminal, non-heading
-      // status, re-fetch the detail endpoint (which has the attempt
-      // count and cod_collectedAmount) and re-map against that.
-      const inTransitLike = mapped === 'In Transit' || mapped === 'Processing';
-      if (inTransitLike && (o.bosta_id || d._id)) {
+      // Whenever the search hit maps to In Transit / Processing, re-fetch
+      // the detail endpoint (which has deliveryAttemptsLength and
+      // cod_collectedAmount) and re-map — this is the only way to tell a
+      // real in-transit trip from a return leg.
+      const isInTransitLike = mapped === 'In Transit' || mapped === 'Processing';
+      const bostaIdForDetail = o.bosta_id || d._id;
+      if (isInTransitLike && bostaIdForDetail) {
+        detailFetchStats.attempted++;
         try {
-          const dr = await fetch(`${BOSTA_BASE_URL}/deliveries/business/${encodeURIComponent(o.bosta_id || d._id)}`, {
+          const dr = await fetch(`${BOSTA_BASE_URL}/deliveries/business/${encodeURIComponent(bostaIdForDetail)}`, {
             headers: { Authorization: BOSTA_API_KEY },
           });
           if (dr.ok) {
+            detailFetchStats.ok++;
             const dj = await dr.json().catch(() => null);
             const detail = dj?.data || dj;
-            if (detail) { d = detail; mapped = mapState(detail); }
+            if (detail) {
+              const newMapped = mapState(detail);
+              if (newMapped !== mapped) detailFetchStats.remapped++;
+              d = detail; mapped = newMapped;
+            }
+          } else {
+            detailFetchStats.failed++;
+            if (detailFetchStats.errors.length < 5) detailFetchStats.errors.push({ code: o.code, status: dr.status });
           }
-        } catch {}
+        } catch (e) {
+          detailFetchStats.failed++;
+          if (detailFetchStats.errors.length < 5) detailFetchStats.errors.push({ code: o.code, err: e.message });
+        }
       }
 
       const patch = {};
@@ -388,7 +400,7 @@ export default async function handler(req, res) {
       } catch (e) { backfillErrors.push({ code: o.code, why: 'exception: ' + e.message }); }
     }
 
-    const result = { ok: true, bostaDeliveries: deliveries.length, ordersChecked: (orders || []).length, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8), backfill: { checked: backfillCandidates.length, updated: backfillChanges.length, changes: backfillChanges.slice(0, 20), errors: backfillErrors.slice(0, 20) } };
+    const result = { ok: true, bostaDeliveries: deliveries.length, ordersChecked: (orders || []).length, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8), detailFetchStats, backfill: { checked: backfillCandidates.length, updated: backfillChanges.length, changes: backfillChanges.slice(0, 20), errors: backfillErrors.slice(0, 20) } };
     console.log('sync-status', JSON.stringify(result));
     return res.status(200).json(result);
   } catch (e) {
