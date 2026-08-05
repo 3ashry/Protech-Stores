@@ -59,14 +59,23 @@ function extractCOD(d) {
 function mapState(d) {
   const v = (d?.state?.value || '').toLowerCase();
   if (!v) return null;
+  const code = d?.state?.code;
+
+  // 0) Bosta's own numeric state code is the most reliable signal when
+  //    present. 45 = delivered (to customer); 46 = returned (back with us).
+  if (code === 46) return 'Returned';
 
   // 1) TERMINAL states first — order arrived at its final destination.
-  //    Returned-to-business / warehouse / merchant / sender = the parcel is
-  //    physically back with us.
-  if (v.includes('returned to business') || v.includes('returned to sender')
-      || v.includes('returned to merchant') || v.includes('returned to warehouse')
-      || v === 'returned') return 'Returned';
-  if (v.includes('deliver')) return 'Delivered';
+  //    Any "returned…" wording means the parcel is (or is being sent) back
+  //    to us. Also catch "delivered to <internal Bosta location>" which
+  //    Bosta sometimes uses for a completed RETURN leg (not a customer
+  //    delivery) — those are Returned, not Delivered.
+  if (v === 'returned' || v.startsWith('returned') || v.includes('returned to')) return 'Returned';
+  if (v.includes('deliver')) {
+    if (v.includes('warehouse') || v.includes('business') || v.includes('merchant')
+        || v.includes('sender') || v.includes('back to')) return 'Returned';
+    return 'Delivered';
+  }
 
   // 2) Customer refused / order cancelled by anyone — auto-set so the
   //    dashboard reflects reality. (Manual protection lives in the caller:
