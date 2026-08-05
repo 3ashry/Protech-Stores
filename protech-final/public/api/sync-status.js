@@ -242,9 +242,32 @@ export default async function handler(req, res) {
     const changes = [];
     const feeLog = [];
     for (const o of (orders || [])) {
-      const d = byRef[o.id] || (o.ship_code && byTrack[o.ship_code]);
+      let d = byRef[o.id] || (o.ship_code && byTrack[o.ship_code]);
       if (!d) continue;
-      const mapped = mapState(d);
+      let mapped = mapState(d);
+
+      // The search response leaves `deliveryAttemptsLength` and
+      // `cod_collectedAmount` off the object — so mapState on it cannot
+      // tell a return leg from a normal in-transit trip. If the search
+      // hit maps to a non-terminal status AND the state is post-attempt
+      // (in a warehouse or between hubs), fetch the detail and re-map
+      // so we catch orders that are actually on their way back.
+      const needsDetail = mapped && mapped !== 'Delivered' && mapped !== 'Returned'
+        && mapped !== 'Cancelled' && mapped !== 'Heading to Customer'
+        && d.deliveryAttemptsLength == null;
+      if (needsDetail && (o.bosta_id || d._id)) {
+        try {
+          const dr = await fetch(`${BOSTA_BASE_URL}/deliveries/business/${encodeURIComponent(o.bosta_id || d._id)}`, {
+            headers: { Authorization: BOSTA_API_KEY },
+          });
+          if (dr.ok) {
+            const dj = await dr.json().catch(() => null);
+            const detail = dj?.data || dj;
+            if (detail) { d = detail; mapped = mapState(detail); }
+          }
+        } catch {}
+      }
+
       const patch = {};
 
       // 1) Auto-advance status (skip only if warehouse has already reclaimed
