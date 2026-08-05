@@ -50,7 +50,9 @@ function mapState(d) {
   const now = Date.now();
   const isFutureIso = (iso) => { if (!iso) return false; const t = Date.parse(iso); return !isNaN(t) && t > now; };
   const retryScheduled = isFutureIso(d?.scheduledAt) || isFutureIso(d?.lastChanceToDeliverDate);
-  const alreadyTriedAndFailed = attempts > 0 && !retryScheduled;
+  const parcelIsStationaryAtHub = code === 24 || (v.includes('received at') && v.includes('warehouse'));
+  const holdingForRetry = retryScheduled && parcelIsStationaryAtHub;
+  const alreadyTriedAndFailed = attempts > 0 && !holdingForRetry;
   if (inTransitLike && (cod === 0 || alreadyTriedAndFailed)) return 'On its way to me';
   if (inTransitLike) return 'In Transit';
   if (v.includes('created') || v.includes('pending') || v === 'new'

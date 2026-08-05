@@ -111,11 +111,9 @@ function mapState(d) {
   //     outbound trip, not a return leg.
   if (headingToCustomer) return 'Heading to Customer';
 
-  // Does Bosta have a FUTURE retry scheduled for this parcel? If so it
-  // isn't returning to us yet — customer postponed or address is being
-  // corrected, another attempt is planned. `scheduledAt` and
-  // `lastChanceToDeliverDate` both become future timestamps when a
-  // retry is queued.
+  // Does Bosta have a FUTURE retry scheduled for this parcel? If so
+  // the parcel is being held at a hub waiting for another attempt —
+  // customer postponed, or address is being corrected.
   const now = Date.now();
   const isFutureIso = (iso) => {
     if (!iso) return false;
@@ -124,10 +122,15 @@ function mapState(d) {
   };
   const retryScheduled = isFutureIso(d?.scheduledAt) || isFutureIso(d?.lastChanceToDeliverDate);
 
-  // 5b) A failed attempt + still moving (but NOT out for delivery again,
-  //     and no retry queued) = coming back to us. `cod === 0` also flags
-  //     return legs where Bosta zeroed the cash-to-collect.
-  const alreadyTriedAndFailed = attempts > 0 && !retryScheduled;
+  // 5b) A failed attempt + still moving = coming back to us. But only
+  //     treat "retry-scheduled" as a blocker when the parcel is
+  //     STATIONARY at a hub (state.code 24 = Received at warehouse).
+  //     If Bosta is actively moving it between hubs (state.code 30 or
+  //     wording like "in transit between hubs"), it's physically on
+  //     its way somewhere — after a failed attempt, that's back to us.
+  const parcelIsStationaryAtHub = code === 24 || (v.includes('received at') && v.includes('warehouse'));
+  const holdingForRetry = retryScheduled && parcelIsStationaryAtHub;
+  const alreadyTriedAndFailed = attempts > 0 && !holdingForRetry;
   if (inTransitLike && (cod === 0 || alreadyTriedAndFailed)) return 'On its way to me';
 
   // 5b) Otherwise, generic outbound in-transit — "picked up",
