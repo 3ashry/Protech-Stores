@@ -244,10 +244,18 @@ export default async function handler(req, res) {
     const changes = [];
     const feeLog = [];
     const detailFetchStats = { attempted: 0, ok: 0, failed: 0, remapped: 0, errors: [] };
+    // Debug trace: when ?only=<code> is passed, emit a step-by-step trace
+    // for that one order (whether it was matched to a Bosta delivery,
+    // what mapState returned at each step, what patch was applied, etc.)
+    const onlyCode = (req.query?.only || '').toString().trim();
+    let onlyTrace = null;
     for (const o of (orders || [])) {
+      const trace = (onlyCode && o.code === onlyCode) ? (onlyTrace = { code: o.code, steps: [] }) : null;
       let d = byRef[o.id] || (o.ship_code && byTrack[o.ship_code]);
+      if (trace) trace.steps.push({ step: 'match', matchedByRef: !!byRef[o.id], matchedByTrack: !!(o.ship_code && byTrack[o.ship_code]), hasD: !!d });
       if (!d) continue;
       let mapped = mapState(d);
+      if (trace) trace.steps.push({ step: 'search-mapState', bostaState: d.state?.value, bostaCode: d.state?.code, mapped });
 
       // Whenever the search hit maps to In Transit / Processing, re-fetch
       // the detail endpoint (which has deliveryAttemptsLength and
@@ -255,6 +263,7 @@ export default async function handler(req, res) {
       // real in-transit trip from a return leg.
       const isInTransitLike = mapped === 'In Transit' || mapped === 'Processing';
       const bostaIdForDetail = o.bosta_id || d._id;
+      if (trace) trace.steps.push({ step: 'inTransitLike?', isInTransitLike, bostaIdForDetail });
       if (isInTransitLike && bostaIdForDetail) {
         detailFetchStats.attempted++;
         try {
@@ -267,6 +276,7 @@ export default async function handler(req, res) {
             const detail = dj?.data || dj;
             if (detail) {
               const newMapped = mapState(detail);
+              if (trace) trace.steps.push({ step: 'detail-mapState', detailState: detail.state?.value, detailCode: detail.state?.code, attempts: detail.deliveryAttemptsLength, cod: detail.cod, cod_collected: detail.cod_collectedAmount, prevMapped: mapped, newMapped });
               if (newMapped !== mapped) detailFetchStats.remapped++;
               d = detail; mapped = newMapped;
             }
@@ -325,6 +335,7 @@ export default async function handler(req, res) {
         if (o.cash_cycle_closed !== cashCycleClosed) patch.cash_cycle_closed = cashCycleClosed;
       }
 
+      if (trace) trace.steps.push({ step: 'patch', currentStatus: o.status, finalMapped: mapped, patch, warehouse_confirmed: o.warehouse_confirmed });
       if (Object.keys(patch).length) {
         const r = await sbPatch(o.id, patch);
         // If cash_cycle_closed column doesn't exist yet (migration not run),
@@ -333,7 +344,10 @@ export default async function handler(req, res) {
           const { cash_cycle_closed, ...rest } = patch;
           if (Object.keys(rest).length) await sbPatch(o.id, rest);
         }
+        if (trace) trace.steps.push({ step: 'sbPatch', ok: r.ok, status: r.status });
         changes.push({ code: o.code, from: o.status, bostaState: d.state?.value, ...patch, feeSrc });
+      } else if (trace) {
+        trace.steps.push({ step: 'no-patch', reason: 'empty' });
       }
     }
     // ─── BACKFILL PASS ──────────────────────────────────────────────
@@ -400,7 +414,7 @@ export default async function handler(req, res) {
       } catch (e) { backfillErrors.push({ code: o.code, why: 'exception: ' + e.message }); }
     }
 
-    const result = { ok: true, bostaDeliveries: deliveries.length, ordersChecked: (orders || []).length, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8), detailFetchStats, backfill: { checked: backfillCandidates.length, updated: backfillChanges.length, changes: backfillChanges.slice(0, 20), errors: backfillErrors.slice(0, 20) } };
+    const result = { ok: true, bostaDeliveries: deliveries.length, ordersChecked: (orders || []).length, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8), detailFetchStats, backfill: { checked: backfillCandidates.length, updated: backfillChanges.length, changes: backfillChanges.slice(0, 20), errors: backfillErrors.slice(0, 20) }, onlyTrace };
     console.log('sync-status', JSON.stringify(result));
     return res.status(200).json(result);
   } catch (e) {
