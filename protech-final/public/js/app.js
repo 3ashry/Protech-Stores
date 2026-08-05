@@ -418,7 +418,7 @@ function renderHome() {
   const orders = cache.orders;
   const total = orders.length;
   const delivered = orders.filter(o => o.status === 'Delivered').length;
-  const inTransit = orders.filter(o => ['In Transit', 'Processing'].includes(o.status)).length;
+  const inTransit = orders.filter(o => ['In Transit', 'Processing', 'Heading to Customer'].includes(o.status)).length;
   const fbs = cache.feedbacks;
   const isSatisfied = f => f.general === 'Satisfied' || f.general === 'راضي';
   const satPct = fbs.length ? Math.round(fbs.filter(isSatisfied).length / fbs.length * 100) : 0;
@@ -696,7 +696,7 @@ function renderOrders() {
     showToast("🛒 طلب جديد وصل!");
   }
   sessionStorage.setItem("protech_order_count", newCount);
-  const smap = { 'Processing': 'b-info', 'In Transit': 'b-warning', 'Delivered': 'b-success', 'On its way to me': 'b-purple', 'Returned': 'b-purple', 'Cancelled': 'b-danger', 'Awaiting Action': 'b-danger' };
+  const smap = { 'Processing': 'b-info', 'In Transit': 'b-warning', 'Heading to Customer': 'b-orange', 'Delivered': 'b-success', 'On its way to me': 'b-purple', 'Returned': 'b-purple', 'Cancelled': 'b-danger', 'Awaiting Action': 'b-danger' };
   // Cancelled orders are removed entirely from the list (and are excluded from all money calcs).
   const visibleOrders = cache.orders.filter(o => o.status !== 'Cancelled');
   document.getElementById('orders-tbody').innerHTML = visibleOrders.length ? visibleOrders.map(o => `
@@ -978,7 +978,7 @@ async function saveOrderBuyPrices(id) {
 function viewOrder(id) {
   const o = cache.orders.find(x => x.id === id);
   if (!o) return;
-  const statuses = ['Processing', 'In Transit', 'Delivered', 'On its way to me', 'Returned', 'Awaiting Action', 'Cancelled'];
+  const statuses = ['Processing', 'In Transit', 'Heading to Customer', 'Delivered', 'On its way to me', 'Returned', 'Awaiting Action', 'Cancelled'];
   const prHtml = (o.products || []).map((p, idx) => {
     const pr = cache.products.find(pp => pp.code === p.code);
     const unitPrice = parseFloat(p.sell_price ?? p.price ?? 0);
@@ -1161,7 +1161,7 @@ function renderFinancials() {
   // Projected scenario: assume every In-Transit order is delivered & paid in full, and all
   // Returned goods are restocked (so their cost is excluded). The true per-order "am I
   // winning?" once the pipeline clears.
-  const projOrders = orders.filter(o => o.status === 'In Transit' || o.status === 'Delivered');
+  const projOrders = orders.filter(o => o.status === 'In Transit' || o.status === 'Heading to Customer' || o.status === 'Delivered');
   const projRevenue = projOrders.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0)), 0);
   const projCOGS = projOrders.reduce((a, o) => a + (o.products || []).reduce((b, p) => b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
   const allExpenses = cache.expenses.reduce((a, e) => a + parseFloat(e.amount || 0), 0);

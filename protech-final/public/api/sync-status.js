@@ -92,15 +92,21 @@ function mapState(d) {
   //    b) currently in-transit AT ALL with COD === 0 → nothing to collect,
   //       so this trip is not going TO the customer.
   const cod = extractCOD(d);
+  const headingToCustomer = v.includes('heading') || v.includes('out for delivery')
+      || v.includes('on its way to') || code === 41;
   const inTransitLike = v.includes('transit') || v.includes('progress')
       || v.includes('picked') || v.includes('warehouse')
-      || v.includes('heading') || v.includes('out for delivery')
-      || v.includes('on its way') || v.includes('dispatch');
+      || v.includes('dispatch') || headingToCustomer;
   if (v.includes('return') || v.includes('back to')) return 'On its way to me';
   if (inTransitLike && cod === 0) return 'On its way to me';
 
-  // 5) Normal outbound in-transit — includes "heading to customer",
-  //    "out for delivery", "picked up", "received at warehouse", etc.
+  // 5a) The parcel is out on the last mile — a courier has it and is
+  //     actively going TO the customer (Bosta state.code 41 or wording
+  //     like "out for delivery" / "heading to customer").
+  if (headingToCustomer) return 'Heading to Customer';
+
+  // 5b) Otherwise, generic outbound in-transit — "picked up",
+  //     "received at warehouse", "in transit between hubs", etc.
   if (inTransitLike) return 'In Transit';
 
   // 6) Not-yet-picked-up.
