@@ -47,7 +47,10 @@ function mapState(d) {
       || v.includes('dispatch') || headingToCustomer;
   if (v.includes('return') || v.includes('back to')) return 'On its way to me';
   if (headingToCustomer) return 'Heading to Customer';
-  const alreadyTriedAndFailed = attempts > 0;
+  const now = Date.now();
+  const isFutureIso = (iso) => { if (!iso) return false; const t = Date.parse(iso); return !isNaN(t) && t > now; };
+  const retryScheduled = isFutureIso(d?.scheduledAt) || isFutureIso(d?.lastChanceToDeliverDate);
+  const alreadyTriedAndFailed = attempts > 0 && !retryScheduled;
   if (inTransitLike && (cod === 0 || alreadyTriedAndFailed)) return 'On its way to me';
   if (inTransitLike) return 'In Transit';
   if (v.includes('created') || v.includes('pending') || v === 'new'

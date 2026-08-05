@@ -111,10 +111,23 @@ function mapState(d) {
   //     outbound trip, not a return leg.
   if (headingToCustomer) return 'Heading to Customer';
 
-  // 5b) A failed attempt + still moving (but NOT out for delivery again)
-  //     = coming back to us. `cod === 0` also flags return legs where
-  //     Bosta zeroed the cash-to-collect.
-  const alreadyTriedAndFailed = attempts > 0;
+  // Does Bosta have a FUTURE retry scheduled for this parcel? If so it
+  // isn't returning to us yet — customer postponed or address is being
+  // corrected, another attempt is planned. `scheduledAt` and
+  // `lastChanceToDeliverDate` both become future timestamps when a
+  // retry is queued.
+  const now = Date.now();
+  const isFutureIso = (iso) => {
+    if (!iso) return false;
+    const t = Date.parse(iso);
+    return !isNaN(t) && t > now;
+  };
+  const retryScheduled = isFutureIso(d?.scheduledAt) || isFutureIso(d?.lastChanceToDeliverDate);
+
+  // 5b) A failed attempt + still moving (but NOT out for delivery again,
+  //     and no retry queued) = coming back to us. `cod === 0` also flags
+  //     return legs where Bosta zeroed the cash-to-collect.
+  const alreadyTriedAndFailed = attempts > 0 && !retryScheduled;
   if (inTransitLike && (cod === 0 || alreadyTriedAndFailed)) return 'On its way to me';
 
   // 5b) Otherwise, generic outbound in-transit — "picked up",
