@@ -601,11 +601,27 @@ function openAddProduct() {
     document.getElementById('p-offer-row').style.display = 'none';
     document.getElementById('p-is-published').checked = true;
     document.querySelectorAll('.p-cat-cb').forEach(cb => cb.checked = false);
+    document.getElementById('p-combo-pieces').value = '';
+    toggleComboPiecesRow();
     document.getElementById('p-idx').value = '';
     document.getElementById('m-product-title').textContent = 'Add Product';
     renderImagePreviews([]);
   }, 80);
 }
+
+// Show the combo-pieces field only when the "Tool Sets & Combos" category
+// (value="sets") is checked. Attached to every category checkbox once, on
+// first form open; also called manually from open/edit to sync on load.
+function toggleComboPiecesRow() {
+  const row = document.getElementById('p-combo-pieces-row');
+  if (!row) return;
+  const setsChecked = !!document.querySelector('.p-cat-cb[value="sets"]:checked');
+  row.style.display = setsChecked ? 'block' : 'none';
+}
+// Wire up the toggle once the DOM is ready.
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.p-cat-cb').forEach(cb => cb.addEventListener('change', toggleComboPiecesRow));
+});
 
 function editProduct(id) {
   const p = cache.products.find(x => x.id === id);
@@ -630,6 +646,8 @@ function editProduct(id) {
     document.getElementById('p-bundle-with').value = bw.filter(Boolean).join(', ');
     const cats = Array.isArray(p.categories) ? p.categories : (p.category ? [p.category] : []);
     document.querySelectorAll('.p-cat-cb').forEach(cb => { cb.checked = cats.includes(cb.value); });
+    document.getElementById('p-combo-pieces').value = p.combo_pieces || '';
+    toggleComboPiecesRow();
     document.getElementById('p-idx').value = id;
     document.getElementById('m-product-title').textContent = 'Edit Product';
     renderImagePreviews(currentProductImages);
@@ -656,12 +674,17 @@ async function saveProduct() {
   const categories = Array.from(document.querySelectorAll('.p-cat-cb:checked')).map(cb => cb.value);
   // Keep first category in 'category' field for backward compatibility with store
   const category = categories[0] || null;
+  // Manual piece-count for combos — only saved when the "sets" category
+  // is selected; cleared otherwise so it never leaks onto non-combo products.
+  const combo_pieces = categories.includes('sets')
+    ? (parseInt(document.getElementById('p-combo-pieces').value || 0) || null)
+    : null;
 
   if (!code || !name) { showToast('Please fill in code and name'); return; }
   if (is_offer && !offer_price) { showToast('Please enter the discounted price'); return; }
 
   const id = document.getElementById('p-idx').value;
-const payload = { code, name, qty, price, buy_price, brand, description, is_offer, offer_price, is_published, free_shipping, is_suggested, bundle_with, categories, category, images: currentProductImages };
+const payload = { code, name, qty, price, buy_price, brand, description, is_offer, offer_price, is_published, free_shipping, is_suggested, bundle_with, categories, category, combo_pieces, images: currentProductImages };
   try {
     if (id) {
       await dbUpdate('products', id, payload);
