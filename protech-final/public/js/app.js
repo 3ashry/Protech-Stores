@@ -601,11 +601,51 @@ function openAddProduct() {
     document.getElementById('p-offer-row').style.display = 'none';
     document.getElementById('p-is-published').checked = true;
     document.querySelectorAll('.p-cat-cb').forEach(cb => cb.checked = false);
+    renderVariantRows([]);
     document.getElementById('p-idx').value = '';
     document.getElementById('m-product-title').textContent = 'Add Product';
     renderImagePreviews([]);
   }, 80);
 }
+
+// ── Variants editor ──
+// A variant is { name, price }. Rendered as a stack of paired inputs
+// with a delete button per row. `addVariantRow()` is exposed on window
+// so the "+ Add variant" button (declared in the HTML) can invoke it.
+function renderVariantRows(variants) {
+  const list = document.getElementById('p-variants-list');
+  if (!list) return;
+  list.innerHTML = '';
+  (Array.isArray(variants) ? variants : []).forEach(v => addVariantRow(v?.name || '', v?.price ?? ''));
+}
+function addVariantRow(name = '', price = '') {
+  const list = document.getElementById('p-variants-list');
+  if (!list) return;
+  const row = document.createElement('div');
+  row.className = 'p-variant-row';
+  row.style.cssText = 'display:grid;grid-template-columns:1fr 130px 34px;gap:6px;align-items:center';
+  row.innerHTML = `
+    <input class="p-variant-name" type="text" value="${esc(name)}" placeholder="اسم الخيار (e.g. شنطة + بطارية 4 أمبير)"
+      style="padding:8px 10px;border:1px solid #bae6fd;border-radius:6px;font-family:inherit;font-size:13px">
+    <input class="p-variant-price" type="number" min="0" step="0.01" value="${price === '' || price == null ? '' : Number(price)}" placeholder="EGP"
+      style="padding:8px 10px;border:1px solid #bae6fd;border-radius:6px;font-family:inherit;font-size:13px">
+    <button type="button" title="Remove"
+      style="width:34px;height:34px;background:#fee2e2;color:#b91c1c;border:0;border-radius:6px;cursor:pointer;font-size:16px;font-weight:800">×</button>`;
+  row.querySelector('button').addEventListener('click', () => row.remove());
+  list.appendChild(row);
+}
+function collectVariants() {
+  const rows = document.querySelectorAll('#p-variants-list .p-variant-row');
+  const out = [];
+  rows.forEach(row => {
+    const name = row.querySelector('.p-variant-name').value.trim();
+    const priceStr = row.querySelector('.p-variant-price').value;
+    const price = parseFloat(priceStr);
+    if (name && !isNaN(price) && price >= 0) out.push({ name, price });
+  });
+  return out;
+}
+window.addVariantRow = addVariantRow;
 
 function editProduct(id) {
   const p = cache.products.find(x => x.id === id);
@@ -630,6 +670,7 @@ function editProduct(id) {
     document.getElementById('p-bundle-with').value = bw.filter(Boolean).join(', ');
     const cats = Array.isArray(p.categories) ? p.categories : (p.category ? [p.category] : []);
     document.querySelectorAll('.p-cat-cb').forEach(cb => { cb.checked = cats.includes(cb.value); });
+    renderVariantRows(Array.isArray(p.variants) ? p.variants : []);
     document.getElementById('p-idx').value = id;
     document.getElementById('m-product-title').textContent = 'Edit Product';
     renderImagePreviews(currentProductImages);
@@ -656,12 +697,13 @@ async function saveProduct() {
   const categories = Array.from(document.querySelectorAll('.p-cat-cb:checked')).map(cb => cb.value);
   // Keep first category in 'category' field for backward compatibility with store
   const category = categories[0] || null;
+  const variants = collectVariants();
 
   if (!code || !name) { showToast('Please fill in code and name'); return; }
   if (is_offer && !offer_price) { showToast('Please enter the discounted price'); return; }
 
   const id = document.getElementById('p-idx').value;
-const payload = { code, name, qty, price, buy_price, brand, description, is_offer, offer_price, is_published, free_shipping, is_suggested, bundle_with, categories, category, images: currentProductImages };
+const payload = { code, name, qty, price, buy_price, brand, description, is_offer, offer_price, is_published, free_shipping, is_suggested, bundle_with, categories, category, variants, images: currentProductImages };
   try {
     if (id) {
       await dbUpdate('products', id, payload);
