@@ -5,10 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="theme-color" content="#2D2926">
+<meta name="theme-color" content="#F26A21">
 <title>Protech Orders</title>
 <link rel="stylesheet" href="css/app.css">
 <link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="favicon.png">
+<script>
+  // Register the PWA service worker (enables install-to-home-screen + push
+  // notifications). Silently skips on browsers without service worker support
+  // (older iOS Safari, some in-app WebViews).
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').catch(err => console.warn('SW register failed:', err));
+    });
+  }
+</script>
   <style>
   /* Fix checkboxes and toggles in modals */
   .modal input[type="checkbox"] {

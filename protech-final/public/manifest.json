@@ -1,18 +1,21 @@
 {
-  "name": "Protech Admin",
-  "short_name": "بروتيك",
-  "description": "لوحة تحكم بروتيك",
+  "name": "Protech Orders — لوحة تحكم بروتيك",
+  "short_name": "Protech Admin",
+  "description": "لوحة إدارة طلبات ومنتجات بروتيك ستورز",
+  "id": "/",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
   "background_color": "#1a1614",
   "theme_color": "#F26A21",
   "orientation": "portrait-primary",
+  "lang": "ar",
+  "dir": "rtl",
+  "categories": ["business", "productivity"],
   "icons": [
-    {
-      "src": "/favicon.ico",
-      "sizes": "64x64",
-      "type": "image/x-icon",
-      "purpose": "any maskable"
-    }
+    { "src": "/favicon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/favicon.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/favicon.ico", "sizes": "64x64", "type": "image/x-icon" }
   ]
 }
