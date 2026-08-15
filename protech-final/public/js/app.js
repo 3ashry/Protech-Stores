@@ -854,12 +854,26 @@ async function saveOrder() {
   if (!customer_name || !phone) { showToast('Please enter customer name and phone'); return; }
   if (!phoneOk(phone)) { showToast('Invalid Egyptian phone number (e.g. 01208198008)'); return; }
 
+  // When editing an existing order, whatever the OLD order already reserved
+  // for a product is about to be restored to stock a few lines below — so
+  // it counts as "available" for this save. Otherwise editing an order that
+  // uses the last unit of a product would always fail with "not enough
+  // stock" (0 current + 1 needed) even though nothing actually changed.
+  const editingId = document.getElementById('o-idx').value;
+  const oldOrder = editingId ? cache.orders.find(x => x.id === editingId) : null;
+  const oldReservedFor = (code) => {
+    if (!oldOrder || !Array.isArray(oldOrder.products)) return 0;
+    return oldOrder.products
+      .filter(p => p.code === code)
+      .reduce((a, p) => a + parseInt(p.qty || 1), 0);
+  };
   for (const r of oPRows) {
     if (!r.code) continue;
     const prod = cache.products.find(p => p.code === r.code);
     if (!prod) { showToast('Product not found: ' + r.code); return; }
-    if (parseInt(r.qty || 1) > parseInt(prod.qty || 0)) {
-      showToast(`Not enough stock for "${prod.name}" — available: ${prod.qty}`);
+    const effectiveAvail = parseInt(prod.qty || 0) + oldReservedFor(r.code);
+    if (parseInt(r.qty || 1) > effectiveAvail) {
+      showToast(`Not enough stock for "${prod.name}" — available: ${effectiveAvail}`);
       return;
     }
   }
