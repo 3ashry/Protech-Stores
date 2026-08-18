@@ -34,20 +34,27 @@ self.addEventListener('push', (event) => {
   const title = data.title || '🛒 طلب جديد وصل!';
   const body = data.body || 'افتح لوحة التحكم لعرض الطلب.';
   const url = data.url || '/';
-  event.waitUntil(
-    self.registration.showNotification(title, {
+  event.waitUntil((async () => {
+    await self.registration.showNotification(title, {
       body,
       icon: '/favicon.png',
       badge: '/favicon.png',
       tag: data.tag || 'protech-order',
       renotify: true,
-      vibrate: [200, 80, 200],
+      vibrate: [200, 80, 200, 80, 200],
       data: { url, orderCode: data.orderCode || null },
       requireInteraction: false,
       dir: 'rtl',
       lang: 'ar',
-    })
-  );
+    });
+    // Tell any open dashboard tabs / installed-PWA windows to play the
+    // cash-register sound (the system push notification itself can't
+    // trigger custom audio, but a foreground client can).
+    try {
+      const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const c of clients) c.postMessage({ type: 'play-cash-sound' });
+    } catch (_) {}
+  })());
 });
 
 // Focus (or open) the dashboard tab when the notification is tapped.
