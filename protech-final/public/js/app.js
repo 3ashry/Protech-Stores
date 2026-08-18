@@ -1618,33 +1618,72 @@ function downloadDeliveredOrdersExcel() {
   const products = cache.products || [];
   const delivered = (cache.orders || []).filter(o => o.status === 'Delivered');
   if (!delivered.length) { showToast('No delivered orders to export'); return; }
-  const rows = delivered.map(o => {
+
+  // Split by whether Bosta has closed the cash cycle. Closed group first
+  // (definitive figures) then Open group (estimates), each with its own
+  // subtotal row and one grand-total row at the bottom.
+  const toRow = (o) => {
     const buyCost = (Array.isArray(o.products) ? o.products : [])
       .reduce((a, p) => a + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0);
+    const collected = parseFloat(o.total || 0);
+    const shipping = parseFloat(o.actual_shipping || 0);
+    const cashCycle = o.cash_cycle_closed === true ? 'Closed (final)' : 'Open (estimated)';
     return {
       'Order Code': o.code || '',
-      'Date': o.date || '',
+      'Date': String(o.created_at || o.date || '').slice(0, 10),
       'Customer': o.customer_name || '',
+      'Phone': o.phone || '',
+      'City': o.city || '',
       'Shipping Code': o.ship_code || '',
-      'Bosta Collected from Customer (EGP)': parseFloat(o.total || 0),
-      'Total Buying Cost (EGP)': Math.round(buyCost * 100) / 100,
-      'Actual Shipping Cost (EGP)': parseFloat(o.actual_shipping || 0),
+      'Status': o.status || '',
+      'Cash Cycle': cashCycle,
+      'Shipping Finalised': o.cash_cycle_closed === true ? 'Yes' : 'No',
+      'Total Collected (EGP)': collected,
+      'Actual Shipping (EGP)': shipping,
+      'Buying Cost (EGP)': Math.round(buyCost * 100) / 100,
+      'Net (Collected − Shipping − Buy) (EGP)': Math.round((collected - shipping - buyCost) * 100) / 100,
     };
+  };
+  // Chronological within each group, oldest → newest.
+  const byDate = (a, b) => String(a.created_at || a.date || '').localeCompare(String(b.created_at || b.date || ''));
+  const closed = delivered.filter(o => o.cash_cycle_closed === true).sort(byDate).map(toRow);
+  const open = delivered.filter(o => o.cash_cycle_closed !== true).sort(byDate).map(toRow);
+  const subtotal = (label, rows) => ({
+    'Order Code': label,
+    'Date': '', 'Customer': '', 'Phone': '', 'City': '', 'Shipping Code': '',
+    'Status': '', 'Cash Cycle': `${rows.length} orders`, 'Shipping Finalised': '',
+    'Total Collected (EGP)': rows.reduce((a, r) => a + r['Total Collected (EGP)'], 0),
+    'Actual Shipping (EGP)': rows.reduce((a, r) => a + r['Actual Shipping (EGP)'], 0),
+    'Buying Cost (EGP)': Math.round(rows.reduce((a, r) => a + r['Buying Cost (EGP)'], 0) * 100) / 100,
+    'Net (Collected − Shipping − Buy) (EGP)': Math.round(rows.reduce((a, r) => a + r['Net (Collected − Shipping − Buy) (EGP)'], 0) * 100) / 100,
   });
-  // Totals row.
-  rows.push({
-    'Order Code': 'TOTAL',
-    'Date': '', 'Customer': '', 'Shipping Code': '',
-    'Bosta Collected from Customer (EGP)': rows.reduce((a, r) => a + r['Bosta Collected from Customer (EGP)'], 0),
-    'Total Buying Cost (EGP)': Math.round(rows.reduce((a, r) => a + r['Total Buying Cost (EGP)'], 0) * 100) / 100,
-    'Actual Shipping Cost (EGP)': rows.reduce((a, r) => a + r['Actual Shipping Cost (EGP)'], 0),
-  });
+  const blank = { 'Order Code': '' };
+
+  const rows = [];
+  if (closed.length) {
+    rows.push({ 'Order Code': '── SHIPPING FINALISED (Cash cycle closed) ──' });
+    rows.push(...closed);
+    rows.push(subtotal('Subtotal — Finalised', closed));
+    rows.push(blank);
+  }
+  if (open.length) {
+    rows.push({ 'Order Code': '── SHIPPING STILL ESTIMATED (Cash cycle open) ──' });
+    rows.push(...open);
+    rows.push(subtotal('Subtotal — Estimated', open));
+    rows.push(blank);
+  }
+  rows.push(subtotal('GRAND TOTAL — All Delivered', [...closed, ...open]));
+
   const ws = XLSX.utils.json_to_sheet(rows);
-  ws['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 22 }, { wch: 16 }, { wch: 30 }, { wch: 22 }, { wch: 22 }];
+  ws['!cols'] = [
+    { wch: 14 }, { wch: 12 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
+    { wch: 12 }, { wch: 18 }, { wch: 14 },
+    { wch: 20 }, { wch: 20 }, { wch: 18 }, { wch: 30 },
+  ];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Delivered Orders');
   XLSX.writeFile(wb, `Protech_Delivered_Orders_${new Date().toISOString().slice(0, 10)}.xlsx`);
-  showToast('Delivered orders Excel downloaded ✓');
+  showToast(`Delivered Excel: ${closed.length} finalised · ${open.length} estimated ✓`);
 }
 
 function downloadReturnsExcel() {
