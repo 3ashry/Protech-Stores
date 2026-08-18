@@ -75,28 +75,88 @@ function requestOrderNotifPermission() {
   }
   if (Notification.permission === 'granted') {
     hideOrderNotifPrompt();
-    if (typeof showToast === 'function') showToast('🔔 الإشعارات مفعّلة بالفعل');
+    if (typeof showToast === 'function') showToast('🔔 الإشعارات مفعّلة — جاري ربط الجهاز…');
+    subscribeToPush().finally(() => {
+      if (typeof showToast === 'function') showToast('🔔 الجهاز جاهز — ستصلك إشعارات حتى لو التطبيق مقفول');
+    });
     return;
   }
   if (Notification.permission === 'denied') {
     if (typeof showToast === 'function') showToast('الإشعارات مرفوضة من إعدادات المتصفح — فعّلها من هناك');
     return;
   }
-  Notification.requestPermission().then(perm => {
+  Notification.requestPermission().then(async perm => {
     if (perm === 'granted') {
       hideOrderNotifPrompt();
-      if (typeof showToast === 'function') showToast('🔔 تم تفعيل الإشعارات — ستصلك عند كل طلب جديد');
+      if (typeof showToast === 'function') showToast('🔔 تم تفعيل الإشعارات — جاري ربط الجهاز…');
       try {
         new Notification('بروتيك — إشعارات مفعّلة ✓', {
           body: 'ستصلك رسالة هنا عند كل طلب جديد.',
           icon: '/favicon.png',
         });
       } catch (_) {}
+      await subscribeToPush();
+      if (typeof showToast === 'function') showToast('🔔 الجهاز جاهز — ستصلك إشعارات حتى لو التطبيق مقفول');
     } else if (perm === 'denied') {
       if (typeof showToast === 'function') showToast('لم يتم تفعيل الإشعارات');
     }
   });
 }
+
+// ── Web Push subscription ─────────────────────────────────────────────
+// Registers this device with the server so pushes can arrive even when
+// the PWA is closed / phone is locked. Requires:
+//   1) Notification permission (handled above)
+//   2) The service worker registered (see index.html)
+//   3) VAPID_PUBLIC_KEY env var set on Vercel + /api/push?action=pubkey
+//      returning it.
+function urlBase64ToUint8Array(b64) {
+  const padding = '='.repeat((4 - b64.length % 4) % 4);
+  const base64 = (b64 + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+async function subscribeToPush() {
+  try {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return false;
+    const reg = await navigator.serviceWorker.ready;
+    // Already subscribed? Send it up again anyway — server upserts by endpoint.
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const r = await fetch('/api/push?action=pubkey');
+      if (!r.ok) throw new Error('pubkey fetch failed');
+      const { publicKey } = await r.json();
+      if (!publicKey) throw new Error('empty public key');
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey),
+      });
+    }
+    const post = await fetch('/api/push?action=subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscription: sub }),
+    });
+    if (!post.ok) throw new Error('subscribe post failed: ' + post.status);
+    return true;
+  } catch (e) {
+    console.warn('subscribeToPush failed:', e && e.message);
+    return false;
+  }
+}
+// Expose so an admin button (or console call) can re-subscribe manually.
+window.subscribeToPush = subscribeToPush;
+
+// If permission is already granted on page load (e.g. after installing the
+// PWA and re-opening it), auto-subscribe silently. Small delay so the SW
+// registration in index.html has time to complete.
+window.addEventListener('load', () => {
+  if (!('Notification' in window)) return;
+  if (Notification.permission !== 'granted') return;
+  setTimeout(() => { subscribeToPush(); }, 3000);
+});
 
 function hideOrderNotifPrompt() {
   const el = document.getElementById('notif-prompt');

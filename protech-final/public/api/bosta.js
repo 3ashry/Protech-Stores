@@ -4,6 +4,7 @@
 // Secrets are read from environment variables (Vercel → Project → Settings →
 // Environment Variables). Never hardcode keys here — this file is in source control.
 import { tgNotifyOrder } from './_telegram.js';
+import { sendPushForOrder } from './_push.js';
 
 const BOSTA_API_KEY = process.env.BOSTA_API_KEY;
 const BOSTA_BASE_URL = process.env.BOSTA_BASE_URL || 'https://app.bosta.co/api/v2';
@@ -240,6 +241,15 @@ export default async function handler(req, res) {
   // aren't set in Vercel env vars.
   tgNotifyOrder({ orderId, customerName, phone, city, address, total, allowOpen })
     .catch(e => console.warn('telegram notify failed:', e && e.message));
+  // Fire-and-forget Web Push to every subscribed device (the installed PWA
+  // on the admin's phone). Pings the phone even when the app is closed / the
+  // screen is locked. No-ops silently if VAPID keys aren't configured.
+  sendPushForOrder({
+    id: orderId,
+    code: orderId,
+    customer_name: customerName,
+    city, total,
+  }).catch(e => console.warn('web push failed:', e && e.message));
 
   const cityCode = CITY_MAP[city];
   if (!cityCode) {
