@@ -756,10 +756,220 @@ function renderOrders() {
       <td><div class="actions">
         <button class="btn btn-ghost btn-xs" onclick="viewOrder('${o.id}')">View</button>
         <button class="btn btn-dark btn-xs" onclick="editOrder('${o.id}')">Edit</button>
+        <button class="btn ${isInPickup(o.id) ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="togglePickup('${o.id}')" title="أضف/إزالة من قائمة اليوم">${isInPickup(o.id) ? '✓ في القائمة' : '📋 قائمة اليوم'}</button>
         <button class="btn btn-danger btn-xs" onclick="delOrder('${o.id}')">Delete</button>
       </div></td>
     </tr>`).join('') : '<tr><td colspan="6"><div class="empty"><div class="empty-icon">🛒</div>No orders yet</div></td></tr>';
+  renderPickupBadge();
 }
+
+// ═══════════════════════════════════════════════════════════════════
+//  TODAY'S PICKUP LIST
+//  A running list of orders you've queued to pick from the warehouse.
+//  Persisted in localStorage so it survives refresh. Aggregates products
+//  across all queued orders by code, sums quantities, and lets you
+//  download a print-friendly pickup sheet (name / code / qty).
+// ═══════════════════════════════════════════════════════════════════
+const PICKUP_KEY = 'protech_pickup_orders_v1';
+function getPickupIds() {
+  try { const raw = localStorage.getItem(PICKUP_KEY); return raw ? JSON.parse(raw) : []; }
+  catch { return []; }
+}
+function savePickupIds(arr) {
+  try { localStorage.setItem(PICKUP_KEY, JSON.stringify(arr)); } catch {}
+}
+function isInPickup(id) { return getPickupIds().includes(id); }
+function togglePickup(id) {
+  const cur = getPickupIds();
+  const next = cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id];
+  savePickupIds(next);
+  renderOrders();
+  showToast(cur.includes(id) ? 'أُزيل من القائمة' : '✓ أُضيف إلى قائمة اليوم');
+}
+function clearPickup() {
+  if (!confirm('مسح قائمة اليوم بالكامل؟')) return;
+  savePickupIds([]);
+  renderOrders();
+  closeModal();
+  showToast('تم مسح القائمة');
+}
+
+// Aggregate all products across queued orders → [{code, name, qty, orders:[codes]}]
+function aggregatePickup() {
+  const ids = getPickupIds();
+  const orders = (cache.orders || []).filter(o => ids.includes(o.id));
+  const bag = new Map(); // code → { code, name, qty, orders:Set }
+  for (const o of orders) {
+    for (const p of (o.products || [])) {
+      const code = String(p.code || '').toUpperCase().trim() || '(no code)';
+      const cur = bag.get(code) || { code, name: p.name || '', qty: 0, orders: new Set() };
+      cur.qty += parseInt(p.qty || 1);
+      cur.orders.add(o.code || o.id);
+      // Prefer a non-empty name if one appears later.
+      if (!cur.name && p.name) cur.name = p.name;
+      bag.set(code, cur);
+    }
+  }
+  return { orders, items: Array.from(bag.values()).sort((a, b) => a.code.localeCompare(b.code)) };
+}
+
+// Small floating badge (top-left, near the sync buttons) showing count.
+function renderPickupBadge() {
+  const ids = getPickupIds();
+  let el = document.getElementById('pickup-badge');
+  if (!ids.length) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement('button');
+    el.id = 'pickup-badge';
+    el.type = 'button';
+    el.style.cssText = 'position:fixed;bottom:88px;left:20px;z-index:900;background:#F26A21;color:#fff;border:0;border-radius:999px;padding:11px 18px;font-family:Cairo,sans-serif;font-weight:800;font-size:14px;box-shadow:0 6px 22px rgba(242,106,33,.4);cursor:pointer;display:flex;align-items:center;gap:8px';
+    el.onclick = openPickupPanel;
+    document.body.appendChild(el);
+  }
+  el.textContent = `📋 قائمة اليوم (${ids.length})`;
+}
+
+// Modal listing aggregated pickup items with download + clear actions.
+function openPickupPanel() {
+  const { orders, items } = aggregatePickup();
+  const rowsHtml = items.length
+    ? items.map(r => `
+        <tr>
+          <td style="font-family:var(--f-mono);font-size:13px">${esc(r.code)}</td>
+          <td>${esc(r.name) || '—'}</td>
+          <td style="text-align:center;font-weight:800;font-size:16px;color:#F26A21">${r.qty}</td>
+          <td style="font-size:11px;color:#888">${Array.from(r.orders).slice(0, 4).join(', ')}${r.orders.size > 4 ? '…' : ''}</td>
+        </tr>`).join('')
+    : `<tr><td colspan="4" style="text-align:center;padding:24px;color:#888">القائمة فارغة</td></tr>`;
+  const totalUnits = items.reduce((a, r) => a + r.qty, 0);
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="pickup-modal" class="modal-wrap" style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:flex-end;justify-content:center;padding:0" onclick="if(event.target===this)closePickupPanel()">
+      <div class="modal" style="background:#fff;max-width:820px;width:100%;max-height:92vh;border-radius:16px 16px 0 0;display:flex;flex-direction:column;overflow:hidden" onclick="event.stopPropagation()">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #eee">
+          <div>
+            <div style="font-weight:900;font-size:17px;font-family:Cairo,sans-serif">📋 قائمة اليوم للسحب من المخزن</div>
+            <div style="font-size:12px;color:#666;margin-top:2px">${orders.length} طلب · ${items.length} منتج مختلف · ${totalUnits} قطعة</div>
+          </div>
+          <button onclick="closePickupPanel()" style="border:0;background:transparent;font-size:26px;cursor:pointer;color:#666;line-height:1">×</button>
+        </div>
+        <div style="overflow:auto;flex:1;padding:0 20px">
+          <table style="width:100%;border-collapse:collapse;font-family:Cairo,sans-serif;font-size:14px">
+            <thead style="position:sticky;top:0;background:#fff;box-shadow:0 1px 0 #eee">
+              <tr style="text-align:right">
+                <th style="padding:12px 4px">الكود</th>
+                <th style="padding:12px 4px">اسم المنتج</th>
+                <th style="padding:12px 4px;text-align:center">الكمية</th>
+                <th style="padding:12px 4px">الطلبات</th>
+              </tr>
+            </thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+        </div>
+        <div style="display:flex;gap:10px;padding:14px 20px;border-top:1px solid #eee">
+          <button class="btn btn-primary" onclick="generatePickupSheet()" ${items.length ? '' : 'disabled'} style="flex:1">📥 تحميل ورقة السحب PDF</button>
+          <button class="btn btn-danger" onclick="clearPickup()" ${items.length ? '' : 'disabled'}>مسح القائمة</button>
+        </div>
+      </div>
+    </div>`);
+}
+function closePickupPanel() {
+  const el = document.getElementById('pickup-modal');
+  if (el) el.remove();
+}
+
+// Print-friendly warehouse pickup sheet — opens a new window like the invoice.
+function generatePickupSheet() {
+  const { orders, items } = aggregatePickup();
+  if (!items.length) { showToast('القائمة فارغة'); return; }
+  const totalUnits = items.reduce((a, r) => a + r.qty, 0);
+  const dateStr = new Date().toLocaleDateString('ar-EG', { year: 'numeric', month: 'long', day: 'numeric' });
+  const rowsHtml = items.map((r, i) => `
+    <tr>
+      <td style="text-align:center;color:#888">${i + 1}</td>
+      <td style="font-family:'Courier New',monospace;font-size:13px;font-weight:700">${esc(r.code)}</td>
+      <td>${esc(r.name) || '—'}</td>
+      <td style="text-align:center;font-weight:800;font-size:16px;color:#F26A21">${r.qty}</td>
+      <td style="text-align:center;width:70px"><div style="width:26px;height:26px;border:2px solid #333;border-radius:6px;margin:0 auto"></div></td>
+    </tr>`).join('');
+  const orderTags = orders.map(o => `<span style="display:inline-block;background:#fff7ee;border:1px solid #f8c493;color:#c65a10;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:700;margin:2px">${esc(o.code || o.id)}</span>`).join(' ');
+  const html = `<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+  <meta charset="UTF-8"/>
+  <title>قائمة سحب — ${dateStr}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', 'Cairo', Arial, sans-serif; padding: 40px; color: #222; direction: rtl; background: #fff; }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 20px; border-bottom: 4px solid #F26A21; margin-bottom: 28px; }
+    .brand { font-size: 28px; font-weight: 900; color: #F26A21; letter-spacing: 1px; }
+    .brand small { display: block; font-size: 12px; color: #666; font-weight: 500; margin-top: 4px; letter-spacing: 0; }
+    .meta { text-align: left; font-size: 13px; color: #444; line-height: 1.6; }
+    .meta b { color: #F26A21; font-size: 15px; }
+    h1 { font-size: 22px; font-weight: 800; margin-bottom: 14px; }
+    .summary { background: #fff7ee; border: 1px solid #f8c493; border-radius: 10px; padding: 14px 18px; margin-bottom: 22px; }
+    .summary b { color: #F26A21; font-size: 18px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 14px; }
+    th { background: #F26A21; color: #fff; padding: 12px 8px; font-weight: 700; text-align: right; }
+    td { padding: 12px 8px; border-bottom: 1px solid #eee; }
+    tr:nth-child(even) td { background: #fafafa; }
+    .orders-strip { padding: 14px 0; border-top: 1px dashed #ddd; margin-top: 30px; font-size: 12px; color: #666; }
+    .orders-strip strong { color: #333; display: block; margin-bottom: 6px; font-size: 13px; }
+    .print-btn { display: block; margin: 30px auto 0; background: #F26A21; color: #fff; border: 0; border-radius: 8px; padding: 12px 32px; font-size: 15px; font-weight: 800; cursor: pointer; font-family: inherit; }
+    @media print { .print-btn { display: none; } body { padding: 20px; } }
+    .footer { margin-top: 40px; text-align: center; font-size: 12px; color: #999; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <div class="brand">PROTECH<small>قائمة سحب من المخزن</small></div>
+    </div>
+    <div class="meta">
+      <div><b>التاريخ:</b> ${dateStr}</div>
+      <div><b>عدد الطلبات:</b> ${orders.length}</div>
+      <div><b>إجمالي القطع:</b> ${totalUnits}</div>
+    </div>
+  </div>
+
+  <h1>البنود المطلوبة</h1>
+  <div class="summary">
+    اسحب من المخزن كميّات إجمالية لكل منتج بالجدول أدناه، ثم علّم المربع الفارغ بعد التأكد من وجودها.
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width:40px;text-align:center">#</th>
+        <th style="width:130px">الكود</th>
+        <th>اسم المنتج</th>
+        <th style="width:80px;text-align:center">الكمية</th>
+        <th style="width:70px;text-align:center">✓</th>
+      </tr>
+    </thead>
+    <tbody>${rowsHtml}</tbody>
+  </table>
+
+  <div class="orders-strip">
+    <strong>الطلبات المشمولة (${orders.length})</strong>
+    ${orderTags}
+  </div>
+
+  <div class="footer">Protech Stores — قائمة داخلية للاستخدام في المخزن فقط</div>
+
+  <button class="print-btn" onclick="window.print()">🖨️ طباعة / حفظ PDF</button>
+
+  <script>window.addEventListener('load', () => setTimeout(() => window.print(), 400));</script>
+</body>
+</html>`;
+  const win = window.open('', '_blank', 'width=900,height=1000');
+  if (win) { win.document.write(html); win.document.close(); }
+  else alert('يرجى السماح بالنوافذ المنبثقة');
+}
+window.togglePickup = togglePickup;
+window.openPickupPanel = openPickupPanel;
+window.closePickupPanel = closePickupPanel;
+window.generatePickupSheet = generatePickupSheet;
+window.clearPickup = clearPickup;
 
 async function syncFromBosta() {
   showToast('Syncing from Bosta…');
