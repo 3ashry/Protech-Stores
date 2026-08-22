@@ -2304,20 +2304,27 @@ const SUPPLIER_SB_URL = 'https://wljxplbcfoorqpoflcdz.supabase.co';
 const SUPPLIER_SB_KEY = 'sb_publishable_zsHh-eOarHI7BSGtuP6WWQ_PQ4ACoHG';
 let supplierCache = { payments: [], charges: [], loaded: false, loading: false };
 
+// Returns an array on success, or `null` on any failure. Callers MUST treat
+// `null` as "no fresh data — keep whatever you already had", never as "empty".
+// A silent [] fallback here was the cause of receipts vanishing on the laptop
+// after a network hiccup even though the row was safely in the DB.
 async function sbSupplierGet(table) {
   try {
     const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/${table}?select=*&order=created_at.desc`, {
       headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY) }
     });
+    if (!res.ok) return null;
     const data = await res.json();
-    return (res.ok && Array.isArray(data)) ? data : [];
-  } catch (e) { return []; }
+    return Array.isArray(data) ? data : null;
+  } catch (e) { return null; }
 }
 
 async function loadSupplierPayments() {
   supplierCache.loading = true;
   renderSupplierAccount();
-  supplierCache.payments = await sbSupplierGet('supplier_payments');
+  const rows = await sbSupplierGet('supplier_payments');
+  if (rows) supplierCache.payments = rows;
+  else if (supplierCache.loaded) showToast('تعذّر تحديث دفعات العشري — عرض آخر نسخة محفوظة');
   supplierCache.loaded = true;
   supplierCache.loading = false;
   renderSupplierAccount();
@@ -2508,16 +2515,27 @@ async function saveSupplierPayment() {
   if (!amount || amount <= 0) { showToast('Please enter a valid amount'); return; }
   const data = { id: genId(), amount, note, date, created_at: new Date().toISOString() };
   try {
+    // Use `return=representation` so the server hands back the actually-committed
+    // row(s). If nothing lands (RLS drop, network truncation, etc) the response
+    // array is empty and we treat it as a failure — no more phantom "saved"
+    // states where the toast said ✓ but the row was never in the DB.
     const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/supplier_payments`, {
       method: 'POST',
-      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=representation' },
       body: JSON.stringify(data)
     });
     if (!res.ok) throw new Error(await res.text());
-    supplierCache.payments.unshift(data);
+    const saved = await res.json().catch(() => []);
+    if (!Array.isArray(saved) || !saved.length) throw new Error('Row not persisted');
+    // Re-fetch the whole list from the server so every device sees the same
+    // ordering / de-duped view — belt-and-braces against local cache drift.
+    const fresh = await sbSupplierGet('supplier_payments');
+    if (fresh) supplierCache.payments = fresh;
+    else supplierCache.payments = [saved[0], ...supplierCache.payments];
     showToast('Payment to Elashry recorded ✓');
     closeModal();
     renderSupplierAccount();
+    if (typeof renderBostaCash === 'function') renderBostaCash();
   } catch (e) { showToast('Error: ' + e.message); }
 }
 
@@ -2564,12 +2582,14 @@ function injectSupplierUI() {
 // ═══════════════════════════════════════════════════════════════════
 //  SAFE / BANK — money received from Bosta (logged manually)
 // ═══════════════════════════════════════════════════════════════════
-let bostaCashCache = { receipts: [], loading: false };
+let bostaCashCache = { receipts: [], loading: false, loaded: false };
 
 async function loadBostaReceipts() {
   bostaCashCache.loading = true;
   renderBostaCash();
-  bostaCashCache.receipts = await sbSupplierGet('bosta_receipts');
+  const rows = await sbSupplierGet('bosta_receipts');
+  if (rows) { bostaCashCache.receipts = rows; bostaCashCache.loaded = true; }
+  else if (bostaCashCache.loaded) showToast('تعذّر تحديث مدفوعات بوسطة — عرض آخر نسخة محفوظة');
   bostaCashCache.loading = false;
   renderBostaCash();
 }
@@ -2667,11 +2687,15 @@ async function saveBostaReceipt() {
   try {
     const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/bosta_receipts`, {
       method: 'POST',
-      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=representation' },
       body: JSON.stringify(data)
     });
     if (!res.ok) throw new Error(await res.text());
-    bostaCashCache.receipts.unshift(data);
+    const saved = await res.json().catch(() => []);
+    if (!Array.isArray(saved) || !saved.length) throw new Error('Row not persisted');
+    const fresh = await sbSupplierGet('bosta_receipts');
+    if (fresh) { bostaCashCache.receipts = fresh; bostaCashCache.loaded = true; }
+    else bostaCashCache.receipts = [saved[0], ...bostaCashCache.receipts];
     showToast('Receipt recorded ✓');
     closeModal();
     renderBostaCash();
@@ -2834,6 +2858,16 @@ function injectBostaCashUI() {
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
   else run();
+
+  // Re-sync payment ledgers whenever the tab regains focus. Without this,
+  // records typed on the phone don't appear on the laptop until a full
+  // reload — which is exactly what the "found on phone, not on laptop"
+  // report was about.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    if (typeof loadBostaReceipts === 'function') loadBostaReceipts();
+    if (typeof loadSupplierPayments === 'function') loadSupplierPayments();
+  });
 })();
 // ═══════════════════════════════════════════════════════════════════
 //  ORDER PROGRESS TRACKER — 3 ticks per order
