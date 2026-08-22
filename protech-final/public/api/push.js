@@ -12,19 +12,15 @@
 //
 // The actual push firing for new orders happens from `_push.js`, which
 // bosta.js imports. This endpoint is just the subscribe/test surface.
-import webpush from 'web-push';
+// See the same note in _push.js: `web-push` is CommonJS and can't be
+// imported at ESM module scope on Vercel. All setup happens inside
+// _push.js via dynamic import.
 import { sendPushToAll } from './_push.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const VAPID_PUBLIC = process.env.VAPID_PUBLIC_KEY;
-const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY;
-const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:mahmoudelashry4597@gmail.com';
 const CRON_SECRET = (process.env.CRON_SECRET || '').trim();
-
-if (VAPID_PUBLIC && VAPID_PRIVATE) {
-  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC, VAPID_PRIVATE);
-}
 
 async function readJson(req) {
   if (req.body && typeof req.body === 'object') return req.body;

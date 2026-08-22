@@ -3,22 +3,34 @@
 //   - bosta.js  → sendPushForOrder(order)  (fires on every new order)
 //   - push.js   → sendPushToAll({title, body, ...})  (test-fire from admin)
 // Underscore prefix keeps this out of Vercel's function router (private module).
-import webpush from 'web-push';
-
+//
+// `web-push` is a CommonJS package; loading it at module scope from ESM
+// (which this file is, because the project's package.json has type=module)
+// blows up with "exports is not defined" during Vercel's bundling. Import
+// it dynamically at first use — Node's ESM→CJS interop handles it fine at
+// runtime and the module is cached after the first await.
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const VAPID_PUBLIC = process.env.VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY;
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:mahmoudelashry4597@gmail.com';
 
-let vapidReady = false;
-if (VAPID_PUBLIC && VAPID_PRIVATE) {
-  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC, VAPID_PRIVATE);
-  vapidReady = true;
+let _webpush = null;
+let _vapidSetOn = null;
+async function getWebPush() {
+  if (!_webpush) {
+    const mod = await import('web-push');
+    _webpush = mod.default || mod;
+  }
+  if (VAPID_PUBLIC && VAPID_PRIVATE && _vapidSetOn !== _webpush) {
+    _webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC, VAPID_PRIVATE);
+    _vapidSetOn = _webpush;
+  }
+  return _webpush;
 }
 
 export function pushConfigured() {
-  return vapidReady && !!SUPABASE_URL && !!SUPABASE_KEY;
+  return !!VAPID_PUBLIC && !!VAPID_PRIVATE && !!SUPABASE_URL && !!SUPABASE_KEY;
 }
 
 async function fetchSubs() {
@@ -53,10 +65,11 @@ export async function sendPushToAll({ title, body, url, tag, orderCode } = {}) {
     tag: tag || 'protech-order',
     orderCode: orderCode || null,
   });
+  const wp = await getWebPush();
   let sent = 0, failed = 0;
   await Promise.all(subs.map(async (row) => {
     try {
-      await webpush.sendNotification(row.subscription, payload, { TTL: 60 * 60 });
+      await wp.sendNotification(row.subscription, payload, { TTL: 60 * 60 });
       sent++;
     } catch (e) {
       failed++;
