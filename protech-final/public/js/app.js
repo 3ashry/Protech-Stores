@@ -2988,3 +2988,170 @@ function cashCycleBadge(o) {
   }
   return ' <span title="Cash cycle not closed yet — actual shipping is still an estimate; Bosta will finalise within ~2 days" style="display:inline-block;background:#fef3c7;color:#92400e;font-weight:700;font-size:11px;padding:2px 6px;border-radius:10px;border:1px solid #fcd34d;margin-right:4px">🕒 تقديري</span>';
 }
+
+// ═══════════════════════════════════════════════════════════════════
+//  PICKER ACCOUNTS — admin CRUD screen
+//  Manages `picker_accounts` rows via /api/sync-status?action=accounts.
+//  Admin PIN is prompted once per session and cached in sessionStorage;
+//  wrong PIN clears the cache so a fresh prompt appears on next attempt.
+// ═══════════════════════════════════════════════════════════════════
+const ACCT_PIN_KEY = 'protech_admin_pin_v1';
+function getAdminPin() { try { return sessionStorage.getItem(ACCT_PIN_KEY) || ''; } catch { return ''; } }
+function saveAdminPin(p) { try { sessionStorage.setItem(ACCT_PIN_KEY, p); } catch {} }
+function clearAdminPin() { try { sessionStorage.removeItem(ACCT_PIN_KEY); } catch {} }
+
+let accountsCache = { rows: [], loaded: false, me: null };
+
+async function acctApi(op, extra = {}, init = {}) {
+  let pin = getAdminPin();
+  if (!pin) {
+    pin = (prompt('أدخل رمز المسؤول (Admin PIN):') || '').trim();
+    if (!pin) return { __cancelled: true };
+    saveAdminPin(pin);
+  }
+  const q = new URLSearchParams({ action: 'accounts', op, adminPin: pin, ...extra }).toString();
+  const r = await fetch('/api/sync-status?' + q, init);
+  if (r.status === 401) { clearAdminPin(); throw new Error('Wrong admin PIN — try again'); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
+}
+
+async function loadAccounts() {
+  const host = document.getElementById('accounts-body');
+  if (!host) return;
+  host.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted)">جاري التحميل…</div>';
+  try {
+    // Grab the caller's own admin row so we know which one is "me" — used
+    // to hide destructive controls on the currently-logged-in admin.
+    const who = await acctApi('login');
+    if (who.__cancelled) { host.innerHTML = '<div style="padding:20px;color:var(--muted)">أدخل رمز المسؤول للمتابعة.</div>'; return; }
+    accountsCache.me = who.admin || null;
+    const j = await acctApi('list');
+    accountsCache.rows = j.accounts || [];
+    accountsCache.loaded = true;
+    renderAccounts();
+  } catch (e) {
+    host.innerHTML = `<div style="padding:20px;color:var(--danger)">${esc(e.message)}</div>
+      <div style="padding:0 20px 20px"><button class="btn btn-ghost btn-sm" onclick="loadAccounts()">إعادة المحاولة</button></div>`;
+  }
+}
+
+function accountRoleBadge(role) {
+  if (role === 'admin') return '<span style="background:#7c3aed;color:#fff;font-weight:700;font-size:11px;padding:3px 8px;border-radius:8px">Admin</span>';
+  return '<span style="background:#f59e0b;color:#fff;font-weight:700;font-size:11px;padding:3px 8px;border-radius:8px">Picker</span>';
+}
+
+function renderAccounts() {
+  const host = document.getElementById('accounts-body');
+  if (!host) return;
+  const rows = accountsCache.rows;
+  const me = accountsCache.me;
+  if (!rows.length) {
+    host.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted)">لا توجد حسابات — أضف أول حساب.</div>';
+    return;
+  }
+  host.innerHTML = `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Username</th><th>Label</th><th>Role</th><th>PIN</th>
+          <th>Active</th><th>Last login</th><th>Actions</th>
+        </tr></thead>
+        <tbody>${rows.map(a => `
+          <tr${a.active ? '' : ' style="opacity:.5"'}>
+            <td><b>${esc(a.username)}</b>${me && a.id === me.id ? ' <span style="font-size:10px;color:var(--muted);font-weight:600">(you)</span>' : ''}</td>
+            <td>${esc(a.label || '')}</td>
+            <td>${accountRoleBadge(a.role)}</td>
+            <td><code style="font-family:monospace;background:#f3f4f6;padding:2px 6px;border-radius:4px">${esc(a.pin)}</code></td>
+            <td>${a.active ? '✅' : '⛔'}</td>
+            <td style="font-size:12px;color:var(--muted)">${a.last_login_at ? new Date(a.last_login_at).toLocaleString() : '—'}</td>
+            <td><div class="actions">
+              <button class="btn btn-ghost btn-xs" onclick='openAccountEditor(${JSON.stringify(a).replace(/'/g, "&#39;")})'>Edit</button>
+              ${me && a.id === me.id ? '' : `<button class="btn btn-danger btn-xs" onclick="deleteAccount('${esc(a.id)}', '${esc(a.username)}')">Delete</button>`}
+            </div></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function openAccountEditor(existing) {
+  const a = existing || { id: '', username: '', pin: '', role: 'picker', label: '', active: true };
+  const overlay = document.getElementById('overlay');
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:14px;max-width:460px;width:92%;padding:24px;max-height:90vh;overflow:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px">
+        <h3 style="margin:0;font-size:17px">${existing ? 'Edit account' : 'New account'}</h3>
+        <button class="btn btn-ghost btn-xs" onclick="closeModal()">✕</button>
+      </div>
+      <div class="form-group"><label>Username *</label>
+        <input type="text" id="ac-username" value="${esc(a.username)}" placeholder="e.g. picker, ahmed" autocomplete="off"></div>
+      <div class="form-group"><label>Label (display name, optional)</label>
+        <input type="text" id="ac-label" value="${esc(a.label || '')}" placeholder="e.g. موظف التجهيز"></div>
+      <div class="form-group"><label>PIN *</label>
+        <input type="text" id="ac-pin" value="${esc(a.pin)}" placeholder="4–8 digits" inputmode="numeric" autocomplete="off"></div>
+      <div class="form-group"><label>Role</label>
+        <select id="ac-role">
+          <option value="picker" ${a.role === 'picker' ? 'selected' : ''}>Picker — /picker.html (order fulfilment)</option>
+          <option value="admin" ${a.role === 'admin' ? 'selected' : ''}>Admin — manages accounts</option>
+        </select>
+      </div>
+      <div class="form-group" style="display:flex;align-items:center;gap:8px">
+        <input type="checkbox" id="ac-active" ${a.active !== false ? 'checked' : ''} style="width:18px;height:18px">
+        <label for="ac-active" style="margin:0;cursor:pointer">Active (uncheck to disable this account)</label>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:16px">
+        <button class="btn btn-primary" style="flex:1" onclick="saveAccount('${esc(a.id || '')}')">Save</button>
+        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      </div>
+    </div>`;
+  overlay.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+  setTimeout(() => document.getElementById('ac-username')?.focus(), 60);
+}
+
+async function saveAccount(id) {
+  const username = document.getElementById('ac-username').value.trim();
+  const pin = document.getElementById('ac-pin').value.trim();
+  const label = document.getElementById('ac-label').value.trim();
+  const role = document.getElementById('ac-role').value;
+  const active = document.getElementById('ac-active').checked;
+  if (!username || !pin) { showToast('Username and PIN are required'); return; }
+  try {
+    await acctApi('save', {}, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: id || undefined, username, pin, role, label, active }),
+    });
+    showToast('Account saved ✓');
+    closeModal();
+    loadAccounts();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+async function deleteAccount(id, username) {
+  if (!confirm(`Delete account "${username}"?\nThis account will no longer be able to log in.`)) return;
+  try {
+    await acctApi('delete', { id }, { method: 'DELETE' });
+    showToast('Account deleted');
+    loadAccounts();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+// Auto-load whenever the accounts screen becomes visible.
+(function initAccounts() {
+  const hook = () => {
+    if (typeof go === 'function' && !go.__accountsPatched) {
+      const orig = go;
+      window.go = function (name) {
+        const r = orig.apply(this, arguments);
+        if (name === 'accounts' && !accountsCache.loaded) loadAccounts();
+        return r;
+      };
+      window.go.__accountsPatched = true;
+    }
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hook);
+  else hook();
+})();

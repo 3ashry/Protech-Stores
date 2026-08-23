@@ -386,14 +386,36 @@ export default async function handler(req, res) {
     catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
+  // Helper: look up an account row by PIN. `wantRole` filters by role
+  // ('picker' or 'admin'). Also touches last_login_at on success. Returns
+  // the row on match or null on miss.
+  async function findAccountByPin(pin, wantRole) {
+    if (!pin) return null;
+    const url = `${SUPABASE_URL}/rest/v1/picker_accounts?pin=eq.${encodeURIComponent(pin)}&active=eq.true&limit=1`;
+    const r = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+    if (!r.ok) return null;
+    const rows = await r.json().catch(() => []);
+    const row = Array.isArray(rows) && rows[0];
+    if (!row) return null;
+    if (wantRole && row.role !== wantRole) return null;
+    // Best-effort last_login_at touch — don't block the request on this.
+    fetch(`${SUPABASE_URL}/rest/v1/picker_accounts?id=eq.${encodeURIComponent(row.id)}`, {
+      method: 'PATCH',
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify({ last_login_at: new Date().toISOString() }),
+    }).catch(() => {});
+    return row;
+  }
+
   // ?action=picker — warehouse-picker role: strictly filtered view of
-  // confirmed-but-unshipped orders, with product prices hidden. Auth is a
-  // shared PIN in PICKER_PIN env var. Sub-op via ?op=list|today|mark.
+  // confirmed-but-unshipped orders, with product prices hidden. PIN is
+  // checked against the picker_accounts table (role='picker' and
+  // active=true) so accounts can be added/rotated without a redeploy.
+  // Sub-op via ?op=list|today|mark.
   if (action === 'picker') {
-    const PICKER_PIN = (process.env.PICKER_PIN || '').trim();
-    if (!PICKER_PIN) return res.status(500).json({ error: 'PICKER_PIN env var not set' });
     const pin = (req.query?.pin || '').toString().trim();
-    if (pin !== PICKER_PIN) return res.status(401).json({ error: 'Wrong PIN' });
+    const acct = await findAccountByPin(pin, 'picker');
+    if (!acct) return res.status(401).json({ error: 'Wrong PIN or account disabled' });
     const op = (req.query?.op || 'list').toString();
     try {
       // Sanitise a raw order row into the picker-safe shape (no prices,
@@ -449,6 +471,84 @@ export default async function handler(req, res) {
         return res.status(200).json({ ok: true });
       }
       return res.status(400).json({ error: 'Unknown op. Use list|today|mark' });
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  }
+
+  // ?action=accounts — admin CRUD for picker_accounts rows. Only an
+  // account with role='admin' can call these ops (adminPin query param).
+  // ops: list | save (POST body with account fields) | delete (id) |
+  //      login (verifies pin and returns the account row for the dashboard
+  //             to remember which admin is logged in).
+  if (action === 'accounts') {
+    const op = (req.query?.op || 'list').toString();
+    const adminPin = (req.query?.adminPin || req.query?.pin || '').toString().trim();
+    const admin = await findAccountByPin(adminPin, 'admin');
+    if (!admin) return res.status(401).json({ error: 'Wrong admin PIN' });
+    try {
+      if (op === 'login') {
+        return res.status(200).json({ ok: true, admin: { id: admin.id, username: admin.username, label: admin.label } });
+      }
+      if (op === 'list') {
+        const url = `${SUPABASE_URL}/rest/v1/picker_accounts?select=*&order=created_at.asc`;
+        const r = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+        const rows = await r.json().catch(() => []);
+        if (!r.ok) return res.status(502).json({ error: 'DB read failed', detail: rows });
+        return res.status(200).json({ ok: true, accounts: rows });
+      }
+      if (op === 'save') {
+        // Accept POST body { id?, username, pin, role, label, active }
+        const body = await new Promise((resolve) => {
+          if (req.body && typeof req.body === 'object') return resolve(req.body);
+          let s = '';
+          req.on('data', c => (s += c));
+          req.on('end', () => { try { resolve(JSON.parse(s || '{}')); } catch { resolve({}); } });
+        });
+        const username = String(body.username || '').trim();
+        const pin = String(body.pin || '').trim();
+        const role = ['picker', 'admin'].includes(body.role) ? body.role : 'picker';
+        const label = String(body.label || '').trim() || null;
+        const active = body.active !== false;
+        if (!username || !pin) return res.status(400).json({ error: 'username and pin required' });
+        // Prevent an admin from locking themselves out — can't demote the
+        // last active admin, can't deactivate their own admin row.
+        if (body.id === admin.id && (role !== 'admin' || !active)) {
+          return res.status(400).json({ error: "You can't demote or deactivate your own admin account" });
+        }
+        const payload = { username, pin, role, label, active };
+        let r;
+        if (body.id) {
+          r = await fetch(`${SUPABASE_URL}/rest/v1/picker_accounts?id=eq.${encodeURIComponent(body.id)}`, {
+            method: 'PATCH',
+            headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=representation' },
+            body: JSON.stringify(payload),
+          });
+        } else {
+          r = await fetch(`${SUPABASE_URL}/rest/v1/picker_accounts`, {
+            method: 'POST',
+            headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=representation' },
+            body: JSON.stringify(payload),
+          });
+        }
+        const saved = await r.json().catch(() => null);
+        if (!r.ok) {
+          const detail = typeof saved === 'string' ? saved : (saved?.message || 'unknown');
+          if (/duplicate|unique|23505/i.test(String(detail))) return res.status(409).json({ error: 'اسم المستخدم موجود بالفعل' });
+          return res.status(502).json({ error: 'DB write failed', detail });
+        }
+        return res.status(200).json({ ok: true, account: Array.isArray(saved) ? saved[0] : saved });
+      }
+      if (op === 'delete') {
+        const id = (req.query?.id || '').toString();
+        if (!id) return res.status(400).json({ error: 'id required' });
+        if (id === admin.id) return res.status(400).json({ error: "You can't delete your own account while logged in" });
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/picker_accounts?id=eq.${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, Prefer: 'return=minimal' },
+        });
+        if (!r.ok) return res.status(502).json({ error: 'DB delete failed', detail: await r.text() });
+        return res.status(200).json({ ok: true });
+      }
+      return res.status(400).json({ error: 'Unknown op. Use list|save|delete|login' });
     } catch (e) { return res.status(500).json({ error: e.message }); }
   }
 

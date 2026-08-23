@@ -265,6 +265,27 @@
     </div>
   </div>
 
+  <!-- ACCOUNTS (picker / admin management) -->
+  <div class="screen" id="screen-accounts">
+    <div class="page-header">
+      <div class="page-title">Picker <span>Accounts</span></div>
+      <button class="btn btn-primary btn-sm" onclick="openAccountEditor()">+ New Account</button>
+      <button class="btn btn-ghost btn-sm" onclick="loadAccounts()" style="margin-inline-start:8px">🔄 Refresh</button>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">All accounts</span></div>
+      <div id="accounts-body" style="padding:12px"></div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">How it works</span></div>
+      <div style="padding:14px;line-height:1.7;color:#4b5563;font-size:14px">
+        <p style="margin:0 0 8px"><b>Picker</b> accounts log into <code>/picker.html</code> with their PIN. They see confirmed pending orders (no prices) and can mark them prepared.</p>
+        <p style="margin:0 0 8px"><b>Admin</b> accounts can open this Accounts screen and manage the whole list. Deleting or demoting your own admin account is blocked while you're logged in.</p>
+        <p style="margin:0">The picker link is <code>https://protech-stores.vercel.app/picker.html</code>. Share it with your employee together with their PIN.</p>
+      </div>
+    </div>
+  </div>
+
   <!-- BOTTOM NAV (mobile) -->
   <div class="bottom-nav">
     <button class="bnav-btn active" onclick="go('home')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Home</button>
@@ -274,6 +295,7 @@
     <button class="bnav-btn" onclick="go('financials')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>Finance</button>
     <button class="bnav-btn" onclick="go('invoices')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Invoice</button>
     <button class="bnav-btn" onclick="go('carts')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>Carts</button>
+    <button class="bnav-btn" onclick="go('accounts')" title="Picker accounts"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Users</button>
   </div>
 
 </div><!-- /app -->
