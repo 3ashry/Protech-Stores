@@ -156,7 +156,7 @@ export async function tgSendDailySummary(stats = {}) {
   if (!tgConfigured()) return { ok: false, error: 'not configured' };
   const {
     newToday = 0, delivered = 0, returned = 0, inTransit = 0,
-    revenue = 0, cashCycleClosed = 0, dateLabel = '',
+    revenue = 0, cashCycleOpen = 0, dateLabel = '',
   } = stats;
   const text = [
     `📊 <b>ملخص اليوم${dateLabel ? ' — ' + esc(dateLabel) : ''}</b>`,
@@ -165,7 +165,7 @@ export async function tgSendDailySummary(stats = {}) {
     `✅ تم توصيلها اليوم: <b>${delivered}</b>`,
     `↩️ تم ارجاعها اليوم: <b>${returned}</b>`,
     `🚚 قيد الشحن حالياً: <b>${inTransit}</b>`,
-    `🔒 دورات مالية مغلقة اليوم: <b>${cashCycleClosed}</b>`,
+    `🕒 دورات مالية لسه مفتوحة: <b>${cashCycleOpen}</b>`,
     ``,
     `💰 إجمالي الإيرادات اليوم: <b>${esc(money(revenue))}</b> ج.م`,
   ].join('\n');

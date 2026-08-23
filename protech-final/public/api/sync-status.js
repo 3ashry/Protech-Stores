@@ -243,21 +243,26 @@ async function sbPatch(id, body) {
 // the evening. Returned separately so ?action=daily-summary can call it
 // without running the whole sync.
 async function sendDailySummaryFromDb() {
-  const orders = await sbGet('orders?select=id,status,total,created_at,cash_cycle_closed,cash_cycle_closed_at&limit=5000');
+  const orders = await sbGet('orders?select=id,status,total,created_at,cash_cycle_closed&limit=5000');
   const now = new Date();
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
   const isToday = (iso) => !!iso && iso >= startOfDay;
-  let newToday = 0, delivered = 0, returned = 0, inTransit = 0, cashCycleClosed = 0, revenue = 0;
+  // Counts: new orders TODAY, all-time in-transit right now, orders placed
+  // today that already delivered / returned + their revenue, and open
+  // (still-estimated) cash cycles across the whole book.
+  let newToday = 0, delivered = 0, returned = 0, inTransit = 0, cashCycleOpen = 0, revenue = 0;
   for (const o of orders) {
     if (isToday(o.created_at)) newToday++;
     const s = o.status;
     if (s === 'Delivered' && isToday(o.created_at)) { delivered++; revenue += parseFloat(o.total || 0); }
     if (s === 'Returned' && isToday(o.created_at)) returned++;
     if (s === 'In Transit' || s === 'Heading to Customer' || s === 'Processing') inTransit++;
-    if (o.cash_cycle_closed === true && isToday(o.cash_cycle_closed_at)) cashCycleClosed++;
+    // Cash cycle is a per-order finalisation flag with no timestamp column;
+    // we can only report the current open count, not "closed today".
+    if ((s === 'Delivered' || s === 'Returned') && o.cash_cycle_closed !== true) cashCycleOpen++;
   }
   const dateLabel = now.toISOString().slice(0, 10);
-  return tgSendDailySummary({ newToday, delivered, returned, inTransit, cashCycleClosed, revenue, dateLabel });
+  return tgSendDailySummary({ newToday, delivered, returned, inTransit, cashCycleOpen, revenue, dateLabel });
 }
 
 export default async function handler(req, res) {
