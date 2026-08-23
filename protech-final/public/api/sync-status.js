@@ -67,6 +67,19 @@ function mapState(d) {
   //    present. 45 = delivered (to customer); 46 = returned (back with us).
   if (code === 46) return 'Returned';
 
+  // 0b) Return-to-Origin flag. Bosta sets type.code=20 / type.value="Return
+  //     to Origin" (also stamps changedToRTODate) the moment a parcel is
+  //     definitively coming back to the merchant — cancellation, repeated
+  //     delivery refusal, undeliverable address. Once flipped, the parcel
+  //     stays RTO until it actually lands back with us (state code 46,
+  //     handled above). Trust it over every other in-transit heuristic:
+  //     the physical parcel may still be sitting at a hub with cod > 0
+  //     and no failed attempts recorded on the search-hit view, so the
+  //     cod===0 / attempts>0 rules missed this case entirely.
+  if ((d?.type?.code === 20) || (d?.type?.value === 'Return to Origin') || d?.changedToRTODate) {
+    return 'On its way to me';
+  }
+
   // 1) TERMINAL states first — order arrived at its final destination.
   //    Any "returned…" wording means the parcel is (or is being sent) back
   //    to us. Also catch "delivered to <internal Bosta location>" which
