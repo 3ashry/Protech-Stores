@@ -26,13 +26,19 @@ function money(n) {
   return isFinite(x) ? x.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : String(n || '');
 }
 
-// Normalise a phone into +2010... for tel: and wa.me links.
+// Normalise a phone into E.164 for tel: and wa.me links.
+// Egyptian country code is +20, so a local 010/011/012/015 number gets its
+// leading 0 replaced by +20 (not +2 — +2 alone is Egypt's dial prefix and
+// yields an invalid international number that Telegram rejects as
+// "Wrong port number specified in the URL").
 function normPhone(p) {
   let s = String(p || '').trim().replace(/[\s()-]/g, '');
   if (!s) return '';
   if (s.startsWith('+')) return s;
-  if (s.startsWith('0')) return '+2' + s.slice(1);
-  return '+2' + s;
+  if (s.startsWith('00')) return '+' + s.slice(2);   // 002010... → +2010...
+  if (s.startsWith('0')) return '+20' + s.slice(1);  // 010... → +2010...
+  if (s.startsWith('20')) return '+' + s;            // 2010... → +2010...
+  return '+20' + s;                                  // 10... → +2010...
 }
 
 // Low-level Telegram sender. `opts` may carry an `inlineKeyboard` — a 2-D
