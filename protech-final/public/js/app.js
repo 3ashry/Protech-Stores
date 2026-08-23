@@ -740,7 +740,28 @@ function renderOrders() {
   sessionStorage.setItem("protech_order_count", newCount);
   const smap = { 'Processing': 'b-info', 'In Transit': 'b-warning', 'Heading to Customer': 'b-orange', 'Delivered': 'b-success', 'On its way to me': 'b-purple', 'Returned': 'b-purple', 'Cancelled': 'b-danger', 'Awaiting Action': 'b-danger' };
   // Cancelled orders are removed entirely from the list (and are excluded from all money calcs).
-  const visibleOrders = cache.orders.filter(o => o.status !== 'Cancelled');
+  let visibleOrders = cache.orders.filter(o => o.status !== 'Cancelled');
+  // Free-text search — matches against every field the user is likely
+  // to search by. Case-insensitive, matches partial words, and Arabic
+  // digits get normalised to ASCII so "٠١٢٠٨" matches "01208".
+  const searchEl = document.getElementById('orders-search');
+  const rawQ = searchEl ? searchEl.value.trim() : '';
+  if (rawQ) {
+    const arabicDigits = '٠١٢٣٤٥٦٧٨٩';
+    const normDigits = (s) => String(s || '').replace(/[٠-٩]/g, d => arabicDigits.indexOf(d));
+    const q = normDigits(rawQ).toLowerCase();
+    visibleOrders = visibleOrders.filter(o => {
+      const hay = [
+        o.code, o.customer_name, o.phone, o.city, o.address,
+        o.ship_code, o.status, o.total, o.notes,
+      ].map(v => normDigits(v).toLowerCase()).join(' ');
+      return hay.includes(q);
+    });
+  }
+  const countEl = document.getElementById('orders-search-count');
+  if (countEl) countEl.textContent = rawQ
+    ? `${visibleOrders.length} match${visibleOrders.length === 1 ? '' : 'es'}`
+    : '';
   document.getElementById('orders-tbody').innerHTML = visibleOrders.length ? visibleOrders.map(o => `
     <tr${o.status === 'Awaiting Action' ? ' style="background:#fff4f4"' : ''}>
       <td><span class="badge b-orange">${esc(o.code)}</span> ${orderProgressBadge(o)}${o.allow_open ? ' <span class="badge b-warning" title="يريد فتح الشحنة">📦</span>' : ''}${o.status === 'Returned' && !o.warehouse_confirmed ? ' <span class="badge b-danger" title="مرتجع — لم يُرجع للمخزن بعد">↩️ لم يُرجع للمخزن</span>' : ''}${cashCycleBadge(o)}</td>
@@ -759,7 +780,7 @@ function renderOrders() {
         <button class="btn ${isInPickup(o.id) ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="togglePickup('${o.id}')" title="أضف/إزالة من قائمة اليوم">${isInPickup(o.id) ? '✓ في القائمة' : '📋 قائمة اليوم'}</button>
         <button class="btn btn-danger btn-xs" onclick="delOrder('${o.id}')">Delete</button>
       </div></td>
-    </tr>`).join('') : '<tr><td colspan="6"><div class="empty"><div class="empty-icon">🛒</div>No orders yet</div></td></tr>';
+    </tr>`).join('') : `<tr><td colspan="6"><div class="empty"><div class="empty-icon">🛒</div>${rawQ ? 'No orders match “' + esc(rawQ) + '”' : 'No orders yet'}</div></td></tr>`;
   renderPickupBadge();
 }
 

@@ -157,7 +157,14 @@
       <button class="btn btn-ghost btn-sm" onclick="downloadDeliveredOrdersExcel()" style="margin-inline-start:8px">📦 Delivered — Full Report</button>
     </div>
     <div class="card">
-      <div class="card-header"><span class="card-title">All Orders</span></div>
+      <div class="card-header" style="flex-wrap:wrap;gap:10px">
+        <span class="card-title">All Orders</span>
+        <div style="display:flex;gap:8px;align-items:center;flex:1;min-width:220px;max-width:520px;margin-inline-start:auto">
+          <input type="search" id="orders-search" placeholder="🔍 Search — code / name / phone / city / tracking…"
+            oninput="renderOrders()" style="flex:1;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;background:#fff">
+          <span id="orders-search-count" style="font-size:12px;color:var(--muted);white-space:nowrap"></span>
+        </div>
+      </div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Code</th><th>Customer</th><th>Phone</th><th>Total</th><th>Status</th><th>Actions</th></tr></thead>
