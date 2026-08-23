@@ -237,6 +237,87 @@ async function sbPatch(id, body) {
   });
 }
 
+// Audit every Delivered/Returned order and flag rows where our stored
+// `total` doesn't match what Bosta's records say. Bosta's authoritative
+// number is `cod_collectedAmount` (what the courier actually took from the
+// customer, present once cash cycle closes) falling back to `cod` (what
+// we set when creating the shipment; matches the pre-delivery expectation).
+// A mismatch means someone edited the amount in the Bosta app after
+// creation, or the customer paid a different amount — both are worth
+// eyeballing before profit numbers are trusted.
+async function runCollectionAudit() {
+  const orders = await sbGet('orders?select=id,code,status,total,ship_code,bosta_id,customer_name,city,cash_cycle_closed&limit=5000');
+  const targets = orders.filter(o => o.status === 'Delivered' || o.status === 'Returned');
+  // Grab everything Bosta returns in one paginated sweep so we can match by
+  // trackingNumber / _id in memory. Any target not in that sweep gets an
+  // individual detail fetch.
+  const deliveries = await fetchAllDeliveries();
+  const byId = {}, byTrack = {};
+  for (const d of deliveries) {
+    if (d._id) byId[d._id] = d;
+    if (d.trackingNumber) byTrack[d.trackingNumber] = d;
+  }
+  const mismatches = [];
+  const unresolved = [];
+  let checked = 0, missing = 0;
+  const asFloat = (v) => { const n = parseFloat(v); return isNaN(n) ? null : n; };
+
+  async function fetchDetail(bostaId) {
+    if (!bostaId) return null;
+    try {
+      const r = await fetch(`${BOSTA_BASE_URL}/deliveries/business/${encodeURIComponent(bostaId)}`, {
+        headers: { Authorization: BOSTA_API_KEY },
+      });
+      if (!r.ok) return null;
+      const j = await r.json().catch(() => null);
+      return j?.data || j || null;
+    } catch { return null; }
+  }
+
+  for (const o of targets) {
+    checked++;
+    const dLite = (o.bosta_id && byId[o.bosta_id]) || (o.ship_code && byTrack[o.ship_code]) || null;
+    // Always fetch detail — the search-endpoint lite object doesn't carry
+    // cod_collectedAmount reliably. Cheap enough at this scale (a few
+    // hundred detail calls at ~30ms each ≈ ~10-15s total).
+    const bostaId = o.bosta_id || dLite?._id;
+    if (!bostaId) { missing++; unresolved.push({ code: o.code, why: 'no bosta_id and ship_code not in search' }); continue; }
+    const detail = await fetchDetail(bostaId);
+    if (!detail) { missing++; unresolved.push({ code: o.code, why: 'detail fetch failed' }); continue; }
+    const ourTotal = asFloat(o.total) ?? 0;
+    const bostaCollected = asFloat(detail.cod_collectedAmount);
+    const bostaCod = asFloat(detail.cod);
+    // Prefer the collected amount when Bosta has recorded it; otherwise
+    // the CoD we set at creation. For Returned parcels no cash changed
+    // hands so we compare against cod (the ORIGINAL expected amount) —
+    // this catches "the total in our DB was edited after the fact".
+    const bostaValue = bostaCollected != null ? bostaCollected : bostaCod;
+    const diff = bostaValue != null ? +(bostaValue - ourTotal).toFixed(2) : null;
+    if (diff != null && Math.abs(diff) >= 1) {
+      mismatches.push({
+        code: o.code, status: o.status, customer: o.customer_name || '', city: o.city || '',
+        ourTotal, bostaCollected, bostaCod, diff,
+        cashCycleClosed: o.cash_cycle_closed === true,
+        bostaState: detail?.state?.value || null,
+      });
+    }
+  }
+  // Sort worst first — biggest absolute diffs at the top.
+  mismatches.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+  return {
+    ok: true,
+    scanned: targets.length,
+    checked,
+    matched: checked - mismatches.length - missing,
+    mismatchedCount: mismatches.length,
+    unresolvedCount: missing,
+    totalOverclaimed: +mismatches.reduce((s, m) => s + (m.diff < 0 ? -m.diff : 0), 0).toFixed(2),
+    totalUndercollected: +mismatches.reduce((s, m) => s + (m.diff > 0 ? m.diff : 0), 0).toFixed(2),
+    mismatches,
+    unresolved,
+  };
+}
+
 // Compose today's roll-up from the same Supabase snapshot the sync uses and
 // send it to Telegram. Cairo day = UTC day + 2..3h depending on DST; matching
 // on `created_at::date` in UTC is close enough for a summary that fires in
@@ -283,6 +364,13 @@ export default async function handler(req, res) {
       console.error('daily-summary error', e.message);
       return res.status(500).json({ error: e.message });
     }
+  }
+  // ?action=collection-audit — reconciles our stored `total` against what
+  // Bosta actually collected / expected for every Delivered/Returned order.
+  // Slow-ish (does a detail fetch per target) so it's on-demand only.
+  if (action === 'collection-audit') {
+    try { return res.status(200).json(await runCollectionAudit()); }
+    catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
   // ?summary=1 runs the normal sync AND fires the summary afterwards.
