@@ -427,14 +427,21 @@ export default async function handler(req, res) {
       }
     }
     // ─── BACKFILL PASS ──────────────────────────────────────────────
-    // The search endpoint only returns the last ~1500 deliveries. Any
-    // order that has a stored bosta_id but wasn't in that batch never
-    // gets inspected by the main loop, so both its status AND the
-    // cash-cycle flag stay stale. This second pass hits Bosta's detail
-    // endpoint directly for every not-yet-fully-closed order, running
-    // the same mapState + fee logic. Cap at 200 per run so a huge
-    // backlog gets processed over multiple runs.
-    const seenIds = new Set(Object.values(byRef).map(d => d._id).filter(Boolean));
+    // The search endpoint's paginated fetch can miss deliveries for
+    // reasons we don't control (Bosta seems to return only a subset per
+    // sweep). Two categories of order fall through and need per-order
+    // Bosta lookups here:
+    //   A) Order has bosta_id but that _id isn't in the search results.
+    //   B) Order has ship_code but that trackingNumber isn't in the
+    //      search results (typically newer orders that Bosta hasn't
+    //      included yet — no stored bosta_id, we have to hunt for it).
+    // Category B is what caused newly-picked-up orders like ORD-3AT4Q to
+    // sit stale for hours: search never returned the delivery, backfill
+    // ignored it because bosta_id was missing.
+    // Both categories are capped so a huge backlog resolves over
+    // multiple runs without any single run timing out.
+    const seenIds = new Set(deliveries.map(d => d._id).filter(Boolean));
+    const seenTracks = new Set(deliveries.map(d => d.trackingNumber).filter(Boolean));
     const isTerminal = (o) => {
       if (o.status === 'Cancelled') return true;
       // Delivered + cash cycle closed = fully settled, nothing to refresh.
@@ -443,13 +450,44 @@ export default async function handler(req, res) {
       if (o.status === 'Returned' && o.warehouse_confirmed) return true;
       return false;
     };
+    // Category A — stored bosta_id, straight detail lookup.
     const backfillCandidates = (orders || []).filter(o =>
       o.bosta_id
       && !isTerminal(o)
       && !seenIds.has(o.bosta_id)
     ).slice(0, 200);
+    // Category B — no bosta_id (or bosta_id already handled), have
+    // ship_code, and tracking not in search results. Look up the
+    // delivery by paginating the search filtered to that tracking
+    // number, then run the same mapState + fee logic. Capped tighter
+    // than category A because each lookup does up to 15 search calls.
+    const shipCodeCandidates = (orders || []).filter(o =>
+      !!o.ship_code
+      && !isTerminal(o)
+      && !seenTracks.has(o.ship_code)
+      && !(o.bosta_id && seenIds.has(o.bosta_id))
+      && !backfillCandidates.includes(o)
+    ).slice(0, 30);
     const backfillChanges = [];
     const backfillErrors = [];
+
+    // Per-order paginated tracking search — same shape as bosta-debug's
+    // findByTracking, but returns the raw delivery for further processing.
+    async function findByTracking(track) {
+      for (let page = 1; page <= 15; page++) {
+        const rr = await fetch(`${BOSTA_BASE_URL}/deliveries/search`, {
+          method: 'POST',
+          headers: { Authorization: BOSTA_API_KEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ limit: 100, page, pageNumber: page }),
+        });
+        const dd = await rr.json().catch(() => null);
+        const list = dd?.data?.deliveries || [];
+        const hit = list.find(x => x.trackingNumber === track);
+        if (hit) return hit;
+        if (list.length < 100) break;
+      }
+      return null;
+    }
     for (const o of backfillCandidates) {
       try {
         const r = await fetch(`${BOSTA_BASE_URL}/deliveries/business/${encodeURIComponent(o.bosta_id)}`, {
@@ -496,6 +534,58 @@ export default async function handler(req, res) {
       } catch (e) { backfillErrors.push({ code: o.code, why: 'exception: ' + e.message }); }
     }
 
+    // Category-B loop: orders with ship_code but no matching search hit.
+    // We locate the delivery by tracking number, save its _id back to
+    // the row so future syncs pick it up in category A, then run the
+    // exact same status/fee logic.
+    const shipCodeChanges = [];
+    for (const o of shipCodeCandidates) {
+      try {
+        const hit = await findByTracking(o.ship_code);
+        if (!hit) { backfillErrors.push({ code: o.code, why: 'tracking not found in Bosta search' }); continue; }
+        const bostaId = hit._id;
+        const dr = await fetch(`${BOSTA_BASE_URL}/deliveries/business/${encodeURIComponent(bostaId)}`, {
+          headers: { Authorization: BOSTA_API_KEY },
+        });
+        if (!dr.ok) { backfillErrors.push({ code: o.code, why: `detail fetch ${dr.status}` }); continue; }
+        const dj = await dr.json().catch(() => null);
+        const del = dj?.data || dj || hit;
+        const patch = {};
+        // Always backfill bosta_id — this is the whole reason category A
+        // missed the order last time. Once written, future runs skip
+        // the expensive per-order paginated search.
+        if (!o.bosta_id && bostaId) patch.bosta_id = bostaId;
+        if (!o.warehouse_confirmed) {
+          const mapped = mapState(del);
+          if (mapped && mapped !== o.status) patch.status = mapped;
+        }
+        const effStatus = patch.status || o.status;
+        if (effStatus === 'Delivered' || effStatus === 'Returned') {
+          const walletFee = parseFloat(del?.wallet?.cashCycle?.bosta_fees);
+          const cashCycleClosed = !isNaN(walletFee) && walletFee > 0;
+          const cost = pickFee(del);
+          if (typeof cost === 'number' && cost > 0 && cost !== parseFloat(o.actual_shipping || 0)) {
+            patch.actual_shipping = cost;
+          }
+          if (o.cash_cycle_closed !== cashCycleClosed) patch.cash_cycle_closed = cashCycleClosed;
+        }
+        if (Object.keys(patch).length) {
+          const pr = await sbPatch(o.id, patch);
+          if (!pr.ok && 'cash_cycle_closed' in patch) {
+            const { cash_cycle_closed, ...rest } = patch;
+            if (Object.keys(rest).length) await sbPatch(o.id, rest);
+          }
+          shipCodeChanges.push({ code: o.code, from: o.status, ...patch });
+          if (patch.status && patch.status !== o.status) {
+            statusFlips.push({ order: o, from: o.status, to: patch.status });
+          }
+          if (patch.cash_cycle_closed === true && o.cash_cycle_closed !== true) {
+            cashCycleFlips.push(o);
+          }
+        }
+      } catch (e) { backfillErrors.push({ code: o.code, why: 'shipCode exception: ' + e.message }); }
+    }
+
     // ── Telegram notifications ──────────────────────────────────────
     // Fan-out is done after all DB writes so a slow/failed Telegram call
     // never delays sync. Serialised (not Promise.all) so we stay well under
@@ -518,7 +608,7 @@ export default async function handler(req, res) {
       tgSent.skipped = true;
     }
 
-    const result = { ok: true, buildMarker: 'v7-telegram-alerts', bostaDeliveries: deliveries.length, ordersChecked: (orders || []).length, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8), detailFetchStats, backfill: { checked: backfillCandidates.length, updated: backfillChanges.length, changes: backfillChanges.slice(0, 20), errors: backfillErrors.slice(0, 20) }, telegram: tgSent, onlyTrace };
+    const result = { ok: true, buildMarker: 'v8-shipcode-backfill', bostaDeliveries: deliveries.length, ordersChecked: (orders || []).length, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8), detailFetchStats, backfill: { checked: backfillCandidates.length, updated: backfillChanges.length, changes: backfillChanges.slice(0, 20), errors: backfillErrors.slice(0, 20) }, shipCodeBackfill: { checked: shipCodeCandidates.length, updated: shipCodeChanges.length, changes: shipCodeChanges.slice(0, 20) }, telegram: tgSent, onlyTrace };
     console.log('sync-status', JSON.stringify(result));
     return res.status(200).json(result);
   } catch (e) {
