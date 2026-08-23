@@ -764,7 +764,7 @@ function renderOrders() {
     : '';
   document.getElementById('orders-tbody').innerHTML = visibleOrders.length ? visibleOrders.map(o => `
     <tr${o.status === 'Awaiting Action' ? ' style="background:#fff4f4"' : ''}>
-      <td><span class="badge b-orange">${esc(o.code)}</span> ${orderProgressBadge(o)}${o.allow_open ? ' <span class="badge b-warning" title="يريد فتح الشحنة">📦</span>' : ''}${o.status === 'Returned' && !o.warehouse_confirmed ? ' <span class="badge b-danger" title="مرتجع — لم يُرجع للمخزن بعد">↩️ لم يُرجع للمخزن</span>' : ''}${cashCycleBadge(o)}</td>
+      <td><span class="badge b-orange">${esc(o.code)}</span> ${orderProgressBadge(o)}${o.allow_open ? ' <span class="badge b-warning" title="يريد فتح الشحنة">📦</span>' : ''}${o.status === 'Returned' && !o.warehouse_confirmed ? ' <span class="badge b-danger" title="مرتجع — لم يُرجع للمخزن بعد">↩️ لم يُرجع للمخزن</span>' : ''}${o.picker_prepared_at ? ' <span class="badge b-success" title="جهّزها موظف التجهيز">✅ جاهز</span>' : ''}${cashCycleBadge(o)}</td>
       <td><strong>${esc(o.customer_name)}</strong></td>
       <td>${esc(o.phone)}</td>
       <td>EGP ${fmt(o.total)}</td>

@@ -386,6 +386,72 @@ export default async function handler(req, res) {
     catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
+  // ?action=picker — warehouse-picker role: strictly filtered view of
+  // confirmed-but-unshipped orders, with product prices hidden. Auth is a
+  // shared PIN in PICKER_PIN env var. Sub-op via ?op=list|today|mark.
+  if (action === 'picker') {
+    const PICKER_PIN = (process.env.PICKER_PIN || '').trim();
+    if (!PICKER_PIN) return res.status(500).json({ error: 'PICKER_PIN env var not set' });
+    const pin = (req.query?.pin || '').toString().trim();
+    if (pin !== PICKER_PIN) return res.status(401).json({ error: 'Wrong PIN' });
+    const op = (req.query?.op || 'list').toString();
+    try {
+      // Sanitise a raw order row into the picker-safe shape (no prices,
+      // no buy costs, no shipping figures — only what he needs to pack).
+      const strip = (o) => ({
+        id: o.id,
+        code: o.code,
+        customer_name: o.customer_name,
+        phone: o.phone,
+        city: o.city,
+        address: o.address,
+        allow_open: !!o.allow_open,
+        notes: o.notes || '',
+        total: parseFloat(o.total || 0),
+        created_at: o.created_at,
+        prepared_at: o.picker_prepared_at || null,
+        // Each product line keeps name / code / qty ONLY — no price / buy_price.
+        products: Array.isArray(o.products) ? o.products.map(p => ({
+          code: p.code || '', name: p.name || '', qty: parseInt(p.qty || 1) || 1,
+        })) : [],
+      });
+      if (op === 'list' || op === 'today') {
+        // customer_confirmed=true AND status=Processing AND not-yet-prepared.
+        // Newer orders first so what came in latest sits at the top.
+        const rows = await sbGet('orders?select=*&customer_confirmed=is.true&status=eq.Processing&picker_prepared_at=is.null&order=created_at.desc&limit=500');
+        if (op === 'list') return res.status(200).json({ ok: true, orders: rows.map(strip) });
+        // op === 'today' — aggregate products across every visible order
+        // (all confirmed & not prepared, not "today" strictly; that's the
+        // useful set for the picker to grab from the warehouse in one pass).
+        const bag = new Map();
+        for (const o of rows) {
+          for (const p of (Array.isArray(o.products) ? o.products : [])) {
+            const key = p.code || p.name || '';
+            if (!key) continue;
+            const cur = bag.get(key) || { code: p.code || '', name: p.name || '', qty: 0, orderCodes: [] };
+            cur.qty += (parseInt(p.qty || 1) || 1);
+            cur.orderCodes.push(o.code);
+            bag.set(key, cur);
+          }
+        }
+        const items = [...bag.values()].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        return res.status(200).json({ ok: true, orderCount: rows.length, items });
+      }
+      if (op === 'mark') {
+        const orderId = (req.query?.orderId || '').toString();
+        if (!/^[A-Za-z0-9_-]+$/.test(orderId)) return res.status(400).json({ error: 'Bad orderId' });
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
+          method: 'PATCH',
+          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+          body: JSON.stringify({ picker_prepared_at: new Date().toISOString() }),
+        });
+        if (!r.ok) return res.status(502).json({ error: 'DB write failed', detail: await r.text() });
+        return res.status(200).json({ ok: true });
+      }
+      return res.status(400).json({ error: 'Unknown op. Use list|today|mark' });
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  }
+
   // ?summary=1 runs the normal sync AND fires the summary afterwards.
   const alsoSummary = req.query?.summary === '1' || req.query?.summary === 'true';
 
