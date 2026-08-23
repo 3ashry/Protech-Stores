@@ -5,6 +5,8 @@
 // - Never auto-sets Returned or Cancelled (you do those manually), and skips orders already
 //   Returned/Cancelled or returned-to-stock.
 // - Tries to read the actual shipping fee from Bosta's pricing if present (usually empty).
+import { tgNotifyStatusChange, tgSendDailySummary, tgConfigured } from './_telegram.js';
+
 const BOSTA_API_KEY = process.env.BOSTA_API_KEY;
 const BOSTA_BASE_URL = process.env.BOSTA_BASE_URL || 'https://app.bosta.co/api/v2';
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -235,12 +237,52 @@ async function sbPatch(id, body) {
   });
 }
 
+// Compose today's roll-up from the same Supabase snapshot the sync uses and
+// send it to Telegram. Cairo day = UTC day + 2..3h depending on DST; matching
+// on `created_at::date` in UTC is close enough for a summary that fires in
+// the evening. Returned separately so ?action=daily-summary can call it
+// without running the whole sync.
+async function sendDailySummaryFromDb() {
+  const orders = await sbGet('orders?select=id,status,total,created_at,cash_cycle_closed,cash_cycle_closed_at&limit=5000');
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+  const isToday = (iso) => !!iso && iso >= startOfDay;
+  let newToday = 0, delivered = 0, returned = 0, inTransit = 0, cashCycleClosed = 0, revenue = 0;
+  for (const o of orders) {
+    if (isToday(o.created_at)) newToday++;
+    const s = o.status;
+    if (s === 'Delivered' && isToday(o.created_at)) { delivered++; revenue += parseFloat(o.total || 0); }
+    if (s === 'Returned' && isToday(o.created_at)) returned++;
+    if (s === 'In Transit' || s === 'Heading to Customer' || s === 'Processing') inTransit++;
+    if (o.cash_cycle_closed === true && isToday(o.cash_cycle_closed_at)) cashCycleClosed++;
+  }
+  const dateLabel = now.toISOString().slice(0, 10);
+  return tgSendDailySummary({ newToday, delivered, returned, inTransit, cashCycleClosed, revenue, dateLabel });
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (!BOSTA_API_KEY || !SUPABASE_URL || !SUPABASE_KEY) {
     return res.status(500).json({ error: 'Server not configured' });
   }
+
+  // ?action=daily-summary short-circuits the sync — just compose today's
+  // rollup from Supabase and telegram it. Called from the evening cron.
+  const action = (req.query?.action || '').toString();
+  if (action === 'daily-summary') {
+    try {
+      const r = await sendDailySummaryFromDb();
+      return res.status(200).json({ ok: true, telegram: r });
+    } catch (e) {
+      console.error('daily-summary error', e.message);
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
+  // ?summary=1 runs the normal sync AND fires the summary afterwards.
+  const alsoSummary = req.query?.summary === '1' || req.query?.summary === 'true';
+
   try {
     const deliveries = await fetchAllDeliveries();
     const byRef = {}, byTrack = {};
@@ -260,6 +302,13 @@ export default async function handler(req, res) {
     const changes = [];
     const feeLog = [];
     const detailFetchStats = { attempted: 0, ok: 0, failed: 0, remapped: 0, errors: [] };
+    // Every status flip goes here as { order, from, to } so we can telegram
+    // them all in one Promise.all after the sync finishes — spreads the
+    // Telegram rate limit and keeps DB writes on the critical path.
+    const statusFlips = [];
+    // Also collect cash-cycle closures so we can ping "🔒 cycle closed"
+    // (the confirmed-profit moment) separately from the status flip itself.
+    const cashCycleFlips = [];
     // Debug trace: when ?only=<code> is passed, emit a step-by-step trace
     // for that one order (whether it was matched to a Bosta delivery,
     // what mapState returned at each step, what patch was applied, etc.)
@@ -362,6 +411,12 @@ export default async function handler(req, res) {
         }
         if (trace) trace.steps.push({ step: 'sbPatch', ok: r.ok, status: r.status });
         changes.push({ code: o.code, from: o.status, bostaState: d.state?.value, ...patch, feeSrc });
+        if (patch.status && patch.status !== o.status) {
+          statusFlips.push({ order: o, from: o.status, to: patch.status });
+        }
+        if (patch.cash_cycle_closed === true && o.cash_cycle_closed !== true) {
+          cashCycleFlips.push(o);
+        }
       } else if (trace) {
         trace.steps.push({ step: 'no-patch', reason: 'empty' });
       }
@@ -424,13 +479,41 @@ export default async function handler(req, res) {
             if (Object.keys(rest).length) await sbPatch(o.id, rest);
           }
           backfillChanges.push({ code: o.code, from: o.status, ...patch });
+          if (patch.status && patch.status !== o.status) {
+            statusFlips.push({ order: o, from: o.status, to: patch.status });
+          }
+          if (patch.cash_cycle_closed === true && o.cash_cycle_closed !== true) {
+            cashCycleFlips.push(o);
+          }
         } else {
           backfillErrors.push({ code: o.code, why: 'no patch', bostaState: del?.state?.value, currentStatus: o.status });
         }
       } catch (e) { backfillErrors.push({ code: o.code, why: 'exception: ' + e.message }); }
     }
 
-    const result = { ok: true, buildMarker: 'v6-stationary-hub-check', bostaDeliveries: deliveries.length, ordersChecked: (orders || []).length, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8), detailFetchStats, backfill: { checked: backfillCandidates.length, updated: backfillChanges.length, changes: backfillChanges.slice(0, 20), errors: backfillErrors.slice(0, 20) }, onlyTrace };
+    // ── Telegram notifications ──────────────────────────────────────
+    // Fan-out is done after all DB writes so a slow/failed Telegram call
+    // never delays sync. Serialised (not Promise.all) so we stay well under
+    // the 30 msg/sec Telegram limit even on a huge backlog.
+    let tgSent = { statusFlips: 0, cashCycleFlips: 0, summary: false, skipped: false };
+    if (tgConfigured()) {
+      for (const flip of statusFlips) {
+        try { await tgNotifyStatusChange(flip.order, flip.from, flip.to); tgSent.statusFlips++; } catch {}
+      }
+      for (const o of cashCycleFlips) {
+        try {
+          await tgNotifyStatusChange({ ...o, code: o.code }, o.status, '🔒 Cash Cycle Closed');
+          tgSent.cashCycleFlips++;
+        } catch {}
+      }
+      if (alsoSummary) {
+        try { await sendDailySummaryFromDb(); tgSent.summary = true; } catch (e) { console.warn('daily-summary from sync failed', e.message); }
+      }
+    } else {
+      tgSent.skipped = true;
+    }
+
+    const result = { ok: true, buildMarker: 'v7-telegram-alerts', bostaDeliveries: deliveries.length, ordersChecked: (orders || []).length, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8), detailFetchStats, backfill: { checked: backfillCandidates.length, updated: backfillChanges.length, changes: backfillChanges.slice(0, 20), errors: backfillErrors.slice(0, 20) }, telegram: tgSent, onlyTrace };
     console.log('sync-status', JSON.stringify(result));
     return res.status(200).json(result);
   } catch (e) {

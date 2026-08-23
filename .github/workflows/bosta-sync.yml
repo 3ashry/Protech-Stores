@@ -1,6 +1,8 @@
 name: Bosta status sync
 
 # Runs twice a day (≈ 8:00 and 20:00 Cairo time) and also on manual trigger.
+# The evening run ALSO fires today's Telegram summary (via ?summary=1) so
+# there's no need for a separate cron.
 on:
   schedule:
     - cron: '0 6 * * *'
@@ -12,4 +14,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Bosta sync
-        run: curl -fsS -X POST https://protech-stores.vercel.app/api/sync-status
+        env:
+          # GitHub cron passes the matched schedule to $GITHUB_EVENT_NAME=schedule
+          # and $CRON_SCHEDULE in the workflow's schedule metadata isn't exposed;
+          # detect the evening run by the current UTC hour instead.
+          SCHEDULE_HOUR: ${{ github.event.schedule }}
+        run: |
+          if [ "$SCHEDULE_HOUR" = "0 18 * * *" ]; then
+            echo "Evening run — running sync + daily Telegram summary"
+            curl -fsS -X POST "https://protech-stores.vercel.app/api/sync-status?summary=1"
+          else
+            echo "Regular sync"
+            curl -fsS -X POST "https://protech-stores.vercel.app/api/sync-status"
+          fi

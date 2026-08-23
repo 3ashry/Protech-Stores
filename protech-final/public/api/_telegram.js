@@ -1,51 +1,175 @@
-// Tiny Telegram helper. Used by /api/bosta to ping the admin with every
-// new order. Failure is always best-effort — the order flow must never
-// break if Telegram is unreachable / unconfigured.
+// Telegram helper — one-way admin notifications for the Protech dashboard.
+// Called by:
+//   - bosta.js       → tgNotifyOrder(...)         on every new order
+//   - sync-status.js → tgNotifyStatusChange(...)  on every status flip
+//   - sync-status.js → tgSendDailySummary(...)    once a day from the cron
+//
+// Underscore-prefixed so Vercel doesn't route it as a function.
+// Failures never throw; the caller flow must be uninterrupted.
 const TG_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TG_CHAT  = (process.env.TELEGRAM_CHAT_ID || '').trim();
+const DASHBOARD_URL = (process.env.DASHBOARD_URL || 'https://protech-stores.vercel.app').replace(/\/$/, '');
 
 export function tgConfigured() { return !!(TG_TOKEN && TG_CHAT); }
 
-// Sends a Markdown-formatted message to the configured chat. Never throws.
-export async function tgSend(text) {
+// Escape user-supplied text for parse_mode=HTML. HTML is preferred over
+// Markdown because customer names / addresses often contain characters
+// that break Markdown parsers (underscores, asterisks, brackets).
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Format an EGP amount for the user-visible line (English digits, 2dp).
+function money(n) {
+  const x = Number(n || 0);
+  return isFinite(x) ? x.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : String(n || '');
+}
+
+// Normalise a phone into +2010... for tel: and wa.me links.
+function normPhone(p) {
+  let s = String(p || '').trim().replace(/[\s()-]/g, '');
+  if (!s) return '';
+  if (s.startsWith('+')) return s;
+  if (s.startsWith('0')) return '+2' + s.slice(1);
+  return '+2' + s;
+}
+
+// Low-level Telegram sender. `opts` may carry an `inlineKeyboard` — a 2-D
+// array of button rows: [[{text, url}], [{text, url}, {text, url}]].
+export async function tgSend(text, opts = {}) {
   if (!TG_TOKEN || !TG_CHAT) return { ok: false, error: 'not configured' };
+  const payload = {
+    chat_id: TG_CHAT,
+    text: String(text || ''),
+    parse_mode: 'HTML',
+    disable_web_page_preview: true,
+  };
+  if (opts.inlineKeyboard) {
+    payload.reply_markup = { inline_keyboard: opts.inlineKeyboard };
+  }
+  if (opts.disableNotification) payload.disable_notification = true;
   try {
-    const url = `https://api.telegram.org/bot${TG_TOKEN}/sendMessage`;
-    const r = await fetch(url, {
+    const r = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: TG_CHAT,
-        text: String(text || ''),
-        parse_mode: 'Markdown',
-        disable_web_page_preview: true,
-      }),
+      body: JSON.stringify(payload),
     });
     const body = await r.json().catch(() => null);
+    if (!r.ok || !body?.ok) console.warn('telegram sendMessage failed', r.status, JSON.stringify(body));
     return { ok: r.ok && body?.ok === true, status: r.status, body };
   } catch (e) {
+    console.warn('telegram sendMessage exception', e && e.message);
     return { ok: false, error: e.message };
   }
 }
 
-// Convenience: build and send the "new order" notification. Fields are the
-// same shape the storefront POSTs to /api/bosta so the caller passes req.body.
-export async function tgNotifyOrder({ orderId, customerName, phone, city, address, total, allowOpen }) {
+// Buttons for a fresh order — no tracking number yet, so no Bosta-track button.
+function newOrderButtons({ phone, orderId, customerName }) {
+  const p = normPhone(phone);
+  const waMsg = encodeURIComponent(
+    `مرحباً ${customerName || ''} 👋\nمعاك بروتيك — تأكيد طلبك بتاعك.`
+  );
+  const rows = [];
+  const row1 = [];
+  if (p) row1.push({ text: '📞 اتصال', url: `tel:${p}` });
+  if (p) row1.push({ text: '💬 واتساب', url: `https://wa.me/${p.replace(/^\+/, '')}?text=${waMsg}` });
+  if (row1.length) rows.push(row1);
+  if (orderId) rows.push([{ text: '📋 فتح لوحة التحكم', url: `${DASHBOARD_URL}/#/orders?focus=${encodeURIComponent(orderId)}` }]);
+  return rows.length ? rows : null;
+}
+
+// Buttons for a status-change ping — includes a Bosta track button when
+// the ship_code (tracking number) is known.
+function statusButtons({ phone, shipCode, orderId }) {
+  const p = normPhone(phone);
+  const rows = [];
+  const row1 = [];
+  if (p) row1.push({ text: '📞 اتصال', url: `tel:${p}` });
+  if (p) row1.push({ text: '💬 واتساب', url: `https://wa.me/${p.replace(/^\+/, '')}` });
+  if (row1.length) rows.push(row1);
+  const row2 = [];
+  if (shipCode) row2.push({ text: '🔗 تتبع بوسطة', url: `https://bosta.co/en-eg/tracking-shipments/${encodeURIComponent(shipCode)}` });
+  if (orderId) row2.push({ text: '📋 لوحة التحكم', url: `${DASHBOARD_URL}/#/orders?focus=${encodeURIComponent(orderId)}` });
+  if (row2.length) rows.push(row2);
+  return rows.length ? rows : null;
+}
+
+// Convenience: new-order alert with call / whatsapp / dashboard buttons.
+// `orderId` here is the DB id used by the dashboard `?focus=` deep-link.
+export async function tgNotifyOrder({ orderId, customerName, phone, city, address, total, allowOpen, code } = {}) {
   if (!tgConfigured()) return { ok: false, error: 'not configured' };
-  const money = (n) => {
-    const x = Number(n || 0);
-    return isFinite(x) ? x.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : String(n || '');
-  };
+  const displayCode = code || orderId || '';
   const text = [
-    `🛒 *طلب جديد*`,
+    `🛒 <b>طلب جديد</b>`,
     ``,
-    `👤 ${customerName || 'عميل'}`,
-    `📱 \`${phone || ''}\``,
-    `📍 ${city || ''}${address ? ' — ' + address : ''}`,
-    `💰 *${money(total)}* ج.م`,
+    `👤 ${esc(customerName || 'عميل')}`,
+    `📱 <code>${esc(phone || '')}</code>`,
+    `📍 ${esc(city || '')}${address ? ' — ' + esc(address) : ''}`,
+    `💰 <b>${esc(money(total))}</b> ج.م`,
     allowOpen ? `📦 يريد فتح الشحنة قبل الاستلام` : '',
     ``,
-    `🆔 \`${orderId || ''}\``,
+    `🆔 <code>${esc(displayCode)}</code>`,
   ].filter(Boolean).join('\n');
-  return tgSend(text);
+  return tgSend(text, { inlineKeyboard: newOrderButtons({ phone, orderId, customerName }) });
+}
+
+// Status-change alert. Called from sync-status.js whenever an order flips
+// to a new status. `from`/`to` are the human-facing status strings we
+// already use in the dashboard (Delivered, Returned, Heading to Customer, …).
+const STATUS_EMOJI = {
+  'Delivered': '✅',
+  'Returned': '↩️',
+  'Cancelled': '❌',
+  'Heading to Customer': '🚚',
+  'On its way to me': '🏠',
+  'In Transit': '📦',
+  'Processing': '⏳',
+  'Awaiting Action': '⚠️',
+};
+export async function tgNotifyStatusChange(order, from, to) {
+  if (!tgConfigured()) return { ok: false, error: 'not configured' };
+  if (!order || !to || from === to) return { ok: false, error: 'noop' };
+  const emoji = STATUS_EMOJI[to] || '🔄';
+  const displayCode = order.code || order.id || '';
+  const parts = [
+    `${emoji} <b>${esc(to)}</b>`,
+    ``,
+    `🆔 <code>${esc(displayCode)}</code>`,
+    order.customer_name ? `👤 ${esc(order.customer_name)}` : '',
+    order.city ? `📍 ${esc(order.city)}` : '',
+    order.total ? `💰 ${esc(money(order.total))} ج.م` : '',
+    from ? `<i>من ${esc(from)} → ${esc(to)}</i>` : '',
+  ].filter(Boolean).join('\n');
+  return tgSend(parts, {
+    inlineKeyboard: statusButtons({ phone: order.phone, shipCode: order.ship_code, orderId: order.id }),
+    // Delivered / Returned / Cancelled are worth a full ping; intermediate
+    // moves (In Transit, Heading to Customer) fire silently to avoid alarm
+    // fatigue when a busy day flips many orders.
+    disableNotification: !(to === 'Delivered' || to === 'Returned' || to === 'Cancelled'),
+  });
+}
+
+// End-of-day roll-up. `stats` shape:
+//   { newToday, delivered, returned, inTransit, revenue, cashCycleClosed }
+export async function tgSendDailySummary(stats = {}) {
+  if (!tgConfigured()) return { ok: false, error: 'not configured' };
+  const {
+    newToday = 0, delivered = 0, returned = 0, inTransit = 0,
+    revenue = 0, cashCycleClosed = 0, dateLabel = '',
+  } = stats;
+  const text = [
+    `📊 <b>ملخص اليوم${dateLabel ? ' — ' + esc(dateLabel) : ''}</b>`,
+    ``,
+    `🛒 طلبات جديدة اليوم: <b>${newToday}</b>`,
+    `✅ تم توصيلها اليوم: <b>${delivered}</b>`,
+    `↩️ تم ارجاعها اليوم: <b>${returned}</b>`,
+    `🚚 قيد الشحن حالياً: <b>${inTransit}</b>`,
+    `🔒 دورات مالية مغلقة اليوم: <b>${cashCycleClosed}</b>`,
+    ``,
+    `💰 إجمالي الإيرادات اليوم: <b>${esc(money(revenue))}</b> ج.م`,
+  ].join('\n');
+  return tgSend(text, {
+    inlineKeyboard: [[{ text: '📋 فتح لوحة التحكم', url: `${DASHBOARD_URL}/` }]],
+  });
 }
