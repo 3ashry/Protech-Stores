@@ -70,17 +70,18 @@ export async function tgSend(text, opts = {}) {
   }
 }
 
-// Buttons for a fresh order — no tracking number yet, so no Bosta-track button.
+// Buttons for a fresh order. Telegram inline-button URLs only accept
+// http/https/tg:// — `tel:` is silently rejected as "Wrong port number
+// specified in the URL". The phone lives in the message body as
+// <code>…</code> which Telegram renders tap-to-copy; long-press → call.
 function newOrderButtons({ phone, orderId, customerName }) {
   const p = normPhone(phone);
+  const waPhone = p.replace(/^\+/, '');
   const waMsg = encodeURIComponent(
     `مرحباً ${customerName || ''} 👋\nمعاك بروتيك — تأكيد طلبك بتاعك.`
   );
   const rows = [];
-  const row1 = [];
-  if (p) row1.push({ text: '📞 اتصال', url: `tel:${p}` });
-  if (p) row1.push({ text: '💬 واتساب', url: `https://wa.me/${p.replace(/^\+/, '')}?text=${waMsg}` });
-  if (row1.length) rows.push(row1);
+  if (p) rows.push([{ text: '💬 واتساب', url: `https://wa.me/${waPhone}?text=${waMsg}` }]);
   if (orderId) rows.push([{ text: '📋 فتح لوحة التحكم', url: `${DASHBOARD_URL}/#/orders?focus=${encodeURIComponent(orderId)}` }]);
   return rows.length ? rows : null;
 }
@@ -89,15 +90,13 @@ function newOrderButtons({ phone, orderId, customerName }) {
 // the ship_code (tracking number) is known.
 function statusButtons({ phone, shipCode, orderId }) {
   const p = normPhone(phone);
+  const waPhone = p.replace(/^\+/, '');
   const rows = [];
   const row1 = [];
-  if (p) row1.push({ text: '📞 اتصال', url: `tel:${p}` });
-  if (p) row1.push({ text: '💬 واتساب', url: `https://wa.me/${p.replace(/^\+/, '')}` });
+  if (p) row1.push({ text: '💬 واتساب', url: `https://wa.me/${waPhone}` });
+  if (shipCode) row1.push({ text: '🔗 تتبع بوسطة', url: `https://bosta.co/en-eg/tracking-shipments/${encodeURIComponent(shipCode)}` });
   if (row1.length) rows.push(row1);
-  const row2 = [];
-  if (shipCode) row2.push({ text: '🔗 تتبع بوسطة', url: `https://bosta.co/en-eg/tracking-shipments/${encodeURIComponent(shipCode)}` });
-  if (orderId) row2.push({ text: '📋 لوحة التحكم', url: `${DASHBOARD_URL}/#/orders?focus=${encodeURIComponent(orderId)}` });
-  if (row2.length) rows.push(row2);
+  if (orderId) rows.push([{ text: '📋 لوحة التحكم', url: `${DASHBOARD_URL}/#/orders?focus=${encodeURIComponent(orderId)}` }]);
   return rows.length ? rows : null;
 }
 
