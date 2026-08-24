@@ -95,7 +95,7 @@ protechstores.com
 }
 
 // ── NAVIGATION ──
-const SCREENS = ['home', 'inventory', 'orders', 'returns', 'financials', 'invoices', 'carts', 'analytics'];
+const SCREENS = ['home', 'inventory', 'orders', 'returns', 'financials', 'invoices', 'carts', 'accounts', 'analytics'];
 function go(id) {
   if (id === 'analytics' && !analyticsCache.loaded) loadAnalytics();
   if (id === 'carts') loadAbandonedCarts();
