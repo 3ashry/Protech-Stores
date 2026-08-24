@@ -386,12 +386,16 @@ export default async function handler(req, res) {
     catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
-  // Helper: look up an account row by PIN. `wantRole` filters by role
-  // ('picker' or 'admin'). Also touches last_login_at on success. Returns
-  // the row on match or null on miss.
-  async function findAccountByPin(pin, wantRole) {
+  // Helper: look up an account row by (username, pin) — each packaging
+  // person has their own credentials, no shared PINs. `wantRole` filters
+  // by role ('picker' or 'admin'). Also touches last_login_at on success.
+  // Falls back to PIN-only lookup when username is omitted so the admin
+  // dashboard's admin-PIN prompt (which never took a username) still works.
+  async function findAccountByPin(pin, wantRole, username) {
     if (!pin) return null;
-    const url = `${SUPABASE_URL}/rest/v1/picker_accounts?pin=eq.${encodeURIComponent(pin)}&active=eq.true&limit=1`;
+    const filters = [`pin=eq.${encodeURIComponent(pin)}`, 'active=eq.true'];
+    if (username) filters.push(`username=eq.${encodeURIComponent(username)}`);
+    const url = `${SUPABASE_URL}/rest/v1/picker_accounts?${filters.join('&')}&limit=1`;
     const r = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
     if (!r.ok) return null;
     const rows = await r.json().catch(() => []);
@@ -414,8 +418,9 @@ export default async function handler(req, res) {
   // Sub-op via ?op=list|today|mark.
   if (action === 'picker') {
     const pin = (req.query?.pin || '').toString().trim();
-    const acct = await findAccountByPin(pin, 'picker');
-    if (!acct) return res.status(401).json({ error: 'Wrong PIN or account disabled' });
+    const username = (req.query?.username || '').toString().trim();
+    const acct = await findAccountByPin(pin, 'picker', username);
+    if (!acct) return res.status(401).json({ error: 'اسم المستخدم أو الرمز غير صحيح' });
     const op = (req.query?.op || 'list').toString();
     try {
       // Sanitise a raw order row into the picker-safe shape (no prices,
@@ -438,9 +443,11 @@ export default async function handler(req, res) {
         })) : [],
       });
       if (op === 'list' || op === 'today') {
-        // customer_confirmed=true AND status=Processing AND not-yet-prepared.
-        // Newer orders first so what came in latest sits at the top.
-        const rows = await sbGet('orders?select=*&customer_confirmed=is.true&status=eq.Processing&picker_prepared_at=is.null&order=created_at.desc&limit=500');
+        // The admin explicitly sends each order to packaging by clicking
+        // "📦 إرسال للتجهيز" on the admin dashboard — that stamps
+        // sent_to_picker_at. The picker only sees those, and only until
+        // he marks them prepared. Newest first.
+        const rows = await sbGet('orders?select=*&sent_to_picker_at=not.is.null&picker_prepared_at=is.null&order=sent_to_picker_at.desc&limit=500');
         if (op === 'list') return res.status(200).json({ ok: true, orders: rows.map(strip) });
         // op === 'today' — aggregate products across every visible order
         // (all confirmed & not prepared, not "today" strictly; that's the

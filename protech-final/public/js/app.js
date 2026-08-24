@@ -777,6 +777,7 @@ function renderOrders() {
       <td><div class="actions">
         <button class="btn btn-ghost btn-xs" onclick="viewOrder('${o.id}')">View</button>
         <button class="btn btn-dark btn-xs" onclick="editOrder('${o.id}')">Edit</button>
+        <button class="btn ${o.sent_to_picker_at ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="toggleSentToPicker('${o.id}', ${!!o.sent_to_picker_at})" title="${o.sent_to_picker_at ? 'إلغاء الإرسال للتجهيز' : 'إرسال للتجهيز'}">${o.sent_to_picker_at ? '📤 تم الإرسال' : '📦 إرسال للتجهيز'}</button>
         <button class="btn ${isInPickup(o.id) ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="togglePickup('${o.id}')" title="أضف/إزالة من قائمة اليوم">${isInPickup(o.id) ? '✓ في القائمة' : '📋 قائمة اليوم'}</button>
         <button class="btn btn-danger btn-xs" onclick="delOrder('${o.id}')">Delete</button>
       </div></td>
@@ -814,6 +815,30 @@ function clearPickup() {
   closeModal();
   showToast('تم مسح القائمة');
 }
+
+// Toggle an order's visibility on the packaging staff's /picker.html.
+// Sets sent_to_picker_at to now (or NULL to withdraw). The picker view
+// only shows orders with sent_to_picker_at != NULL AND picker_prepared_at IS NULL.
+async function toggleSentToPicker(orderId, isCurrentlySent) {
+  const msg = isCurrentlySent
+    ? 'إلغاء إرسال هذا الطلب للتجهيز؟\n(سيختفي من شاشة موظف التجهيز)'
+    : 'إرسال هذا الطلب لموظف التجهيز؟\n(سيظهر على شاشته فوراً)';
+  if (!confirm(msg)) return;
+  const newValue = isCurrentlySent ? null : new Date().toISOString();
+  try {
+    const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
+      method: 'PATCH',
+      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify({ sent_to_picker_at: newValue }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const i = cache.orders.findIndex(o => o.id === orderId);
+    if (i >= 0) cache.orders[i].sent_to_picker_at = newValue;
+    renderOrders();
+    showToast(isCurrentlySent ? 'أُلغي الإرسال' : '📦 تم الإرسال للتجهيز');
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+window.toggleSentToPicker = toggleSentToPicker;
 
 // Aggregate all products across queued orders → [{code, name, qty, orders:[codes]}]
 function aggregatePickup() {
