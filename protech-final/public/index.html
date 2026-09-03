@@ -102,6 +102,7 @@
       <button class="nav-tab" onclick="go('invoices')">Invoices</button>
       <button class="nav-tab" onclick="go('carts')">🛒 Carts</button>
       <button class="nav-tab" onclick="go('accounts')">👥 Users</button>
+      <button class="nav-tab" onclick="go('tasks')">📝 To-do</button>
     </div>
     <button class="btn-logout" onclick="doLogout()">Logout</button>
   </div>
@@ -287,6 +288,39 @@
     </div>
   </div>
 
+  <!-- TASKS (admin to-do list, voice-driven) -->
+  <div class="screen" id="screen-tasks">
+    <div class="page-header">
+      <div class="page-title">To-do <span>List</span></div>
+      <button class="btn btn-ghost btn-sm" onclick="loadTasks()" style="margin-inline-start:8px">🔄 Refresh</button>
+    </div>
+    <div class="card">
+      <div style="padding:16px;display:flex;flex-direction:column;gap:12px">
+        <div style="display:flex;gap:10px;align-items:center">
+          <input type="text" id="task-input" placeholder="اكتب مهمة جديدة…" onkeydown="if(event.key==='Enter')submitTypedTask()" style="flex:1;padding:12px 14px;border:1.5px solid var(--line);border-radius:10px;font-size:15px;font-family:inherit">
+          <button class="btn btn-primary" onclick="submitTypedTask()" style="white-space:nowrap">+ إضافة</button>
+        </div>
+        <button id="voice-btn" class="btn" onclick="toggleVoiceCapture()" style="background:var(--orange);color:#fff;font-size:16px;font-weight:800;padding:16px;border:0;border-radius:12px;display:flex;align-items:center;justify-content:center;gap:10px">
+          <span id="voice-icon" style="font-size:22px">🎤</span>
+          <span id="voice-label">اضغط للتحدث وإضافة مهمة</span>
+        </button>
+        <div id="voice-hint" style="font-size:12px;color:var(--muted);text-align:center;min-height:16px"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header" style="gap:8px;flex-wrap:wrap">
+        <span class="card-title">Tasks</span>
+        <div id="task-filter" style="display:flex;gap:6px;margin-inline-start:auto">
+          <button class="btn btn-ghost btn-xs task-fbtn active" data-filter="all" onclick="setTaskFilter('all')">الكل</button>
+          <button class="btn btn-ghost btn-xs task-fbtn" data-filter="todo" onclick="setTaskFilter('todo')">🔲 لم يبدأ</button>
+          <button class="btn btn-ghost btn-xs task-fbtn" data-filter="in_progress" onclick="setTaskFilter('in_progress')">🔄 يعمل عليها</button>
+          <button class="btn btn-ghost btn-xs task-fbtn" data-filter="done" onclick="setTaskFilter('done')">✅ منتهية</button>
+        </div>
+      </div>
+      <div id="tasks-body" style="padding:12px"></div>
+    </div>
+  </div>
+
   <!-- BOTTOM NAV (mobile) -->
   <div class="bottom-nav">
     <button class="bnav-btn active" onclick="go('home')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Home</button>
@@ -297,6 +331,7 @@
     <button class="bnav-btn" onclick="go('invoices')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Invoice</button>
     <button class="bnav-btn" onclick="go('carts')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>Carts</button>
     <button class="bnav-btn" onclick="go('accounts')" title="Picker accounts"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Users</button>
+    <button class="bnav-btn" onclick="go('tasks')" title="To-do"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>To-do</button>
   </div>
 
 </div><!-- /app -->

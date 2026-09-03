@@ -95,7 +95,7 @@ protechstores.com
 }
 
 // ── NAVIGATION ──
-const SCREENS = ['home', 'inventory', 'orders', 'returns', 'financials', 'invoices', 'carts', 'accounts', 'analytics'];
+const SCREENS = ['home', 'inventory', 'orders', 'returns', 'financials', 'invoices', 'carts', 'accounts', 'tasks', 'analytics'];
 function go(id) {
   if (id === 'analytics' && !analyticsCache.loaded) loadAnalytics();
   if (id === 'carts') loadAbandonedCarts();
@@ -3175,6 +3175,206 @@ async function deleteAccount(id, username) {
         return r;
       };
       window.go.__accountsPatched = true;
+    }
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hook);
+  else hook();
+})();
+
+// ═══════════════════════════════════════════════════════════════════
+//  ADMIN TO-DO LIST — voice + typed, synced across devices via Supabase.
+//  Backed by admin_tasks table (see SQL in the deploy notes).
+//  Uses the browser's SpeechRecognition (Web Speech API) with lang=ar-EG
+//  so the admin can dictate tasks in Egyptian Arabic and they land as
+//  text. On unsupported browsers the mic button hides itself and only
+//  typed input is available.
+// ═══════════════════════════════════════════════════════════════════
+let tasksCache = { rows: [], loaded: false, filter: 'all' };
+const TASKS_URL = SUPPLIER_SB_URL + '/rest/v1/admin_tasks';
+const TASK_H = () => ({ apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json' });
+
+async function loadTasks() {
+  const host = document.getElementById('tasks-body');
+  if (!host) return;
+  host.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted)">جاري التحميل…</div>';
+  try {
+    const r = await fetch(`${TASKS_URL}?select=*&order=created_at.desc&limit=500`, { headers: TASK_H() });
+    if (!r.ok) throw new Error(await r.text());
+    const rows = await r.json();
+    tasksCache.rows = Array.isArray(rows) ? rows : [];
+    tasksCache.loaded = true;
+    renderTasks();
+  } catch (e) {
+    host.innerHTML = `<div style="padding:20px;color:var(--danger)">تعذّر التحميل: ${esc(e.message)}</div>`;
+  }
+}
+
+function setTaskFilter(f) {
+  tasksCache.filter = f;
+  document.querySelectorAll('.task-fbtn').forEach(b => b.classList.toggle('active', b.dataset.filter === f));
+  renderTasks();
+}
+
+function renderTasks() {
+  const host = document.getElementById('tasks-body');
+  if (!host) return;
+  const filter = tasksCache.filter;
+  const filtered = filter === 'all' ? tasksCache.rows : tasksCache.rows.filter(t => t.status === filter);
+  if (!filtered.length) {
+    host.innerHTML = '<div style="padding:30px;text-align:center;color:var(--muted)"><div style="font-size:32px;margin-bottom:8px">📝</div>لا توجد مهام</div>';
+    return;
+  }
+  // Sort: in_progress first, then todo, then done (all newest-first within each group).
+  const rank = { in_progress: 0, todo: 1, done: 2 };
+  const sorted = [...filtered].sort((a, b) => {
+    const r = (rank[a.status] ?? 3) - (rank[b.status] ?? 3);
+    if (r !== 0) return r;
+    return (b.created_at || '').localeCompare(a.created_at || '');
+  });
+  const iconFor = (s) => s === 'done' ? '✅' : s === 'in_progress' ? '🔄' : '🔲';
+  const bgFor = (s) => s === 'done' ? '#dcfce7' : s === 'in_progress' ? '#fef3c7' : '#fff';
+  host.innerHTML = sorted.map(t => `
+    <div style="display:flex;gap:10px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;background:${bgFor(t.status)}">
+      <button onclick="cycleTaskStatus('${t.id}')" title="اضغط لتغيير الحالة" style="background:none;border:0;font-size:22px;cursor:pointer;padding:2px 6px">${iconFor(t.status)}</button>
+      <div style="flex:1;font-size:15px;${t.status==='done'?'text-decoration:line-through;color:var(--muted)':''}">${esc(t.text)}</div>
+      <button class="btn btn-danger btn-xs" onclick="deleteTask('${t.id}')" title="حذف">✕</button>
+    </div>
+  `).join('');
+}
+
+async function addTask(text) {
+  text = String(text || '').trim();
+  if (!text) return;
+  try {
+    const r = await fetch(TASKS_URL, {
+      method: 'POST',
+      headers: { ...TASK_H(), Prefer: 'return=representation' },
+      body: JSON.stringify({ text, status: 'todo' }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const saved = await r.json().catch(() => []);
+    if (Array.isArray(saved) && saved[0]) tasksCache.rows.unshift(saved[0]);
+    else await loadTasks();
+    renderTasks();
+    showToast('✓ أُضيفت المهمة');
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+async function cycleTaskStatus(id) {
+  // Click to cycle: todo → in_progress → done → todo
+  const t = tasksCache.rows.find(x => x.id === id);
+  if (!t) return;
+  const next = t.status === 'todo' ? 'in_progress' : t.status === 'in_progress' ? 'done' : 'todo';
+  try {
+    const r = await fetch(`${TASKS_URL}?id=eq.${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { ...TASK_H(), Prefer: 'return=minimal' },
+      body: JSON.stringify({ status: next, updated_at: new Date().toISOString() }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    t.status = next;
+    renderTasks();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+async function deleteTask(id) {
+  if (!confirm('حذف هذه المهمة؟')) return;
+  try {
+    const r = await fetch(`${TASKS_URL}?id=eq.${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { ...TASK_H(), Prefer: 'return=minimal' },
+    });
+    if (!r.ok) throw new Error(await r.text());
+    tasksCache.rows = tasksCache.rows.filter(x => x.id !== id);
+    renderTasks();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+function submitTypedTask() {
+  const el = document.getElementById('task-input');
+  if (!el) return;
+  const text = el.value.trim();
+  if (!text) return;
+  addTask(text);
+  el.value = '';
+}
+
+// ─── Voice input via Web Speech API ─────────────────────────────
+// Some browsers expose SpeechRecognition, others webkitSpeechRecognition.
+// If neither, hide the mic button.
+let _speech = null;
+let _speechActive = false;
+
+function _initSpeech() {
+  const R = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!R) return null;
+  const rec = new R();
+  rec.lang = 'ar-EG';                  // Egyptian Arabic — falls back to MSA well.
+  rec.interimResults = true;           // Show partial words while speaking.
+  rec.continuous = false;              // Stops when the user pauses.
+  rec.maxAlternatives = 1;
+  return rec;
+}
+
+function toggleVoiceCapture() {
+  const btn = document.getElementById('voice-btn');
+  const icon = document.getElementById('voice-icon');
+  const label = document.getElementById('voice-label');
+  const hint = document.getElementById('voice-hint');
+  if (!_speech) _speech = _initSpeech();
+  if (!_speech) {
+    hint.textContent = 'الإدخال الصوتي غير مدعوم في هذا المتصفح. استخدم Chrome على الأندرويد أو الكمبيوتر.';
+    btn.style.opacity = '.5'; btn.disabled = true;
+    return;
+  }
+  if (_speechActive) {
+    try { _speech.stop(); } catch {}
+    return;
+  }
+  let finalTxt = '';
+  _speech.onstart = () => {
+    _speechActive = true;
+    btn.style.background = '#dc2626';
+    icon.textContent = '⏹';
+    label.textContent = 'اضغط للإيقاف — يستمع الآن…';
+    hint.textContent = 'تكلم بوضوح ثم انتظر…';
+  };
+  _speech.onresult = (ev) => {
+    let interim = '';
+    for (let i = ev.resultIndex; i < ev.results.length; i++) {
+      const t = ev.results[i][0].transcript;
+      if (ev.results[i].isFinal) finalTxt += t + ' ';
+      else interim += t;
+    }
+    hint.textContent = (finalTxt + interim).trim() || '…';
+  };
+  _speech.onerror = (ev) => {
+    hint.textContent = 'خطأ: ' + (ev.error || 'غير معروف') + (ev.error === 'not-allowed' ? ' — اسمح بالميكروفون من إعدادات المتصفح' : '');
+  };
+  _speech.onend = () => {
+    _speechActive = false;
+    btn.style.background = 'var(--orange)';
+    icon.textContent = '🎤';
+    label.textContent = 'اضغط للتحدث وإضافة مهمة';
+    const txt = finalTxt.trim();
+    if (txt) { addTask(txt); hint.textContent = '✓ تم إضافة: ' + txt; }
+    else if (!hint.textContent.startsWith('خطأ')) hint.textContent = 'لم يتم التقاط أي كلام. حاول مرة أخرى.';
+  };
+  try { _speech.start(); }
+  catch (e) { hint.textContent = 'تعذّر البدء: ' + e.message; }
+}
+
+// Auto-load when the tasks screen is opened for the first time.
+(function initTasks() {
+  const hook = () => {
+    if (typeof go === 'function' && !go.__tasksPatched) {
+      const orig = go;
+      window.go = function (name) {
+        const r = orig.apply(this, arguments);
+        if (name === 'tasks' && !tasksCache.loaded) loadTasks();
+        return r;
+      };
+      window.go.__tasksPatched = true;
     }
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hook);
