@@ -1483,10 +1483,9 @@ function renderFinancials() {
   const productSalesDelivered = delivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
 
   // Media buyer cycle: what accrued strictly AFTER the last Media Buyer
-  // payment AND on/before the configured cycle-end date. `MB_CYCLE_END_ISO`
-  // is a hard cutoff (change/remove it whenever the next cycle opens); we
-  // use the end-of-day so anything logged on 31 July is included.
-  const MB_CYCLE_END_ISO = '2026-07-31T23:59:59';
+  // payment and up to right now. The cycle closes the moment you mark a
+  // payment as paid (that resets lastPaymentAt) and re-opens automatically
+  // for anything logged after it — no hardcoded date cutoff.
   const mbPayments = cache.expenses.filter(e => e.category === 'Media Buyer');
   const lastPaymentAt = mbPayments.reduce((max, e) => {
     const t = String(e.created_at || e.date || '');
@@ -1496,7 +1495,6 @@ function renderFinancials() {
     const s = String(t || '');
     if (!s) return false;
     if (lastPaymentAt && s <= lastPaymentAt) return false;   // before last payment → prev cycle
-    if (MB_CYCLE_END_ISO && s > MB_CYCLE_END_ISO) return false; // after cutoff → next cycle
     return true;
   };
 
@@ -1516,8 +1514,9 @@ function renderFinancials() {
   const mediaBuyerFee = adsShare + salesShare;
   const mbOwed = Math.round(Math.max(0, mediaBuyerFee) * 100) / 100;
 
-  // Header label so the admin knows the cycle boundary.
-  const cutoffDay = MB_CYCLE_END_ISO ? MB_CYCLE_END_ISO.slice(0, 10) : '';
+  // Header label so the admin knows the cycle boundary — "since last
+  // payment up to today". No future cutoff any more.
+  const cutoffDay = today();
   const lastPaidTxt = lastPaymentAt
     ? `من ${lastPaymentAt.slice(0, 10)} إلى ${cutoffDay}`
     : `من البداية إلى ${cutoffDay}`;
@@ -1537,9 +1536,9 @@ function renderFinancials() {
     <div class="fin-row" style="opacity:.75;font-size:12px"><span>${lastPaidTxt}</span><span>${cycleDelivered.length} <b>delivered</b> orders in this cycle</span></div>
     <div class="fin-row"><span>Paid ads spend (this cycle)</span><span class="fin-val">EGP ${fmt(paidAdsCycle)}</span></div>
     <div class="fin-row"><span>20% of paid ads</span><span class="fin-val">EGP ${fmt(adsShare)}</span></div>
-    <div class="fin-row"><span><b>Delivered</b> product sales (this cycle, excl. shipping, up to ${cutoffDay})</span><span class="fin-val">EGP ${fmt(cycleSales)}</span></div>
+    <div class="fin-row"><span><b>Delivered</b> product sales (this cycle, excl. shipping, up to today)</span><span class="fin-val">EGP ${fmt(cycleSales)}</span></div>
     <div class="fin-row"><span>1% of delivered sales</span><span class="fin-val">EGP ${fmt(salesShare)}</span></div>
-    <div class="fin-row subtotal"><span>Owed now (cycle ends ${cutoffDay})</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(mbOwed)}</span></div>
+    <div class="fin-row subtotal"><span>Owed now (since last payment)</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(mbOwed)}</span></div>
     <details style="margin-top:12px;border:1px solid var(--line);border-radius:8px;padding:8px 12px">
       <summary style="cursor:pointer;font-weight:600">📋 Delivered orders in this cycle (${cycleDelivered.length})</summary>
       <div style="max-height:280px;overflow:auto;margin-top:8px">
@@ -2007,8 +2006,8 @@ function financeData() {
     .reduce((a, o) => a + (o.products || []).reduce((b, p) => b + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0), 0);
 
   // Media buyer — MUST mirror the cycle logic used in renderFinancials so the
-  // Excel export shows the same numbers as the dashboard card.
-  const MB_CYCLE_END_ISO = '2026-07-31T23:59:59';
+  // Excel export shows the same numbers as the dashboard card. Cycle is
+  // "strictly after the last payment, up to today" — no future cutoff.
   const productSalesDelivered = delivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
   const paidAdsAll = expenses.filter(e => e.category === 'Paid Ads').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
   const mbPayments = expenses.filter(e => e.category === 'Media Buyer');
@@ -2020,7 +2019,6 @@ function financeData() {
     const s = String(t || '');
     if (!s) return false;
     if (lastPaymentAt && s <= lastPaymentAt) return false;
-    if (MB_CYCLE_END_ISO && s > MB_CYCLE_END_ISO) return false;
     return true;
   };
   const cycleDelivered = delivered
@@ -2037,7 +2035,7 @@ function financeData() {
   const mbPaid = mbPayments.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
   const mbOwed = Math.max(0, mbFee);
   const cycleFrom = lastPaymentAt ? lastPaymentAt.slice(0, 10) : '(beginning)';
-  const cycleTo = MB_CYCLE_END_ISO.slice(0, 10);
+  const cycleTo = today();
 
   const generalExpenses = expenses.filter(e => e.category !== 'Elashry');
   return { collected, delShip, retShip, shouldReceive, receipts, received, bostaRemaining,
