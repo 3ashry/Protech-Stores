@@ -1485,7 +1485,7 @@ function renderFinancials() {
   // Media buyer cycle: fixed window (start of cycle → end of cycle).
   // Edit MB_CYCLE_START_ISO / MB_CYCLE_END_ISO to switch to the next
   // monthly cycle (e.g. 2026-09-02 → 2026-09-30 next month).
-  const MB_CYCLE_START_ISO = '2026-08-02T00:00:00';
+  const MB_CYCLE_START_ISO = '2026-08-01T00:00:00';
   const MB_CYCLE_END_ISO   = '2026-08-31T23:59:59';
   const mbPayments = cache.expenses.filter(e => e.category === 'Media Buyer');
   const lastPaymentAt = mbPayments.reduce((max, e) => {
@@ -2008,7 +2008,7 @@ function financeData() {
   // Media buyer — MUST mirror the cycle logic used in renderFinancials so
   // the Excel export shows the same numbers as the dashboard card. Keep
   // these two dates in lockstep with the constants in renderFinancials.
-  const MB_CYCLE_START_ISO = '2026-08-02T00:00:00';
+  const MB_CYCLE_START_ISO = '2026-08-01T00:00:00';
   const MB_CYCLE_END_ISO   = '2026-08-31T23:59:59';
   const productSalesDelivered = delivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
   const paidAdsAll = expenses.filter(e => e.category === 'Paid Ads').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
