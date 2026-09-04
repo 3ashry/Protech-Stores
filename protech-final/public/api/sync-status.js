@@ -475,6 +475,29 @@ export default async function handler(req, res) {
         const rows = await sbGet('orders?select=*&picker_prepared_at=not.is.null&status=eq.Processing&order=picker_prepared_at.desc&limit=500');
         return res.status(200).json({ ok: true, orders: rows.map(strip) });
       }
+      if (op === 'returning') {
+        // Parcels Bosta is bringing back — customer refused / uncollectable.
+        // status='On its way to me' AND we haven't confirmed reintake yet
+        // (warehouse_confirmed=false). Once the ops manager taps "تم
+        // الاستلام في المخزن" that flag flips and the row drops off.
+        const rows = await sbGet('orders?select=*&status=eq.On%20its%20way%20to%20me&or=(warehouse_confirmed.is.false,warehouse_confirmed.is.null)&order=updated_at.desc.nullslast,created_at.desc&limit=500');
+        return res.status(200).json({ ok: true, orders: rows.map(strip) });
+      }
+      if (op === 'receive-back') {
+        // Ops manager confirms the returning parcel is physically back in
+        // the warehouse — same effect as the admin dashboard's "Confirm
+        // Received in Warehouse" button. Bosta may still show it as
+        // 'On its way to me' but from our side it's fully closed.
+        const orderId = (req.query?.orderId || '').toString();
+        if (!/^[A-Za-z0-9_-]+$/.test(orderId)) return res.status(400).json({ error: 'Bad orderId' });
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
+          method: 'PATCH',
+          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+          body: JSON.stringify({ warehouse_confirmed: true, status: 'Returned' }),
+        });
+        if (!r.ok) return res.status(502).json({ error: 'DB write failed', detail: await r.text() });
+        return res.status(200).json({ ok: true });
+      }
       if (op === 'invoice') {
         // Full order details for the printed invoice sheet — the ONLY
         // op that returns per-line prices to the picker page. Called on

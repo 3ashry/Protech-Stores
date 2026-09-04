@@ -145,215 +145,157 @@ protechstores.com`;
 
 // ── 2. Generate and print PDF Invoice ───────────────────────────────
 function generateInvoicePDF(order) {
-  const products = Array.isArray(order.products)
-    ? order.products
-        .map(p => `
-          <tr>
-            <td>${esc(p.name) || '—'}</td>
-            <td style="text-align:center">${p.qty || 1}</td>
-            <td style="text-align:center">${(p.price || 0).toLocaleString('ar-EG')} ج.م</td>
-            <td style="text-align:center">${((p.price || 0) * (p.qty || 1)).toLocaleString('ar-EG')} ج.م</td>
-          </tr>`)
-        .join('')
-    : '<tr><td colspan="4" style="text-align:center">لا توجد منتجات</td></tr>';
+  const rows = Array.isArray(order.products) ? order.products : [];
+  const productRows = rows.length
+    ? rows.map(p => `
+        <tr>
+          <td class="code">${esc(p.code) || '—'}</td>
+          <td class="name">${esc(p.name) || '—'}</td>
+          <td>${p.qty || 1}</td>
+          <td>${(p.price || 0).toLocaleString('en-US')}</td>
+          <td><strong>${((p.price || 0) * (p.qty || 1)).toLocaleString('en-US')}</strong></td>
+        </tr>`).join('')
+    : '<tr><td colspan="5" style="padding:20px;color:#999">لا توجد منتجات</td></tr>';
 
-  const orderDate = order.created_at || order.date
-    ? new Date(order.created_at || order.date).toLocaleDateString('ar-EG', {
-        year: 'numeric', month: 'long', day: 'numeric'
-      })
-    : '—';
+  const shipFee = Number(order.est_shipping) || 0;
+  const shipRow = shipFee > 0 ? `
+    <tr class="ship-row">
+      <td colspan="3"></td>
+      <td class="ship-label">الشحن</td>
+      <td>${shipFee.toLocaleString('en-US')}</td>
+    </tr>` : '';
+
+  const d = order.created_at || order.date;
+  let orderDate = '—';
+  if (d) {
+    const dt = new Date(d);
+    if (!isNaN(dt)) {
+      const dd = String(dt.getDate()).padStart(2, '0');
+      const mm = String(dt.getMonth() + 1).padStart(2, '0');
+      orderDate = `${dd}/${mm}/${dt.getFullYear()}`;
+    }
+  }
 
   const invoiceHTML = `<!DOCTYPE html>
 <html dir="rtl" lang="ar">
 <head>
   <meta charset="UTF-8"/>
   <title>فاتورة — ${esc(order.code || order.id)}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: 'Segoe UI', Arial, sans-serif;
-      padding: 40px;
-      color: #222;
-      direction: rtl;
-      background: #fff;
-    }
-    .header {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      padding-bottom: 20px;
-      border-bottom: 4px solid #f97316;
-      margin-bottom: 28px;
-    }
-    .brand-name {
-      font-size: 32px;
-      font-weight: 900;
-      color: #f97316;
-      letter-spacing: -1px;
-    }
-    .brand-tagline { font-size: 12px; color: #888; margin-top: 4px; }
-    .invoice-meta { text-align: left; font-size: 13px; line-height: 1.8; }
-    .invoice-meta .label { color: #888; font-size: 11px; }
-    .invoice-meta .value { font-weight: bold; color: #222; }
-    .section-title {
-      font-size: 15px;
-      font-weight: 700;
-      color: #f97316;
-      margin-bottom: 12px;
-      padding-bottom: 6px;
-      border-bottom: 1px solid #fee2c8;
-    }
-    .info-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px 24px;
-      background: #fff8f3;
-      border: 1px solid #fed7aa;
-      border-radius: 10px;
-      padding: 16px 20px;
-      margin-bottom: 28px;
-      font-size: 14px;
-    }
-    .info-item { line-height: 1.6; }
-    .info-label { color: #888; font-size: 11px; }
-    .info-value { font-weight: 600; }
-    .ship-code { color: #f97316; font-size: 16px; }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 13px;
-      margin-bottom: 24px;
-    }
-    thead th {
-      background: #f97316;
-      color: white;
-      padding: 10px 12px;
-      text-align: center;
-      font-weight: 600;
-    }
-    thead th:first-child { text-align: right; }
-    tbody td {
-      padding: 9px 12px;
-      border-bottom: 1px solid #f0f0f0;
-    }
-    tbody tr:nth-child(even) { background: #fafafa; }
-    .totals-section {
-      display: flex;
-      justify-content: flex-end;
-      margin-bottom: 40px;
-    }
-    .totals-table { min-width: 280px; font-size: 14px; }
-    .totals-table td { padding: 7px 12px; }
-    .totals-table .grand-total td {
-      background: #f97316;
-      color: white;
-      font-size: 16px;
-      font-weight: 700;
-      border-radius: 0;
-    }
-    .footer {
-      text-align: center;
-      color: #aaa;
-      font-size: 11px;
-      border-top: 1px solid #eee;
-      padding-top: 16px;
-    }
+    body { font-family: 'Cairo', 'Segoe UI', Arial, sans-serif; padding: 40px 44px 0; color: #222; direction: rtl; background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .sheet { max-width: 720px; margin: 0 auto; }
+
+    /* HEADER — logo left, big فاتوره right */
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 26px; }
+    .logo { height: 70px; width: auto; object-fit: contain; }
+    .invoice-title { font-size: 56px; font-weight: 900; color: #b34500; letter-spacing: -2px; line-height: 1; }
+
+    /* INFO — two columns of label / value pairs, orange labels */
+    .info { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 40px; margin-bottom: 24px; padding: 16px 0; border-top: 1px solid #ececec; border-bottom: 1px solid #ececec; }
+    .info-row { display: grid; grid-template-columns: minmax(90px, auto) 1fr; gap: 6px 18px; align-items: baseline; font-size: 12.5px; }
+    .info-row .lbl { color: #f97316; font-weight: 700; }
+    .info-row .val { color: #222; font-weight: 700; text-align: end; }
+
+    /* PRODUCT TABLE */
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    thead th { background: #f97316; color: #fff; padding: 10px 8px; text-align: center; font-weight: 700; font-size: 12px; }
+    tbody td { padding: 12px 8px; text-align: center; border-bottom: 1px solid #f0f0f0; vertical-align: middle; }
+    tbody td.code { font-weight: 700; letter-spacing: .02em; }
+    tbody td.name { text-align: start; }
+    tbody .ship-row td { border: 0; padding-top: 14px; padding-bottom: 4px; color: #f97316; font-weight: 700; }
+    tbody .ship-row td.ship-label { text-align: end; padding-inline-end: 12px; }
+
+    /* GRAND TOTAL — orange top rule, big number with جم suffix */
+    .grand { display: flex; justify-content: space-between; align-items: center; border-top: 2px solid #f97316; margin-top: 8px; padding: 18px 8px 22px; }
+    .grand .lbl { color: #f97316; font-weight: 700; font-size: 15px; }
+    .grand .val { font-family: 'Cairo', sans-serif; font-size: 36px; font-weight: 900; color: #222; line-height: 1; }
+    .grand .val span { color: #f97316; font-size: 20px; font-weight: 800; margin-inline-start: 6px; }
+
+    /* DARK FOOTER — orange tagline right, contact left */
+    .footer { background: #2b2b2b; color: #fff; padding: 22px 30px; margin: 30px -44px 0; display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+    .footer .tag { font-weight: 800; font-size: 17px; line-height: 1.4; }
+    .footer .tag .or { color: #f97316; }
+    .footer .contact { text-align: start; font-size: 12px; line-height: 1.7; }
+    .footer .contact a { color: #f97316; text-decoration: none; font-weight: 700; }
+
+    /* Print controls */
+    .no-print { text-align: end; margin: 0 auto 16px; max-width: 720px; }
+    .no-print button { background: #f97316; color: #fff; padding: 10px 20px; border: 0; border-radius: 6px; font-family: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
+
+    @page { size: A4; margin: 0; }
     @media print {
-      body { padding: 20px; }
+      body { padding: 20mm 20mm 0; }
       .no-print { display: none !important; }
+      .footer { margin: 30px -20mm 0; padding: 22px 20mm; }
     }
   </style>
 </head>
 <body>
 
-  <!-- Print Button (hidden on print) -->
-  <div class="no-print" style="margin-bottom:20px;text-align:left">
-    <button onclick="window.print()"
-      style="background:#f97316;color:white;padding:10px 24px;border:none;border-radius:8px;font-size:14px;cursor:pointer;font-weight:bold">
-      🖨️ طباعة / حفظ PDF
-    </button>
-  </div>
+  <div class="no-print"><button onclick="window.print()">🖨️ طباعة / حفظ PDF</button></div>
 
-  <!-- Header -->
-  <div class="header">
-    <div>
-      <div class="brand-name">🛠️ بروتيك</div>
-      <div class="brand-tagline">الشغل عليك والعدة علينا</div>
-    </div>
-    <div class="invoice-meta">
-      <div class="label">رقم الفاتورة</div>
-      <div class="value">#${esc(order.code || order.id)}</div>
-      <div class="label" style="margin-top:6px">تاريخ الطلب</div>
-      <div class="value">${orderDate}</div>
-    </div>
-  </div>
+  <div class="sheet">
 
-  <!-- Customer Info -->
-  <div class="section-title">بيانات العميل والشحن</div>
-  <div class="info-grid">
-    <div class="info-item">
-      <div class="info-label">اسم العميل</div>
-      <div class="info-value">${esc(order.customer_name) || '—'}</div>
+    <div class="header">
+      <img src="/favicon.png" alt="Protech" class="logo">
+      <div class="invoice-title">فاتوره</div>
     </div>
-    <div class="info-item">
-      <div class="info-label">رقم الهاتف</div>
-      <div class="info-value">${esc(order.phone) || '—'}</div>
-    </div>
-    <div class="info-item">
-      <div class="info-label">كود الشحن</div>
-      <div class="info-value ship-code">${esc(order.ship_code) || 'لم يُحدَّد بعد'}</div>
-    </div>
-    <div class="info-item">
-      <div class="info-label">حالة الطلب</div>
-      <div class="info-value">${esc(order.status) || 'جديد'}</div>
-    </div>
-    ${order.notes ? `
-    <div class="info-item" style="grid-column:1/-1">
-      <div class="info-label">ملاحظات</div>
-      <div class="info-value">${esc(order.notes)}</div>
-    </div>` : ''}
-  </div>
 
-  <!-- Products Table -->
-  <div class="section-title">المنتجات المطلوبة</div>
-  <table>
-    <thead>
-      <tr>
-        <th style="text-align:right">المنتج</th>
-        <th>الكمية</th>
-        <th>سعر الوحدة</th>
-        <th>الإجمالي</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${products}
-    </tbody>
-  </table>
+    <div class="info">
+      <div>
+        <div class="info-row"><span class="lbl">رقم الفاتوره</span><span class="val">${esc(order.code || order.id)}</span></div>
+        <div class="info-row"><span class="lbl">تاريخ الاصدار</span><span class="val">${orderDate}</span></div>
+        <div class="info-row"><span class="lbl">كود الشحن</span><span class="val">${esc(order.ship_code) || '—'}</span></div>
+      </div>
+      <div>
+        <div class="info-row"><span class="lbl">العميل</span><span class="val">${esc(order.customer_name) || '—'}</span></div>
+        <div class="info-row"><span class="lbl">عنوان الشحن</span><span class="val">${esc((order.city || '') + (order.address ? ' — ' + order.address : '')) || '—'}</span></div>
+        <div class="info-row"><span class="lbl">تليفون العميل</span><span class="val" style="direction:ltr;unicode-bidi:embed">${esc(order.phone) || '—'}</span></div>
+      </div>
+    </div>
 
-  <!-- Totals -->
-  <div class="totals-section">
-    <table class="totals-table">
-      <tr>
-        <td style="color:#888">رسوم الشحن</td>
-        <td style="text-align:left;font-weight:600">${(order.est_shipping ?? 0).toLocaleString('ar-EG')} ج.م</td>
-      </tr>
-      <tr class="grand-total">
-        <td>💰 الإجمالي الكلي</td>
-        <td style="text-align:left">${(order.total ?? 0).toLocaleString('ar-EG')} ج.م</td>
-      </tr>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:120px">كود المنتج</th>
+          <th style="text-align:start">وصف المنتج</th>
+          <th style="width:70px">الكمية</th>
+          <th style="width:90px">سعر الوحدة</th>
+          <th style="width:100px">الاجمالي</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${productRows}
+        ${shipRow}
+      </tbody>
     </table>
+
+    <div class="grand">
+      <div class="lbl">الاجمالي</div>
+      <div class="val">${(order.total ?? 0).toLocaleString('en-US')}<span>جم</span></div>
+    </div>
+
   </div>
 
-  <!-- Footer -->
   <div class="footer">
-    بروتيك | protechstores.com | واتساب: 201091011380+<br/>
-    شكراً لثقتك بنا 🧡
+    <div class="tag">
+      <span class="or">الشغل عليك</span><br>
+      و العده علينا
+    </div>
+    <div class="contact">
+      للتواصل كلما علي: <a href="tel:01034482071">01034482071</a><br>
+      <a href="mailto:Support@protechstores.com">Support@protechstores.com</a>
+    </div>
   </div>
 
 </body>
 </html>`;
 
-  const win = window.open('', '_blank', 'width=850,height=900');
+  const win = window.open('', '_blank', 'width=850,height=1000');
   if (win) {
     win.document.write(invoiceHTML);
     win.document.close();

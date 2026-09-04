@@ -50,6 +50,17 @@
   .btn-primary { background: var(--orange); color: #fff; }
   .btn-success { background: var(--success); color: #fff; width: 100%; margin-top: 8px; }
   .ready-banner { width: 100%; margin-top: 8px; padding: 12px; background: var(--success-bg); color: var(--success); border: 1px dashed var(--success); border-radius: 8px; text-align: center; font-weight: 800; font-size: 14px; }
+
+  /* In-page notification banner. Fixed top strip that slides in when a
+     new incoming or returning order appears — click to jump to that tab. */
+  .banner { position: fixed; top: 12px; inset-inline-start: 12px; inset-inline-end: 12px; z-index: 200; max-width: 640px; margin: 0 auto; padding: 14px 18px; border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.25); color: #fff; font-weight: 800; display: flex; align-items: center; gap: 12px; cursor: pointer; transform: translateY(-140%); transition: transform .3s cubic-bezier(.2,.9,.3,1.2); }
+  .banner.show { transform: translateY(0); }
+  .banner.incoming  { background: linear-gradient(135deg, var(--orange), #d4551a); }
+  .banner.returning { background: linear-gradient(135deg, #7c3aed, #5b21b6); }
+  .banner .em { font-size: 22px; }
+  .banner .msg { flex: 1; font-size: 14px; line-height: 1.4; }
+  .banner .msg small { display: block; opacity: .9; font-weight: 600; margin-top: 2px; }
+  .banner .close { background: rgba(255,255,255,.2); border: 0; color: #fff; font-size: 18px; cursor: pointer; padding: 4px 10px; border-radius: 6px; font-weight: 800; }
   .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
   .btn:disabled { opacity: .5; pointer-events: none; }
   .call-btns { display: flex; gap: 8px; margin-top: 8px; }
@@ -101,6 +112,13 @@
   <button class="btn btn-primary" onclick="tryLogin()">دخول</button>
 </div>
 
+<!-- In-page notification banner -->
+<div id="banner" class="banner" onclick="onBannerClick()">
+  <span class="em" id="banner-em">🛒</span>
+  <div class="msg" id="banner-msg">…</div>
+  <button class="close" onclick="event.stopPropagation(); hideBanner()">✕</button>
+</div>
+
 <!-- APP (hidden until logged in) -->
 <div id="app" style="display:none">
   <header>
@@ -113,6 +131,9 @@
     </button>
     <button id="tab-ready" class="tab" onclick="switchTab('ready')">
       ✅ جاهزة للاستلام <span class="tab-count" id="tab-count-ready">0</span>
+    </button>
+    <button id="tab-returning" class="tab" onclick="switchTab('returning')">
+      ↩️ راجعة من بوسطة <span class="tab-count" id="tab-count-returning">0</span>
     </button>
   </div>
   <main>
@@ -208,13 +229,19 @@ function orderCard(o, tab) {
   const bostaBtn = o.ship_code
     ? `<a class="wa" href="${bostaAwbLink(o.ship_code)}" target="_blank" rel="noopener">🚚 فتح بوسطة (AWB)</a>`
     : `<span class="wa" style="opacity:.5;cursor:not-allowed" title="لا يوجد كود شحن مسجل بعد">🚚 لا يوجد كود شحن</span>`;
-  // Bottom action changes with the tab:
-  //   • preparing → the "✅ تم التجهيز" button that flips the row into "ready"
-  //   • ready     → a waiting-for-Bosta banner (no action). Row drops off
-  //                 automatically once Bosta status leaves 'Processing'.
-  const bottomAction = tab === 'ready'
-    ? `<div class="ready-banner">⏳ في انتظار استلام بوسطة</div>`
-    : `<button class="btn btn-success" onclick="markPrepared('${esc(o.id)}', this)">✅ تم التجهيز</button>`;
+  // Bottom action per tab:
+  //   • preparing → "✅ تم التجهيز" button (flips row into "ready")
+  //   • ready     → waiting-for-Bosta banner (no action)
+  //   • returning → "✅ تم الاستلام في المخزن" — confirms the parcel is
+  //                 physically back in the warehouse
+  let bottomAction;
+  if (tab === 'ready') {
+    bottomAction = `<div class="ready-banner">⏳ في انتظار استلام بوسطة</div>`;
+  } else if (tab === 'returning') {
+    bottomAction = `<button class="btn btn-success" style="background:#7c3aed" onclick="confirmReceivedBack('${esc(o.id)}', this)">✅ تم الاستلام في المخزن</button>`;
+  } else {
+    bottomAction = `<button class="btn btn-success" onclick="markPrepared('${esc(o.id)}', this)">✅ تم التجهيز</button>`;
+  }
   return `
     <div class="card">
       <span class="order-code">${esc(o.code || '')}</span>
@@ -232,117 +259,132 @@ function orderCard(o, tab) {
     </div>`;
 }
 
-// Print the customer-facing invoice — exact copy of the admin
-// dashboard's generateInvoicePDF template so both surfaces produce
-// the same document. Fetches full order details (with per-line
-// prices) via the picker API and pops a self-printing window.
+// Print the customer-facing invoice — same template as the admin's
+// generateInvoicePDF so both surfaces produce the same document.
 async function printInvoice(orderId) {
   try {
     const j = await apiCall('invoice', { orderId });
     const order = j.order;
     if (!order) throw new Error('Order not found');
 
-    const products = Array.isArray(order.products)
-      ? order.products
-          .map(p => `
-            <tr>
-              <td>${esc(p.name) || '—'}</td>
-              <td style="text-align:center">${p.qty || 1}</td>
-              <td style="text-align:center">${(p.price || 0).toLocaleString('ar-EG')} ج.م</td>
-              <td style="text-align:center">${((p.price || 0) * (p.qty || 1)).toLocaleString('ar-EG')} ج.م</td>
-            </tr>`)
-          .join('')
-      : '<tr><td colspan="4" style="text-align:center">لا توجد منتجات</td></tr>';
+    const rows = Array.isArray(order.products) ? order.products : [];
+    const productRows = rows.length
+      ? rows.map(p => `
+          <tr>
+            <td class="code">${esc(p.code) || '—'}</td>
+            <td class="name">${esc(p.name) || '—'}</td>
+            <td>${p.qty || 1}</td>
+            <td>${(p.price || 0).toLocaleString('en-US')}</td>
+            <td><strong>${((p.price || 0) * (p.qty || 1)).toLocaleString('en-US')}</strong></td>
+          </tr>`).join('')
+      : '<tr><td colspan="5" style="padding:20px;color:#999">لا توجد منتجات</td></tr>';
 
-    const orderDate = order.created_at
-      ? new Date(order.created_at).toLocaleDateString('ar-EG', {
-          year: 'numeric', month: 'long', day: 'numeric'
-        })
-      : '—';
+    const shipFee = Number(order.est_shipping) || 0;
+    const shipRow = shipFee > 0 ? `
+      <tr class="ship-row">
+        <td colspan="3"></td>
+        <td class="ship-label">الشحن</td>
+        <td>${shipFee.toLocaleString('en-US')}</td>
+      </tr>` : '';
+
+    let orderDate = '—';
+    if (order.created_at) {
+      const dt = new Date(order.created_at);
+      if (!isNaN(dt)) {
+        const dd = String(dt.getDate()).padStart(2, '0');
+        const mm = String(dt.getMonth() + 1).padStart(2, '0');
+        orderDate = `${dd}/${mm}/${dt.getFullYear()}`;
+      }
+    }
 
     const invoiceHTML = `<!DOCTYPE html>
 <html dir="rtl" lang="ar">
 <head>
   <meta charset="UTF-8"/>
   <title>فاتورة — ${esc(order.code || order.id)}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Segoe UI', Arial, sans-serif; padding: 40px; color: #222; direction: rtl; background: #fff; }
-    .header { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 20px; border-bottom: 4px solid #f97316; margin-bottom: 28px; }
-    .brand-name { font-size: 32px; font-weight: 900; color: #f97316; letter-spacing: -1px; }
-    .brand-tagline { font-size: 12px; color: #888; margin-top: 4px; }
-    .invoice-meta { text-align: left; font-size: 13px; line-height: 1.8; }
-    .invoice-meta .label { color: #888; font-size: 11px; }
-    .invoice-meta .value { font-weight: bold; color: #222; }
-    .section-title { font-size: 15px; font-weight: 700; color: #f97316; margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid #fee2c8; }
-    .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 24px; background: #fff8f3; border: 1px solid #fed7aa; border-radius: 10px; padding: 16px 20px; margin-bottom: 28px; font-size: 14px; }
-    .info-item { line-height: 1.6; }
-    .info-label { color: #888; font-size: 11px; }
-    .info-value { font-weight: 600; }
-    .ship-code { color: #f97316; font-size: 16px; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 24px; }
-    thead th { background: #f97316; color: white; padding: 10px 12px; text-align: center; font-weight: 600; }
-    thead th:first-child { text-align: right; }
-    tbody td { padding: 9px 12px; border-bottom: 1px solid #f0f0f0; }
-    tbody tr:nth-child(even) { background: #fafafa; }
-    .totals-section { display: flex; justify-content: flex-end; margin-bottom: 40px; }
-    .totals-table { min-width: 280px; font-size: 14px; }
-    .totals-table td { padding: 7px 12px; }
-    .totals-table .grand-total td { background: #f97316; color: white; font-size: 16px; font-weight: 700; border-radius: 0; }
-    .footer { text-align: center; color: #aaa; font-size: 11px; border-top: 1px solid #eee; padding-top: 16px; }
-    @media print { body { padding: 20px; } .no-print { display: none !important; } }
+    body { font-family: 'Cairo', 'Segoe UI', Arial, sans-serif; padding: 40px 44px 0; color: #222; direction: rtl; background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .sheet { max-width: 720px; margin: 0 auto; }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 26px; }
+    .logo { height: 70px; width: auto; object-fit: contain; }
+    .invoice-title { font-size: 56px; font-weight: 900; color: #b34500; letter-spacing: -2px; line-height: 1; }
+    .info { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 40px; margin-bottom: 24px; padding: 16px 0; border-top: 1px solid #ececec; border-bottom: 1px solid #ececec; }
+    .info-row { display: grid; grid-template-columns: minmax(90px, auto) 1fr; gap: 6px 18px; align-items: baseline; font-size: 12.5px; }
+    .info-row .lbl { color: #f97316; font-weight: 700; }
+    .info-row .val { color: #222; font-weight: 700; text-align: end; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    thead th { background: #f97316; color: #fff; padding: 10px 8px; text-align: center; font-weight: 700; font-size: 12px; }
+    tbody td { padding: 12px 8px; text-align: center; border-bottom: 1px solid #f0f0f0; vertical-align: middle; }
+    tbody td.code { font-weight: 700; letter-spacing: .02em; }
+    tbody td.name { text-align: start; }
+    tbody .ship-row td { border: 0; padding-top: 14px; padding-bottom: 4px; color: #f97316; font-weight: 700; }
+    tbody .ship-row td.ship-label { text-align: end; padding-inline-end: 12px; }
+    .grand { display: flex; justify-content: space-between; align-items: center; border-top: 2px solid #f97316; margin-top: 8px; padding: 18px 8px 22px; }
+    .grand .lbl { color: #f97316; font-weight: 700; font-size: 15px; }
+    .grand .val { font-family: 'Cairo', sans-serif; font-size: 36px; font-weight: 900; color: #222; line-height: 1; }
+    .grand .val span { color: #f97316; font-size: 20px; font-weight: 800; margin-inline-start: 6px; }
+    .footer { background: #2b2b2b; color: #fff; padding: 22px 30px; margin: 30px -44px 0; display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+    .footer .tag { font-weight: 800; font-size: 17px; line-height: 1.4; }
+    .footer .tag .or { color: #f97316; }
+    .footer .contact { text-align: start; font-size: 12px; line-height: 1.7; }
+    .footer .contact a { color: #f97316; text-decoration: none; font-weight: 700; }
+    .no-print { text-align: end; margin: 0 auto 16px; max-width: 720px; }
+    .no-print button { background: #f97316; color: #fff; padding: 10px 20px; border: 0; border-radius: 6px; font-family: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
+    @page { size: A4; margin: 0; }
+    @media print { body { padding: 20mm 20mm 0; } .no-print { display: none !important; } .footer { margin: 30px -20mm 0; padding: 22px 20mm; } }
   </style>
 </head>
 <body>
-  <div class="no-print" style="margin-bottom:20px;text-align:left">
-    <button onclick="window.print()" style="background:#f97316;color:white;padding:10px 24px;border:none;border-radius:8px;font-size:14px;cursor:pointer;font-weight:bold">🖨️ طباعة / حفظ PDF</button>
-  </div>
-
-  <div class="header">
-    <div>
-      <div class="brand-name">🛠️ بروتيك</div>
-      <div class="brand-tagline">الشغل عليك والعدة علينا</div>
+  <div class="no-print"><button onclick="window.print()">🖨️ طباعة / حفظ PDF</button></div>
+  <div class="sheet">
+    <div class="header">
+      <img src="/favicon.png" alt="Protech" class="logo">
+      <div class="invoice-title">فاتوره</div>
     </div>
-    <div class="invoice-meta">
-      <div class="label">رقم الفاتورة</div>
-      <div class="value">#${esc(order.code || order.id)}</div>
-      <div class="label" style="margin-top:6px">تاريخ الطلب</div>
-      <div class="value">${orderDate}</div>
+    <div class="info">
+      <div>
+        <div class="info-row"><span class="lbl">رقم الفاتوره</span><span class="val">${esc(order.code || order.id)}</span></div>
+        <div class="info-row"><span class="lbl">تاريخ الاصدار</span><span class="val">${orderDate}</span></div>
+        <div class="info-row"><span class="lbl">كود الشحن</span><span class="val">${esc(order.ship_code) || '—'}</span></div>
+      </div>
+      <div>
+        <div class="info-row"><span class="lbl">العميل</span><span class="val">${esc(order.customer_name) || '—'}</span></div>
+        <div class="info-row"><span class="lbl">عنوان الشحن</span><span class="val">${esc((order.city || '') + (order.address ? ' — ' + order.address : '')) || '—'}</span></div>
+        <div class="info-row"><span class="lbl">تليفون العميل</span><span class="val" style="direction:ltr;unicode-bidi:embed">${esc(order.phone) || '—'}</span></div>
+      </div>
     </div>
-  </div>
-
-  <div class="section-title">بيانات العميل والشحن</div>
-  <div class="info-grid">
-    <div class="info-item"><div class="info-label">اسم العميل</div><div class="info-value">${esc(order.customer_name) || '—'}</div></div>
-    <div class="info-item"><div class="info-label">رقم الهاتف</div><div class="info-value">${esc(order.phone) || '—'}</div></div>
-    <div class="info-item"><div class="info-label">كود الشحن</div><div class="info-value ship-code">${esc(order.ship_code) || 'لم يُحدَّد بعد'}</div></div>
-    <div class="info-item"><div class="info-label">حالة الطلب</div><div class="info-value">${esc(order.status) || 'جديد'}</div></div>
-    ${order.notes ? `<div class="info-item" style="grid-column:1/-1"><div class="info-label">ملاحظات</div><div class="info-value">${esc(order.notes)}</div></div>` : ''}
-  </div>
-
-  <div class="section-title">المنتجات المطلوبة</div>
-  <table>
-    <thead>
-      <tr><th style="text-align:right">المنتج</th><th>الكمية</th><th>سعر الوحدة</th><th>الإجمالي</th></tr>
-    </thead>
-    <tbody>${products}</tbody>
-  </table>
-
-  <div class="totals-section">
-    <table class="totals-table">
-      <tr><td style="color:#888">رسوم الشحن</td><td style="text-align:left;font-weight:600">${(order.est_shipping ?? 0).toLocaleString('ar-EG')} ج.م</td></tr>
-      <tr class="grand-total"><td>💰 الإجمالي الكلي</td><td style="text-align:left">${(order.total ?? 0).toLocaleString('ar-EG')} ج.م</td></tr>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:120px">كود المنتج</th>
+          <th style="text-align:start">وصف المنتج</th>
+          <th style="width:70px">الكمية</th>
+          <th style="width:90px">سعر الوحدة</th>
+          <th style="width:100px">الاجمالي</th>
+        </tr>
+      </thead>
+      <tbody>${productRows}${shipRow}</tbody>
     </table>
+    <div class="grand">
+      <div class="lbl">الاجمالي</div>
+      <div class="val">${(order.total ?? 0).toLocaleString('en-US')}<span>جم</span></div>
+    </div>
   </div>
-
   <div class="footer">
-    بروتيك | protechstores.com | واتساب: 201091011380+<br/>
-    شكراً لثقتك بنا 🧡
+    <div class="tag"><span class="or">الشغل عليك</span><br>و العده علينا</div>
+    <div class="contact">
+      للتواصل كلما علي: <a href="tel:01034482071">01034482071</a><br>
+      <a href="mailto:Support@protechstores.com">Support@protechstores.com</a>
+    </div>
   </div>
 </body>
 </html>`;
 
-    const win = window.open('', '_blank', 'width=850,height=900');
+    const win = window.open('', '_blank', 'width=850,height=1000');
     if (!win) { alert('يرجى السماح بالنوافذ المنبثقة لطباعة الفاتورة'); return; }
     win.document.open(); win.document.write(invoiceHTML); win.document.close();
   } catch (e) { alert('تعذّر توليد الفاتورة: ' + e.message); }
@@ -353,38 +395,79 @@ async function printInvoice(orderId) {
 let activeTab = (function() { try { return sessionStorage.getItem('protech_picker_tab_v1') || 'preparing'; } catch { return 'preparing'; } })();
 function saveActiveTab() { try { sessionStorage.setItem('protech_picker_tab_v1', activeTab); } catch {} }
 
+function _refreshTabButtons() {
+  document.getElementById('tab-preparing').classList.toggle('active', activeTab === 'preparing');
+  document.getElementById('tab-ready').classList.toggle('active', activeTab === 'ready');
+  document.getElementById('tab-returning').classList.toggle('active', activeTab === 'returning');
+}
 function switchTab(tab) {
   activeTab = tab; saveActiveTab();
-  document.getElementById('tab-preparing').classList.toggle('active', tab === 'preparing');
-  document.getElementById('tab-ready').classList.toggle('active', tab === 'ready');
+  _refreshTabButtons();
   loadOrders();
 }
 
-async function loadOrders() {
+// Tracks the IDs we've already shown so we only fire notifications for
+// NEWLY arrived orders (not the whole list on every refresh).
+// `null` on first load means "just observe, don't ring" — we don't want a
+// shower of notifications the first time the page opens.
+let _knownPreparing = null, _knownReturning = null;
+
+async function loadOrders(opts) {
+  const silent = !!(opts && opts.silent);
   document.getElementById('list').innerHTML = '<div class="empty">جاري التحميل…</div>';
   try {
-    // Fetch BOTH queues so both tab counters stay live regardless of which
+    // Fetch all three queues so tab counters stay live regardless of which
     // one is showing. Runs in parallel.
-    const [preparing, ready] = await Promise.all([
+    const [preparing, ready, returning] = await Promise.all([
       apiCall('list').catch(() => ({ orders: [] })),
       apiCall('ready').catch(() => ({ orders: [] })),
+      apiCall('returning').catch(() => ({ orders: [] })),
     ]);
     const pOrders = preparing.orders || [];
     const rOrders = ready.orders || [];
+    const bOrders = returning.orders || [];
+    // Diff against last snapshot — anything new fires a notification.
+    if (!silent && _knownPreparing !== null) {
+      const fresh = pOrders.filter(o => !_knownPreparing.has(o.id));
+      if (fresh.length) notifyIncoming(fresh);
+    }
+    if (!silent && _knownReturning !== null) {
+      const fresh = bOrders.filter(o => !_knownReturning.has(o.id));
+      if (fresh.length) notifyReturning(fresh);
+    }
+    _knownPreparing = new Set(pOrders.map(o => o.id));
+    _knownReturning = new Set(bOrders.map(o => o.id));
     document.getElementById('tab-count-preparing').textContent = pOrders.length;
     document.getElementById('tab-count-ready').textContent = rOrders.length;
-    const orders = activeTab === 'ready' ? rOrders : pOrders;
+    document.getElementById('tab-count-returning').textContent = bOrders.length;
+    const orders = activeTab === 'ready' ? rOrders
+                 : activeTab === 'returning' ? bOrders
+                 : pOrders;
     document.getElementById('count').textContent = `${orders.length} طلب`;
+    const emptyMsg = {
+      preparing: ['✅', 'لا توجد طلبات لتجهيزها الآن'],
+      ready:     ['📭', 'لا توجد طلبات جاهزة للاستلام'],
+      returning: ['🏠', 'لا توجد طلبات راجعة من بوسطة'],
+    }[activeTab];
     document.getElementById('list').innerHTML = orders.length
       ? orders.map(o => orderCard(o, activeTab)).join('')
-      : (activeTab === 'ready'
-          ? '<div class="empty"><div class="em">📭</div><div>لا توجد طلبات جاهزة للاستلام</div></div>'
-          : '<div class="empty"><div class="em">✅</div><div>لا توجد طلبات لتجهيزها الآن</div></div>');
-    // Reflect the persisted tab in the header buttons on first load.
-    document.getElementById('tab-preparing').classList.toggle('active', activeTab === 'preparing');
-    document.getElementById('tab-ready').classList.toggle('active', activeTab === 'ready');
+      : `<div class="empty"><div class="em">${emptyMsg[0]}</div><div>${emptyMsg[1]}</div></div>`;
+    _refreshTabButtons();
   } catch (e) {
     document.getElementById('list').innerHTML = `<div class="empty"><div class="em">⚠️</div><div>خطأ: ${esc(e.message)}</div></div>`;
+  }
+}
+
+async function confirmReceivedBack(orderId, btn) {
+  if (!confirm('تأكيد استلام هذا الطلب في المخزن؟\n(سيتم إخراجه من قائمة الطلبات الراجعة)')) return;
+  btn.disabled = true; btn.textContent = 'جاري الحفظ…';
+  try {
+    await apiCall('receive-back', { orderId });
+    btn.closest('.card').style.transition = 'opacity .3s'; btn.closest('.card').style.opacity = '0';
+    setTimeout(() => loadOrders(), 300);
+  } catch (e) {
+    btn.disabled = false; btn.textContent = '✅ تم الاستلام في المخزن';
+    alert('فشل الحفظ: ' + e.message);
   }
 }
 
@@ -426,12 +509,103 @@ document.getElementById('modal').addEventListener('click', (e) => {
   if (e.target.id === 'modal') closeModal();
 });
 
+// ═══════════════ NOTIFICATIONS ══════════════════════════════════
+// Two channels:
+//   1. In-page banner strip at the top (always works, no permission).
+//   2. Native OS notification banner via the Notification API — asked
+//      for on the first successful login. If the user denies, only the
+//      in-page banner + audio chime run.
+// Plus a short chime so the operations manager notices even without
+// looking at the screen.
+let _bannerTimer = null;
+let _lastBannerTarget = null;   // remember which tab a banner points to
+
+function requestNotifPerm() {
+  try {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'default') Notification.requestPermission();
+  } catch {}
+}
+
+function playChime() {
+  // No audio file dependency — synth a short beep with WebAudio.
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.12);
+    gain.gain.setValueAtTime(0.001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.35, ctx.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.55);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(); osc.stop(ctx.currentTime + 0.6);
+  } catch {}
+}
+
+function showBanner(kind, emoji, title, subtitle) {
+  const el = document.getElementById('banner');
+  if (!el) return;
+  el.classList.remove('incoming', 'returning');
+  el.classList.add(kind === 'returning' ? 'returning' : 'incoming');
+  document.getElementById('banner-em').textContent = emoji;
+  document.getElementById('banner-msg').innerHTML = `${esc(title)}<small>${esc(subtitle || 'اضغط لعرض التفاصيل')}</small>`;
+  _lastBannerTarget = kind === 'returning' ? 'returning' : 'preparing';
+  el.classList.add('show');
+  clearTimeout(_bannerTimer);
+  _bannerTimer = setTimeout(hideBanner, 8000);
+}
+function hideBanner() { document.getElementById('banner').classList.remove('show'); }
+function onBannerClick() {
+  if (_lastBannerTarget && activeTab !== _lastBannerTarget) switchTab(_lastBannerTarget);
+  hideBanner();
+}
+
+function sysNotify(title, body, kind) {
+  try {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    const n = new Notification(title, { body, icon: '/favicon.png', tag: 'picker-' + kind, renotify: true });
+    n.onclick = () => { window.focus(); if (kind === 'returning') switchTab('returning'); else switchTab('preparing'); n.close(); };
+    setTimeout(() => { try { n.close(); } catch {} }, 12000);
+  } catch {}
+}
+
+function notifyIncoming(freshOrders) {
+  const first = freshOrders[0] || {};
+  const title = freshOrders.length === 1
+    ? `🛒 طلب جديد للتجهيز — ${first.code || ''}`
+    : `🛒 ${freshOrders.length} طلبات جديدة للتجهيز`;
+  const body = freshOrders.length === 1
+    ? `${first.customer_name || ''} — ${first.city || ''}`
+    : `أولها: ${first.code || ''} — ${first.customer_name || ''}`;
+  playChime();
+  showBanner('incoming', '🛒', title, body);
+  sysNotify(title, body, 'incoming');
+}
+function notifyReturning(freshOrders) {
+  const first = freshOrders[0] || {};
+  const title = freshOrders.length === 1
+    ? `↩️ طلب راجع من بوسطة — ${first.code || ''}`
+    : `↩️ ${freshOrders.length} طلبات راجعة من بوسطة`;
+  const body = freshOrders.length === 1
+    ? `${first.customer_name || ''} — ${first.city || ''}`
+    : `أولها: ${first.code || ''} — ${first.customer_name || ''}`;
+  playChime();
+  showBanner('returning', '↩️', title, body);
+  sysNotify(title, body, 'returning');
+}
+
 // Boot — auto-enter if credentials are already saved for this session
 {
   const c = getCreds();
-  if (c.username && c.pin) apiCall('list').then(() => showApp()).catch(() => showGate(''));
+  if (c.username && c.pin) apiCall('list').then(() => { showApp(); requestNotifPerm(); }).catch(() => showGate(''));
   else showGate('');
 }
+// Request notification permission whenever the user logs in fresh too.
+document.addEventListener('click', () => requestNotifPerm(), { once: true });
 
 // Refresh every 60s while visible so newly-confirmed orders appear
 setInterval(() => {
