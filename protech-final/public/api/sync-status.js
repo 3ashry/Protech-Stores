@@ -444,11 +444,12 @@ export default async function handler(req, res) {
         })) : [],
       });
       if (op === 'list' || op === 'today') {
-        // The admin explicitly sends each order to packaging by clicking
-        // "📦 إرسال للتجهيز" on the admin dashboard — that stamps
-        // sent_to_picker_at. The picker only sees those, and only until
-        // he marks them prepared. Newest first.
-        const rows = await sbGet('orders?select=*&sent_to_picker_at=not.is.null&picker_prepared_at=is.null&order=sent_to_picker_at.desc&limit=500');
+        // Preparing queue — sent by admin, not yet marked prepared, AND
+        // Bosta hasn't picked it up (still 'Processing'). Once the picker
+        // taps "تم التجهيز" the row moves to the 'ready' queue (below).
+        // Once Bosta actually picks the parcel up (status leaves
+        // 'Processing') it drops off both queues automatically.
+        const rows = await sbGet('orders?select=*&sent_to_picker_at=not.is.null&picker_prepared_at=is.null&status=eq.Processing&order=sent_to_picker_at.desc&limit=500');
         if (op === 'list') return res.status(200).json({ ok: true, orders: rows.map(strip) });
         // op === 'today' — aggregate products across every visible order
         // (all confirmed & not prepared, not "today" strictly; that's the
@@ -466,6 +467,13 @@ export default async function handler(req, res) {
         }
         const items = [...bag.values()].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
         return res.status(200).json({ ok: true, orderCount: rows.length, items });
+      }
+      if (op === 'ready') {
+        // Ready-for-Bosta-pickup queue — prepared AND Bosta hasn't
+        // picked it up yet (status still 'Processing'). Ordered by
+        // most-recently-prepared first.
+        const rows = await sbGet('orders?select=*&picker_prepared_at=not.is.null&status=eq.Processing&order=picker_prepared_at.desc&limit=500');
+        return res.status(200).json({ ok: true, orders: rows.map(strip) });
       }
       if (op === 'invoice') {
         // Full order details for the printed invoice sheet — the ONLY

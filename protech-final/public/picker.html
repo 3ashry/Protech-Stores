@@ -25,6 +25,13 @@
   header .count { background: rgba(255,255,255,.25); padding: 4px 10px; border-radius: 999px; font-size: 13px; font-weight: 700; }
 
   main { padding: 12px; max-width: 720px; margin: 0 auto; padding-bottom: 100px; }
+
+  /* Two-stage tabs: 🧰 preparing → ✅ ready */
+  .tabs { display: flex; gap: 0; background: #fff; border-bottom: 2px solid var(--line); position: sticky; top: 52px; z-index: 15; padding: 0 12px; max-width: 720px; margin: 0 auto; }
+  .tab { flex: 1; background: transparent; border: 0; padding: 14px 8px; font-family: inherit; font-size: 13px; font-weight: 800; color: var(--muted); cursor: pointer; border-bottom: 3px solid transparent; display: flex; align-items: center; justify-content: center; gap: 8px; }
+  .tab.active { color: var(--orange); border-bottom-color: var(--orange); }
+  .tab-count { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; background: var(--line); color: var(--ink); font-size: 11px; font-weight: 800; }
+  .tab.active .tab-count { background: var(--orange); color: #fff; }
   .card { background: var(--card); border-radius: 14px; padding: 14px; box-shadow: 0 1px 4px rgba(0,0,0,.05); margin-bottom: 12px; border: 1px solid var(--line); }
   .row { display: flex; justify-content: space-between; gap: 8px; margin: 4px 0; font-size: 14px; }
   .row .k { color: var(--muted); }
@@ -42,6 +49,7 @@
   .btn { display: inline-block; padding: 12px 16px; border-radius: 10px; border: 0; font-weight: 800; font-size: 15px; cursor: pointer; font-family: inherit; }
   .btn-primary { background: var(--orange); color: #fff; }
   .btn-success { background: var(--success); color: #fff; width: 100%; margin-top: 8px; }
+  .ready-banner { width: 100%; margin-top: 8px; padding: 12px; background: var(--success-bg); color: var(--success); border: 1px dashed var(--success); border-radius: 8px; text-align: center; font-weight: 800; font-size: 14px; }
   .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
   .btn:disabled { opacity: .5; pointer-events: none; }
   .call-btns { display: flex; gap: 8px; margin-top: 8px; }
@@ -99,6 +107,14 @@
     <h1>📦 تجهيز الطلبات</h1>
     <span class="count" id="count">…</span>
   </header>
+  <div class="tabs">
+    <button id="tab-preparing" class="tab active" onclick="switchTab('preparing')">
+      🧰 قيد التجهيز <span class="tab-count" id="tab-count-preparing">0</span>
+    </button>
+    <button id="tab-ready" class="tab" onclick="switchTab('ready')">
+      ✅ جاهزة للاستلام <span class="tab-count" id="tab-count-ready">0</span>
+    </button>
+  </div>
   <main>
     <div id="list"></div>
   </main>
@@ -180,7 +196,7 @@ function bostaAwbLink(shipCode) {
   return `https://business.bosta.co/orders/${encodeURIComponent(shipCode)}`;
 }
 
-function orderCard(o) {
+function orderCard(o, tab) {
   const products = (o.products || []).map(p => `
     <div class="prod">
       <div>
@@ -192,6 +208,13 @@ function orderCard(o) {
   const bostaBtn = o.ship_code
     ? `<a class="wa" href="${bostaAwbLink(o.ship_code)}" target="_blank" rel="noopener">🚚 فتح بوسطة (AWB)</a>`
     : `<span class="wa" style="opacity:.5;cursor:not-allowed" title="لا يوجد كود شحن مسجل بعد">🚚 لا يوجد كود شحن</span>`;
+  // Bottom action changes with the tab:
+  //   • preparing → the "✅ تم التجهيز" button that flips the row into "ready"
+  //   • ready     → a waiting-for-Bosta banner (no action). Row drops off
+  //                 automatically once Bosta status leaves 'Processing'.
+  const bottomAction = tab === 'ready'
+    ? `<div class="ready-banner">⏳ في انتظار استلام بوسطة</div>`
+    : `<button class="btn btn-success" onclick="markPrepared('${esc(o.id)}', this)">✅ تم التجهيز</button>`;
   return `
     <div class="card">
       <span class="order-code">${esc(o.code || '')}</span>
@@ -205,7 +228,7 @@ function orderCard(o) {
       </div>
       <div class="products">${products || '<em style="color:var(--muted)">لا يوجد منتجات مضافة</em>'}</div>
       <div class="total"><span>الإجمالي</span><span>${money(o.total)} ج.م</span></div>
-      <button class="btn btn-success" onclick="markPrepared('${esc(o.id)}', this)">✅ تم التجهيز</button>
+      ${bottomAction}
     </div>`;
 }
 
@@ -325,15 +348,41 @@ async function printInvoice(orderId) {
   } catch (e) { alert('تعذّر توليد الفاتورة: ' + e.message); }
 }
 
+// Which tab is currently visible. Persist across refreshes so the picker
+// doesn't get bounced back to "preparing" on every reload.
+let activeTab = (function() { try { return sessionStorage.getItem('protech_picker_tab_v1') || 'preparing'; } catch { return 'preparing'; } })();
+function saveActiveTab() { try { sessionStorage.setItem('protech_picker_tab_v1', activeTab); } catch {} }
+
+function switchTab(tab) {
+  activeTab = tab; saveActiveTab();
+  document.getElementById('tab-preparing').classList.toggle('active', tab === 'preparing');
+  document.getElementById('tab-ready').classList.toggle('active', tab === 'ready');
+  loadOrders();
+}
+
 async function loadOrders() {
   document.getElementById('list').innerHTML = '<div class="empty">جاري التحميل…</div>';
   try {
-    const j = await apiCall('list');
-    const orders = j.orders || [];
+    // Fetch BOTH queues so both tab counters stay live regardless of which
+    // one is showing. Runs in parallel.
+    const [preparing, ready] = await Promise.all([
+      apiCall('list').catch(() => ({ orders: [] })),
+      apiCall('ready').catch(() => ({ orders: [] })),
+    ]);
+    const pOrders = preparing.orders || [];
+    const rOrders = ready.orders || [];
+    document.getElementById('tab-count-preparing').textContent = pOrders.length;
+    document.getElementById('tab-count-ready').textContent = rOrders.length;
+    const orders = activeTab === 'ready' ? rOrders : pOrders;
     document.getElementById('count').textContent = `${orders.length} طلب`;
     document.getElementById('list').innerHTML = orders.length
-      ? orders.map(orderCard).join('')
-      : '<div class="empty"><div class="em">✅</div><div>لا توجد طلبات لتجهيزها الآن</div></div>';
+      ? orders.map(o => orderCard(o, activeTab)).join('')
+      : (activeTab === 'ready'
+          ? '<div class="empty"><div class="em">📭</div><div>لا توجد طلبات جاهزة للاستلام</div></div>'
+          : '<div class="empty"><div class="em">✅</div><div>لا توجد طلبات لتجهيزها الآن</div></div>');
+    // Reflect the persisted tab in the header buttons on first load.
+    document.getElementById('tab-preparing').classList.toggle('active', activeTab === 'preparing');
+    document.getElementById('tab-ready').classList.toggle('active', activeTab === 'ready');
   } catch (e) {
     document.getElementById('list').innerHTML = `<div class="empty"><div class="em">⚠️</div><div>خطأ: ${esc(e.message)}</div></div>`;
   }
