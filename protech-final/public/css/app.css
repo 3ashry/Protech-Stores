@@ -80,7 +80,18 @@ input, button, select, textarea { font-family: inherit; }
 /* ── TOP BAR (dark, editorial) ───────────────────────── */
 .topbar { background: var(--ink); color: #f8f4f4; border-bottom: 0; padding: 0 20px; display: flex; align-items: center; gap: 14px; position: sticky; top: 0; z-index: 100; height: 64px; }
 .topbar-logo { display: flex; align-items: center; flex-shrink: 0; }
-.topbar-logo img { height: 34px; width: auto; object-fit: contain; filter: brightness(0) invert(1); }
+.topbar-logo img { height: 34px; width: auto; object-fit: contain; }
+
+/* Text brand replaces the img on the dark topbar so nothing goes muddy
+   through a brightness/invert filter. Same wordmark style as the design
+   mock (Archivo 800, -0.02em tracking) + a small orange tag beside it. */
+.topbar-brand { display: flex; align-items: baseline; gap: 10px; flex-shrink: 0; }
+.topbar-brand-name { font-family: 'Archivo', system-ui, sans-serif; font-weight: 800; font-size: 20px; letter-spacing: -0.02em; color: #f8f4f4; line-height: 1; }
+.topbar-brand-tag  { font-family: 'Archivo', system-ui, sans-serif; font-weight: 700; font-size: 10px; letter-spacing: .18em; text-transform: uppercase; color: var(--acc); padding: 3px 6px; border: 1px solid var(--acc); line-height: 1; }
+@media (max-width: 599px) {
+  .topbar-brand-name { font-size: 18px; }
+  .topbar-brand-tag  { display: none; }   /* keep the mobile bar uncluttered */
+}
 .topbar-divider { width: 1px; height: 28px; background: rgba(243,242,242,.28); flex-shrink: 0; }
 
 .nav-scroll { display: flex; gap: 0; overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none; flex: 1; }
