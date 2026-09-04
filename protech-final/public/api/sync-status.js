@@ -468,6 +468,28 @@ export default async function handler(req, res) {
         const items = [...bag.values()].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
         return res.status(200).json({ ok: true, orderCount: rows.length, items });
       }
+      if (op === 'stats') {
+        // How many orders this picker (any picker, in aggregate) prepared
+        // in the current calendar month — first minute of day 1 to the
+        // end of the month. Used for the small counter chip in the header
+        // so the ops manager can see his monthly output at a glance.
+        // Uses the SERVER's clock; if the picker's phone clock is skewed
+        // that's fine, this stays consistent across devices.
+        const now = new Date();
+        const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0));
+        const startNextMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0));
+        const url = `orders?select=id`
+          + `&picker_prepared_at=gte.${encodeURIComponent(startOfMonth.toISOString())}`
+          + `&picker_prepared_at=lt.${encodeURIComponent(startNextMonth.toISOString())}`
+          + `&limit=5000`;
+        const rows = await sbGet(url);
+        return res.status(200).json({
+          ok: true,
+          preparedThisMonth: Array.isArray(rows) ? rows.length : 0,
+          monthStart: startOfMonth.toISOString(),
+          monthLabel: `${String(now.getUTCMonth() + 1).padStart(2, '0')}/${now.getUTCFullYear()}`,
+        });
+      }
       if (op === 'ready') {
         // Ready-for-Bosta-pickup queue — prepared AND Bosta hasn't
         // picked it up yet (status still 'Processing'). Ordered by

@@ -20,9 +20,14 @@
     --danger: #dc2626;
   }
   html, body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--bg); color: var(--ink); font-size: 16px; }
-  header { background: var(--orange); color: #fff; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 20; box-shadow: 0 2px 8px rgba(0,0,0,.1); }
-  header h1 { margin: 0; font-size: 18px; font-weight: 800; }
+  header { background: var(--orange); color: #fff; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; gap: 10px; position: sticky; top: 0; z-index: 20; box-shadow: 0 2px 8px rgba(0,0,0,.1); }
+  header h1 { margin: 0; font-size: 17px; font-weight: 800; flex-shrink: 1; min-width: 0; }
+  header .head-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
   header .count { background: rgba(255,255,255,.25); padding: 4px 10px; border-radius: 999px; font-size: 13px; font-weight: 700; }
+  /* Monthly output pill — circular chip with big count, tiny subline. */
+  .month-pill { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; min-width: 54px; height: 54px; border-radius: 999px; background: #fff; color: var(--orange); padding: 2px 12px; font-weight: 900; box-shadow: 0 2px 6px rgba(0,0,0,.15); border: 2px solid #fff; line-height: 1; }
+  .month-pill .m-val { font-size: 22px; letter-spacing: -0.02em; }
+  .month-pill .m-lbl { font-size: 8px; letter-spacing: .1em; text-transform: uppercase; margin-top: 2px; color: #b34500; font-weight: 800; }
 
   main { padding: 12px; max-width: 720px; margin: 0 auto; padding-bottom: 100px; }
 
@@ -123,7 +128,13 @@
 <div id="app" style="display:none">
   <header>
     <h1>📦 تجهيز الطلبات</h1>
-    <span class="count" id="count">…</span>
+    <div class="head-right">
+      <span class="count" id="count">…</span>
+      <div class="month-pill" id="month-pill" title="عدد الطلبات التي جهزتها هذا الشهر">
+        <span class="m-val" id="month-val">0</span>
+        <span class="m-lbl" id="month-lbl">هذا الشهر</span>
+      </div>
+    </div>
   </header>
   <div class="tabs">
     <button id="tab-preparing" class="tab active" onclick="switchTab('preparing')">
@@ -416,13 +427,19 @@ async function loadOrders(opts) {
   const silent = !!(opts && opts.silent);
   document.getElementById('list').innerHTML = '<div class="empty">جاري التحميل…</div>';
   try {
-    // Fetch all three queues so tab counters stay live regardless of which
-    // one is showing. Runs in parallel.
-    const [preparing, ready, returning] = await Promise.all([
+    // Fetch all three queues + monthly stats in parallel. Tab counters
+    // and the "هذا الشهر" pill stay live regardless of the visible tab.
+    const [preparing, ready, returning, stats] = await Promise.all([
       apiCall('list').catch(() => ({ orders: [] })),
       apiCall('ready').catch(() => ({ orders: [] })),
       apiCall('returning').catch(() => ({ orders: [] })),
+      apiCall('stats').catch(() => ({ preparedThisMonth: 0, monthLabel: '' })),
     ]);
+    // Update the monthly-output pill (top-right of the header).
+    const mVal = document.getElementById('month-val');
+    const mLbl = document.getElementById('month-lbl');
+    if (mVal) mVal.textContent = stats.preparedThisMonth || 0;
+    if (mLbl) mLbl.textContent = stats.monthLabel || 'هذا الشهر';
     const pOrders = preparing.orders || [];
     const rOrders = ready.orders || [];
     const bOrders = returning.orders || [];
