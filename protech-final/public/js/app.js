@@ -2221,82 +2221,113 @@ function renderAnalytics() {
     `<button class="btn ${analyticsRange === r.d ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="setAnalyticsRange(${r.d})">${r.l}</button>`
   ).join('');
 
+  // Design-system palette (kept off #ec3013 so bars/funnels stay distinct
+  // from primary action-orange used elsewhere on the page).
+  const C = { view: '#2563eb', checkout: '#d97706', order: '#16a34a' };
+
   const funnelBar = (label, val, color) => {
     const pct = upv ? Math.round(val / upv * 100) : 0;
     return `
-      <div style="margin-bottom:10px">
-        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
-          <span style="color:var(--muted)">${label}</span><strong style="color:${color}">${val}</strong>
+      <div style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">
+          <span style="color:var(--ink-4);font-weight:700">${label}</span>
+          <strong style="color:${color};font-family:'Archivo',sans-serif;font-size:14px">${val}</strong>
         </div>
-        <div style="height:26px;background:#eee;border-radius:6px;overflow:hidden">
-          <div style="height:100%;width:${Math.max(pct, val > 0 ? 3 : 0)}%;background:${color};border-radius:6px;display:flex;align-items:center;padding-left:8px;color:#fff;font-size:12px;font-weight:700">${pct > 12 ? pct + '%' : ''}</div>
+        <div style="height:24px;background:var(--chip);overflow:hidden;border:1px solid var(--line-soft)">
+          <div style="height:100%;width:${Math.max(pct, val > 0 ? 3 : 0)}%;background:${color};display:flex;align-items:center;padding-inline-start:10px;color:#fff;font-size:11px;font-weight:700;letter-spacing:.04em">${pct > 12 ? pct + '%' : ''}</div>
         </div>
       </div>`;
   };
 
+  const legendDot = (c, label) =>
+    `<span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-4);font-weight:700"><span style="display:inline-block;width:10px;height:10px;background:${c}"></span>${label}</span>`;
+
   const trendChart = days.length ? `
-    <div style="display:flex;gap:14px;font-size:12px;margin-bottom:12px">
-      <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#3B82F6;margin-right:4px"></span>Views</span>
-      <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#F59E0B;margin-right:4px"></span>Checkout</span>
-      <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#16a34a;margin-right:4px"></span>Orders</span>
+    <div style="display:flex;gap:18px;margin-bottom:14px;flex-wrap:wrap">
+      ${legendDot(C.view, 'Views')}
+      ${legendDot(C.checkout, 'Checkout')}
+      ${legendDot(C.order, 'Orders')}
     </div>
-    <div style="display:flex;align-items:flex-end;gap:4px;height:150px;overflow-x:auto">
+    <div style="display:flex;align-items:flex-end;gap:6px;height:170px;overflow-x:auto;padding-bottom:6px">
       ${days.map(([day, d]) => `
-        <div style="flex:1;min-width:30px;display:flex;flex-direction:column;align-items:center;gap:3px">
-          <div style="display:flex;gap:2px;align-items:flex-end;height:120px;width:100%">
-            <div title="Views: ${d.pv}" style="flex:1;height:${Math.round(d.pv / maxD * 100)}%;background:#3B82F6;border-radius:3px 3px 0 0;min-height:${d.pv ? 3 : 0}px"></div>
-            <div title="Checkout: ${d.cv}" style="flex:1;height:${Math.round(d.cv / maxD * 100)}%;background:#F59E0B;border-radius:3px 3px 0 0;min-height:${d.cv ? 3 : 0}px"></div>
-            <div title="Orders: ${d.oc}" style="flex:1;height:${Math.round(d.oc / maxD * 100)}%;background:#16a34a;border-radius:3px 3px 0 0;min-height:${d.oc ? 3 : 0}px"></div>
+        <div style="flex:1;min-width:34px;display:flex;flex-direction:column;align-items:center;gap:4px">
+          <div style="display:flex;gap:2px;align-items:flex-end;height:130px;width:100%">
+            <div title="Views: ${d.pv}" style="flex:1;height:${Math.round(d.pv / maxD * 100)}%;background:${C.view};min-height:${d.pv ? 3 : 0}px"></div>
+            <div title="Checkout: ${d.cv}" style="flex:1;height:${Math.round(d.cv / maxD * 100)}%;background:${C.checkout};min-height:${d.cv ? 3 : 0}px"></div>
+            <div title="Orders: ${d.oc}" style="flex:1;height:${Math.round(d.oc / maxD * 100)}%;background:${C.order};min-height:${d.oc ? 3 : 0}px"></div>
           </div>
-          <span style="font-size:9px;color:var(--muted);white-space:nowrap">${day.slice(5)}</span>
+          <span style="font-size:10px;color:var(--ink-5);white-space:nowrap;letter-spacing:.02em;font-family:'Archivo',sans-serif">${day.slice(5)}</span>
         </div>`).join('')}
     </div>` : '<div class="empty">No daily data in this range</div>';
 
   const topRows = top.length ? top.map((p, i) => `
     <tr>
-      <td style="color:var(--muted)">${i + 1}</td>
-      <td><strong>${esc(p.name) || '—'}</strong></td>
-      <td><span class="badge b-orange">${esc(p.code) || '—'}</span></td>
-      <td style="text-align:center"><span class="badge b-info">${p.u}</span></td>
-      <td style="text-align:center;color:var(--muted)">${p.views}</td>
+      <td style="color:var(--ink-5);font-family:'Archivo',sans-serif;font-weight:700;width:36px">${String(i + 1).padStart(2, '0')}</td>
+      <td><strong style="color:var(--ink)">${esc(p.name) || '—'}</strong></td>
+      <td style="font-family:'Archivo',sans-serif;font-size:12px;font-weight:700;letter-spacing:.02em">${esc(p.code) || '—'}</td>
+      <td style="text-align:end;font-family:'Archivo',sans-serif;font-weight:800;color:var(--ink)">${p.u}</td>
+      <td style="text-align:end;color:var(--ink-4);font-family:'Archivo',sans-serif">${p.views}</td>
     </tr>`).join('') : '<tr><td colspan="5"><div class="empty"><div class="empty-icon">👁</div>No product views yet</div></td></tr>';
 
+  // Header rows for stat cells: eyebrow label + big number, borrowed from
+  // the design mock. Wrapped in .stat-grid so they share one 2px border.
+  const statCell = (label, val, accent) => `
+    <div class="stat-card">
+      <div class="stat-label">${label}</div>
+      <div class="stat-val"${accent ? ' style="color:' + accent + '"' : ''}>${val}</div>
+    </div>`;
+
   el.innerHTML = `
-    <div style="padding:20px 16px;max-width:1100px;margin:0 auto">
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:18px">
-        <h2 style="margin:0;font-size:20px">📊 Analytics ${analyticsCache.loading ? '<span style="font-size:13px;color:var(--muted)">loading…</span>' : ''}<div style="font-size:11px;color:var(--muted);font-weight:400;margin-top:2px">${esc(dataSpan)}</div></h2>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">${rangeBtns}
+    <div style="max-width:1200px;margin:0 auto">
+      <div class="page-header">
+        <div>
+          <div style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-4);font-weight:700">Analytics</div>
+          <h1 class="page-title" style="margin-top:8px">Website <span>performance</span></h1>
+          <div style="font-size:12px;color:var(--ink-5);margin-top:8px;letter-spacing:.02em">${analyticsCache.loading ? 'Loading…' : esc(dataSpan)}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${rangeBtns}
           <button class="btn btn-ghost btn-sm" onclick="loadAnalytics()">↻ Refresh</button>
         </div>
       </div>
 
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:22px">
-        <div class="stat-card purple"><div class="stat-val">${visitors}</div><div class="stat-label">Store Visitors</div></div>
-        <div class="stat-card blue"><div class="stat-val">${upv}</div><div class="stat-label">Product Viewers</div></div>
-        <div class="stat-card orange"><div class="stat-val">${ucv}</div><div class="stat-label">Reached Checkout</div></div>
-        <div class="stat-card green"><div class="stat-val">${uoc}</div><div class="stat-label">Orders Confirmed</div></div>
-        <div class="stat-card ${overall >= 2 ? 'green' : 'red'}"><div class="stat-val">${overall}%</div><div class="stat-label">View → Order</div></div>
+      <div class="stat-grid">
+        ${statCell('Store visitors', visitors)}
+        ${statCell('Product viewers', upv)}
+        ${statCell('Reached checkout', ucv)}
+        ${statCell('Orders confirmed', uoc, 'var(--success)')}
+        ${statCell('View → Order', overall + '%', overall >= 2 ? 'var(--success)' : 'var(--acc)')}
       </div>
 
-      <div style="background:#fff;border:1px solid #eee;border-radius:12px;padding:20px;margin-bottom:20px">
-        <h3 style="margin:0 0 16px;font-size:15px">Conversion Funnel</h3>
-        ${funnelBar('Product Viewers', upv, '#3B82F6')}
-        <div style="text-align:center;color:var(--muted);font-size:11px;margin:2px 0">▼ ${checkoutRate}% proceed to checkout</div>
-        ${funnelBar('Reached Checkout', ucv, '#F59E0B')}
-        <div style="text-align:center;color:var(--muted);font-size:11px;margin:2px 0">▼ ${convRate}% complete the order</div>
-        ${funnelBar('Orders Confirmed', uoc, '#16a34a')}
+      <div class="card">
+        <div class="card-header"><span class="card-title">Conversion funnel</span></div>
+        <div class="card-body">
+          ${funnelBar('Product viewers', upv, C.view)}
+          <div style="text-align:center;color:var(--ink-5);font-size:10px;letter-spacing:.14em;text-transform:uppercase;margin:4px 0 8px;font-weight:700">▼ ${checkoutRate}% proceed to checkout</div>
+          ${funnelBar('Reached checkout', ucv, C.checkout)}
+          <div style="text-align:center;color:var(--ink-5);font-size:10px;letter-spacing:.14em;text-transform:uppercase;margin:4px 0 8px;font-weight:700">▼ ${convRate}% complete the order</div>
+          ${funnelBar('Orders confirmed', uoc, C.order)}
+        </div>
       </div>
 
-      <div style="background:#fff;border:1px solid #eee;border-radius:12px;padding:20px;margin-bottom:20px">
-        <h3 style="margin:0 0 16px;font-size:15px">Daily Trend</h3>
-        ${trendChart}
+      <div class="card">
+        <div class="card-header"><span class="card-title">Daily trend</span></div>
+        <div class="card-body">${trendChart}</div>
       </div>
 
-      <div style="background:#fff;border:1px solid #eee;border-radius:12px;padding:20px">
-        <h3 style="margin:0 0 16px;font-size:15px">Most Viewed Products</h3>
+      <div class="card">
+        <div class="card-header"><span class="card-title">Most viewed products</span></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>#</th><th>Product</th><th>Code</th><th style="text-align:center">Unique Viewers</th><th style="text-align:center">Total Views</th></tr></thead>
+            <thead>
+              <tr>
+                <th style="width:36px">#</th>
+                <th>Product</th>
+                <th>Code</th>
+                <th style="text-align:end">Unique</th>
+                <th style="text-align:end">Total views</th>
+              </tr>
+            </thead>
             <tbody>${topRows}</tbody>
           </table>
         </div>
