@@ -171,14 +171,13 @@ function telLink(phone) {
   return 'tel:' + p;
 }
 
-// Bosta business dashboard URL. The AWB itself is served as an
-// in-page blob URL (like blob:https://business.bosta.co/<uuid>) so
-// there's no way to deep-link to it directly — we open the orders
-// list filtered to this exact tracking number instead, which lands
-// on the row that carries the "Print AWB" action.
+// Bosta business dashboard — open the order detail page directly by
+// tracking number. Bosta's /orders/<id> route accepts the tracking
+// number as the identifier, landing on the customer + shipment
+// screen where "Print AWB" is one tap away.
 function bostaAwbLink(shipCode) {
   if (!shipCode) return '';
-  return `https://business.bosta.co/orders?search=${encodeURIComponent(shipCode)}`;
+  return `https://business.bosta.co/orders/${encodeURIComponent(shipCode)}`;
 }
 
 function orderCard(o) {
