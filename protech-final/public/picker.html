@@ -171,11 +171,14 @@ function telLink(phone) {
   return 'tel:' + p;
 }
 
-// Bosta business dashboard URL — filters the shipments list to this
-// exact tracking number so one more tap opens the AWB print view.
+// Bosta business dashboard URL. The AWB itself is served as an
+// in-page blob URL (like blob:https://business.bosta.co/<uuid>) so
+// there's no way to deep-link to it directly — we open the orders
+// list filtered to this exact tracking number instead, which lands
+// on the row that carries the "Print AWB" action.
 function bostaAwbLink(shipCode) {
   if (!shipCode) return '';
-  return `https://business.bosta.co/deliveries?keyword=${encodeURIComponent(shipCode)}`;
+  return `https://business.bosta.co/orders?search=${encodeURIComponent(shipCode)}`;
 }
 
 function orderCard(o) {
@@ -207,103 +210,119 @@ function orderCard(o) {
     </div>`;
 }
 
-// Print the customer-facing invoice for one order. Fetches full order
-// details (including per-line prices) from the picker API, opens a
-// print-styled popup with our logo, and triggers window.print().
+// Print the customer-facing invoice — exact copy of the admin
+// dashboard's generateInvoicePDF template so both surfaces produce
+// the same document. Fetches full order details (with per-line
+// prices) via the picker API and pops a self-printing window.
 async function printInvoice(orderId) {
   try {
     const j = await apiCall('invoice', { orderId });
-    const o = j.order;
-    if (!o) throw new Error('Order not found');
-    const linesGross = (o.products || []).reduce((a, p) => a + (Number(p.price) || 0) * (Number(p.qty) || 1), 0);
-    const total = Number(o.total) || 0;
-    const ship = Math.max(0, total - linesGross);
-    const dateTxt = (o.created_at || '').slice(0, 10);
-    const lines = (o.products || []).map((p, i) => {
-      const sub = (Number(p.price) || 0) * (Number(p.qty) || 1);
-      return `
-        <tr>
-          <td>${i + 1}</td>
-          <td><strong>${esc(p.name || '—')}</strong><div style="font-size:11px;color:#666;direction:ltr;text-align:start">${esc(p.code || '')}</div></td>
-          <td style="text-align:center">${p.qty}</td>
-          <td style="text-align:end">${money(p.price)}</td>
-          <td style="text-align:end"><strong>${money(sub)}</strong></td>
-        </tr>`;
-    }).join('');
-    const html = `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>Invoice ${esc(o.code || '')}</title>
-<style>
-  * { box-sizing: border-box; }
-  body { font-family: 'Cairo', Tahoma, Arial, sans-serif; padding: 24px; color: #201e1d; margin: 0; }
-  .brand { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 3px solid #ec3013; padding-bottom: 14px; margin-bottom: 18px; }
-  .brand-name { font-weight: 800; font-size: 30px; letter-spacing: -0.02em; color: #ec3013; }
-  .brand-sub { font-size: 12px; color: #605d5d; margin-top: 4px; letter-spacing: .1em; text-transform: uppercase; }
-  .meta { text-align: end; font-size: 12px; color: #444; }
-  .meta b { font-size: 15px; color: #201e1d; display: block; margin-top: 4px; }
-  .box { border: 2px solid #201e1d; padding: 12px 14px; margin-bottom: 12px; }
-  .box h4 { margin: 0 0 6px; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: #605d5d; }
-  .box p { margin: 2px 0; font-size: 14px; }
-  table { width: 100%; border-collapse: collapse; margin-top: 14px; }
-  th { text-align: start; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: #605d5d; padding: 10px 8px; border-bottom: 2px solid #201e1d; }
-  td { padding: 10px 8px; border-bottom: 1px solid #ccc; font-size: 13px; }
-  tfoot td { border: 0; padding: 6px 8px; font-size: 14px; }
-  tfoot .grand td { border-top: 2px solid #201e1d; font-weight: 800; font-size: 16px; padding-top: 12px; }
-  .note { background: #fff2ef; border: 1px solid #ffc4b8; color: #ae1800; padding: 10px 12px; margin-top: 12px; font-size: 13px; font-weight: 700; }
-  .foot { margin-top: 22px; text-align: center; font-size: 12px; color: #605d5d; border-top: 1px solid #ccc; padding-top: 12px; }
-  @media print { body { padding: 12mm; } .noprint { display: none !important; } }
-</style></head><body>
-  <div class="brand">
+    const order = j.order;
+    if (!order) throw new Error('Order not found');
+
+    const products = Array.isArray(order.products)
+      ? order.products
+          .map(p => `
+            <tr>
+              <td>${esc(p.name) || '—'}</td>
+              <td style="text-align:center">${p.qty || 1}</td>
+              <td style="text-align:center">${(p.price || 0).toLocaleString('ar-EG')} ج.م</td>
+              <td style="text-align:center">${((p.price || 0) * (p.qty || 1)).toLocaleString('ar-EG')} ج.م</td>
+            </tr>`)
+          .join('')
+      : '<tr><td colspan="4" style="text-align:center">لا توجد منتجات</td></tr>';
+
+    const orderDate = order.created_at
+      ? new Date(order.created_at).toLocaleDateString('ar-EG', {
+          year: 'numeric', month: 'long', day: 'numeric'
+        })
+      : '—';
+
+    const invoiceHTML = `<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+  <meta charset="UTF-8"/>
+  <title>فاتورة — ${esc(order.code || order.id)}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', Arial, sans-serif; padding: 40px; color: #222; direction: rtl; background: #fff; }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 20px; border-bottom: 4px solid #f97316; margin-bottom: 28px; }
+    .brand-name { font-size: 32px; font-weight: 900; color: #f97316; letter-spacing: -1px; }
+    .brand-tagline { font-size: 12px; color: #888; margin-top: 4px; }
+    .invoice-meta { text-align: left; font-size: 13px; line-height: 1.8; }
+    .invoice-meta .label { color: #888; font-size: 11px; }
+    .invoice-meta .value { font-weight: bold; color: #222; }
+    .section-title { font-size: 15px; font-weight: 700; color: #f97316; margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid #fee2c8; }
+    .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 24px; background: #fff8f3; border: 1px solid #fed7aa; border-radius: 10px; padding: 16px 20px; margin-bottom: 28px; font-size: 14px; }
+    .info-item { line-height: 1.6; }
+    .info-label { color: #888; font-size: 11px; }
+    .info-value { font-weight: 600; }
+    .ship-code { color: #f97316; font-size: 16px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 24px; }
+    thead th { background: #f97316; color: white; padding: 10px 12px; text-align: center; font-weight: 600; }
+    thead th:first-child { text-align: right; }
+    tbody td { padding: 9px 12px; border-bottom: 1px solid #f0f0f0; }
+    tbody tr:nth-child(even) { background: #fafafa; }
+    .totals-section { display: flex; justify-content: flex-end; margin-bottom: 40px; }
+    .totals-table { min-width: 280px; font-size: 14px; }
+    .totals-table td { padding: 7px 12px; }
+    .totals-table .grand-total td { background: #f97316; color: white; font-size: 16px; font-weight: 700; border-radius: 0; }
+    .footer { text-align: center; color: #aaa; font-size: 11px; border-top: 1px solid #eee; padding-top: 16px; }
+    @media print { body { padding: 20px; } .no-print { display: none !important; } }
+  </style>
+</head>
+<body>
+  <div class="no-print" style="margin-bottom:20px;text-align:left">
+    <button onclick="window.print()" style="background:#f97316;color:white;padding:10px 24px;border:none;border-radius:8px;font-size:14px;cursor:pointer;font-weight:bold">🖨️ طباعة / حفظ PDF</button>
+  </div>
+
+  <div class="header">
     <div>
-      <div class="brand-name">PROTECH</div>
-      <div class="brand-sub">Power Tools · Egypt</div>
+      <div class="brand-name">🛠️ بروتيك</div>
+      <div class="brand-tagline">الشغل عليك والعدة علينا</div>
     </div>
-    <div class="meta">
-      <div>فاتورة رقم</div>
-      <b>${esc(o.code || '')}</b>
-      <div style="margin-top:8px">التاريخ: ${esc(dateTxt)}</div>
-      ${o.ship_code ? `<div>كود الشحن: <b style="font-size:13px">${esc(o.ship_code)}</b></div>` : ''}
+    <div class="invoice-meta">
+      <div class="label">رقم الفاتورة</div>
+      <div class="value">#${esc(order.code || order.id)}</div>
+      <div class="label" style="margin-top:6px">تاريخ الطلب</div>
+      <div class="value">${orderDate}</div>
     </div>
   </div>
 
-  <div class="box">
-    <h4>بيانات العميل</h4>
-    <p><b>${esc(o.customer_name || '')}</b></p>
-    <p>📱 <span style="direction:ltr;unicode-bidi:embed">${esc(o.phone || '')}</span></p>
-    <p>📍 ${esc(o.city || '')}${o.address ? ' — ' + esc(o.address) : ''}</p>
+  <div class="section-title">بيانات العميل والشحن</div>
+  <div class="info-grid">
+    <div class="info-item"><div class="info-label">اسم العميل</div><div class="info-value">${esc(order.customer_name) || '—'}</div></div>
+    <div class="info-item"><div class="info-label">رقم الهاتف</div><div class="info-value">${esc(order.phone) || '—'}</div></div>
+    <div class="info-item"><div class="info-label">كود الشحن</div><div class="info-value ship-code">${esc(order.ship_code) || 'لم يُحدَّد بعد'}</div></div>
+    <div class="info-item"><div class="info-label">حالة الطلب</div><div class="info-value">${esc(order.status) || 'جديد'}</div></div>
+    ${order.notes ? `<div class="info-item" style="grid-column:1/-1"><div class="info-label">ملاحظات</div><div class="info-value">${esc(order.notes)}</div></div>` : ''}
   </div>
 
-  ${o.allow_open ? `<div class="note">📦 العميل يسمح بفتح الشحنة قبل الاستلام — OPEN PACKAGE ALLOWED</div>` : ''}
-  ${o.notes ? `<div class="note" style="background:#fef3c7;border-color:#fcd34d;color:#92400e">📝 ملاحظات: ${esc(o.notes)}</div>` : ''}
-
+  <div class="section-title">المنتجات المطلوبة</div>
   <table>
     <thead>
-      <tr>
-        <th>#</th>
-        <th>المنتج</th>
-        <th style="text-align:center">الكمية</th>
-        <th style="text-align:end">السعر</th>
-        <th style="text-align:end">الإجمالي</th>
-      </tr>
+      <tr><th style="text-align:right">المنتج</th><th>الكمية</th><th>سعر الوحدة</th><th>الإجمالي</th></tr>
     </thead>
-    <tbody>${lines}</tbody>
-    <tfoot>
-      <tr><td colspan="4" style="text-align:end">المنتجات</td><td style="text-align:end">${money(linesGross)} ج.م</td></tr>
-      ${ship > 0.5 ? `<tr><td colspan="4" style="text-align:end">الشحن</td><td style="text-align:end">${money(ship)} ج.م</td></tr>` : ''}
-      <tr class="grand"><td colspan="4" style="text-align:end">الإجمالي</td><td style="text-align:end">${money(total)} ج.م</td></tr>
-    </tfoot>
+    <tbody>${products}</tbody>
   </table>
 
-  <div class="foot">شكراً لطلبك من بروتيك — للاستفسار: 01034482071</div>
-
-  <div class="noprint" style="text-align:center;margin-top:20px">
-    <button onclick="window.print()" style="padding:12px 24px;background:#ec3013;color:#fff;border:0;font-weight:800;font-size:15px;cursor:pointer">🖨️ طباعة</button>
-    <button onclick="window.close()" style="padding:12px 24px;background:#f3f2f2;color:#201e1d;border:1px solid #201e1d;font-weight:700;font-size:14px;cursor:pointer;margin-inline-start:8px">إغلاق</button>
+  <div class="totals-section">
+    <table class="totals-table">
+      <tr><td style="color:#888">رسوم الشحن</td><td style="text-align:left;font-weight:600">${(order.est_shipping ?? 0).toLocaleString('ar-EG')} ج.م</td></tr>
+      <tr class="grand-total"><td>💰 الإجمالي الكلي</td><td style="text-align:left">${(order.total ?? 0).toLocaleString('ar-EG')} ج.م</td></tr>
+    </table>
   </div>
 
-  <scr` + `ipt>window.addEventListener('load', () => setTimeout(() => window.print(), 400));</scr` + `ipt>
-</body></html>`;
-    const w = window.open('', '_blank', 'width=780,height=900');
-    if (!w) { alert('السماح للنوافذ المنبثقة مطلوب لطباعة الفاتورة'); return; }
-    w.document.open(); w.document.write(html); w.document.close();
+  <div class="footer">
+    بروتيك | protechstores.com | واتساب: 201091011380+<br/>
+    شكراً لثقتك بنا 🧡
+  </div>
+</body>
+</html>`;
+
+    const win = window.open('', '_blank', 'width=850,height=900');
+    if (!win) { alert('يرجى السماح بالنوافذ المنبثقة لطباعة الفاتورة'); return; }
+    win.document.open(); win.document.write(invoiceHTML); win.document.close();
   } catch (e) { alert('تعذّر توليد الفاتورة: ' + e.message); }
 }
 
