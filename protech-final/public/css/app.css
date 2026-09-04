@@ -288,6 +288,92 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .spinner { width: 36px; height: 36px; border: 3px solid var(--line); border-top-color: var(--acc); border-radius: 50%; animation: spin .8s linear infinite; margin: 0 auto 12px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ── HAMBURGER + SIDEBAR DRAWER ────────────────────────
+   Slide-in nav from the start side. On mobile it fully replaces
+   the top tabs + bottom nav; on desktop it lives alongside the
+   top tabs so you can use whichever you prefer. */
+.hamburger {
+  background: transparent; border: 0; color: #f8f4f4;
+  width: 44px; height: 44px;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer; padding: 0;
+  margin-inline-start: -8px;
+}
+.hamburger:hover { color: var(--acc); }
+
+.sidebar-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(32,30,29,.55);
+  z-index: 199;
+  opacity: 0; visibility: hidden;
+  transition: opacity .2s, visibility 0s .2s;
+}
+.sidebar-backdrop.open { opacity: 1; visibility: visible; transition: opacity .2s; }
+
+.sidebar {
+  position: fixed; top: 0; bottom: 0;
+  inset-inline-start: 0;
+  width: 280px; max-width: 82vw;
+  background: var(--ink); color: #f8f4f4;
+  z-index: 200;
+  display: flex; flex-direction: column;
+  transform: translateX(-100%);
+  transition: transform .25s cubic-bezier(.4,0,.2,1);
+  box-shadow: 4px 0 24px rgba(0,0,0,.4);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+[dir="rtl"] .sidebar { transform: translateX(100%); }
+.sidebar.open { transform: translateX(0); }
+
+.sidebar-head {
+  padding: 22px 20px 18px;
+  border-bottom: 2px solid rgba(243,242,242,.28);
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.sidebar-brand { font-weight: 800; font-size: 20px; letter-spacing: -0.02em; color: #f8f4f4; }
+.sidebar-sub { font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-6); margin-top: 4px; }
+.sidebar-close { background: transparent; border: 0; color: #d7d3d3; font-size: 22px; cursor: pointer; padding: 6px 10px; line-height: 1; }
+.sidebar-close:hover { color: #f8f4f4; }
+
+.sidebar-nav { flex: 1; overflow-y: auto; padding: 6px 0 14px; }
+.sidebar-group {
+  padding: 18px 20px 8px;
+  font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--ink-5); font-weight: 700;
+}
+.sidebar-btn {
+  width: 100%; text-align: start;
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 20px;
+  background: transparent; border: 0;
+  color: #d7d3d3;
+  font-family: inherit; font-size: 14px; font-weight: 700;
+  letter-spacing: .01em;
+  cursor: pointer;
+  border-inline-start: 3px solid transparent;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.sidebar-btn:hover { background: rgba(243,242,242,.06); color: #f8f4f4; }
+.sidebar-btn.active { background: rgba(236,48,19,.12); color: #f8f4f4; border-inline-start-color: var(--acc); }
+.sidebar-btn span { font-size: 18px; width: 22px; text-align: center; }
+
+.sidebar-foot {
+  padding: 14px 20px 20px;
+  border-top: 2px solid rgba(243,242,242,.28);
+}
+
+/* Mobile: retire the bottom nav — drawer replaces it. */
+@media (max-width: 599px) {
+  .bottom-nav { display: none !important; }
+  .screen { padding-bottom: 40px; }   /* reclaim the space */
+}
+
+/* Desktop: keep the top tabs, hide the hamburger if you prefer.
+   Comment out this rule to always show the hamburger. */
+/*
+@media (min-width: 600px) { .hamburger { display: none; } }
+*/
+
 /* ── UTILITY: force-flatten any inline border-radius from JS ──
    Many pieces of the app inline border-radius:10px etc. This
    overrides them to 0 for a consistent flat look. Cards that

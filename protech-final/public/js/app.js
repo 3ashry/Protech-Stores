@@ -3377,3 +3377,38 @@ function toggleVoiceCapture() {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', hook);
   else hook();
 })();
+
+// ═══════════════════════════════════════════════════════════════════
+//  SIDEBAR DRAWER — slide-in nav that replaces bottom-nav on mobile.
+//  Hamburger toggles it; backdrop / Esc / picking any nav item closes.
+// ═══════════════════════════════════════════════════════════════════
+function toggleSidebar() {
+  const sb = document.getElementById('sidebar');
+  const bd = document.getElementById('sidebar-backdrop');
+  if (!sb || !bd) return;
+  const willOpen = !sb.classList.contains('open');
+  sb.classList.toggle('open', willOpen);
+  bd.classList.toggle('open', willOpen);
+  document.body.style.overflow = willOpen ? 'hidden' : '';
+  if (willOpen) _highlightActiveSidebarItem();
+}
+function closeSidebar() {
+  const sb = document.getElementById('sidebar');
+  const bd = document.getElementById('sidebar-backdrop');
+  if (sb) sb.classList.remove('open');
+  if (bd) bd.classList.remove('open');
+  document.body.style.overflow = '';
+}
+// Sidebar nav click — navigate then close the drawer.
+function goSb(name) { if (typeof go === 'function') go(name); closeSidebar(); }
+function _highlightActiveSidebarItem() {
+  const active = SCREENS.find(s => document.getElementById('screen-' + s)?.classList.contains('active'));
+  document.querySelectorAll('.sidebar-btn').forEach(b => {
+    const onclick = b.getAttribute('onclick') || '';
+    const m = onclick.match(/goSb\(['"]([^'"]+)['"]\)/);
+    b.classList.toggle('active', !!(m && m[1] === active));
+  });
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeSidebar();
+});
