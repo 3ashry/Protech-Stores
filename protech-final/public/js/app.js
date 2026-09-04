@@ -2137,21 +2137,31 @@ function downloadFinancialsExcel() { downloadAllFinancesExcel(); }
 // ═══════════════════════════════════════════════════════════════════
 const ANALYTICS_SB_URL = 'https://wljxplbcfoorqpoflcdz.supabase.co';
 const ANALYTICS_SB_KEY = 'sb_publishable_zsHh-eOarHI7BSGtuP6WWQ_PQ4ACoHG';
-let analyticsCache = { events: [], loaded: false, loading: false };
-let analyticsRange = 7; // days back; null = all time
+let analyticsCache = { events: [], loaded: false, loading: false, sinceISO: null, ceilISO: null };
+let analyticsRange = 7; // days back; 0 = today only; null = all time
 
 async function loadAnalytics() {
   analyticsCache.loading = true;
   renderAnalytics();
+  let sinceISO = null;
+  let params = 'select=*&order=created_at.desc&limit=10000';
+  if (analyticsRange !== null) {
+    const since = new Date();
+    // "Today" = strictly since 00:00 today (in the user's local zone), so
+    // subtract 0 days and zero the time. 7d/30d subtract that many days.
+    since.setDate(since.getDate() - analyticsRange);
+    since.setHours(0, 0, 0, 0);
+    sinceISO = since.toISOString();
+    params += `&created_at=gte.${encodeURIComponent(sinceISO)}`;
+  }
+  // Cache-buster so a stale CDN / browser cache never masks the filter.
+  const url = `${ANALYTICS_SB_URL}/rest/v1/analytics_events?${params}&_ts=${Date.now()}`;
+  analyticsCache.sinceISO = sinceISO;
   try {
-    let url = `${ANALYTICS_SB_URL}/rest/v1/analytics_events?select=*&order=created_at.desc&limit=10000`;
-    if (analyticsRange !== null) {
-      const since = new Date();
-      since.setDate(since.getDate() - analyticsRange);
-      since.setHours(0, 0, 0, 0);
-      url += `&created_at=gte.${since.toISOString()}`;
-    }
-    const res = await fetch(url, { headers: { apikey: ANALYTICS_SB_KEY, Authorization: 'Bearer ' + (accessToken || ANALYTICS_SB_KEY) } });
+    const res = await fetch(url, {
+      headers: { apikey: ANALYTICS_SB_KEY, Authorization: 'Bearer ' + (accessToken || ANALYTICS_SB_KEY) },
+      cache: 'no-store',
+    });
     const data = await res.json();
     if (!res.ok || !Array.isArray(data)) {
       analyticsCache.events = [];
@@ -2186,10 +2196,17 @@ function renderAnalytics() {
   // Total visitors = every unique session that did ANYTHING (landing 'visit' events plus
   // any product view / checkout / order), so it includes people who only browsed.
   const visitors = uniq(ev);
-  // Transparency: the actual date span + event count in this range. If 7d/30d/all show the
-  // same numbers, this reveals why (e.g. all data is within the last few days).
+  // Transparency: what the server was asked for vs what came back.
+  // If 7d/30d/all all show the same numbers, this reveals why — most
+  // often "no data older than last week", not "the filter is broken".
   const _dates = ev.map(e => (e.created_at || '').slice(0, 10)).filter(Boolean).sort();
-  const dataSpan = _dates.length ? `${ev.length} events · ${_dates[0]} → ${_dates[_dates.length - 1]}` : 'no events in this range';
+  const gotSpan = _dates.length
+    ? `${ev.length} events · ${_dates[0]} → ${_dates[_dates.length - 1]}`
+    : 'no events in this range';
+  const asked = analyticsCache.sinceISO
+    ? `since ${analyticsCache.sinceISO.slice(0, 16).replace('T', ' ')} UTC`
+    : 'all time (no lower bound)';
+  const dataSpan = `Asked: ${asked} — Got: ${gotSpan}`;
 
   const checkoutRate = upv ? Math.round(ucv / upv * 100) : 0;
   const convRate = ucv ? Math.round(uoc / ucv * 100) : 0;
