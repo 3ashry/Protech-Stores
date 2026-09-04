@@ -171,6 +171,13 @@ function telLink(phone) {
   return 'tel:' + p;
 }
 
+// Bosta business dashboard URL — filters the shipments list to this
+// exact tracking number so one more tap opens the AWB print view.
+function bostaAwbLink(shipCode) {
+  if (!shipCode) return '';
+  return `https://business.bosta.co/deliveries?keyword=${encodeURIComponent(shipCode)}`;
+}
+
 function orderCard(o) {
   const products = (o.products || []).map(p => `
     <div class="prod">
@@ -180,6 +187,9 @@ function orderCard(o) {
       </div>
       <div class="qty">×${p.qty}</div>
     </div>`).join('');
+  const bostaBtn = o.ship_code
+    ? `<a class="wa" href="${bostaAwbLink(o.ship_code)}" target="_blank" rel="noopener">🚚 فتح بوسطة (AWB)</a>`
+    : `<span class="wa" style="opacity:.5;cursor:not-allowed" title="لا يوجد كود شحن مسجل بعد">🚚 لا يوجد كود شحن</span>`;
   return `
     <div class="card">
       <span class="order-code">${esc(o.code || '')}</span>
@@ -188,13 +198,113 @@ function orderCard(o) {
       <div class="address">📍 ${esc(o.city || '')}${o.address ? ' — ' + esc(o.address) : ''}</div>
       ${o.notes ? `<div class="address" style="color:#92400e;background:#fef3c7;padding:6px 8px;border-radius:6px;margin:6px 0">📝 ${esc(o.notes)}</div>` : ''}
       <div class="call-btns">
-        <a class="call" href="${telLink(o.phone)}">📞 اتصال</a>
-        <a class="wa" href="${waLink(o.phone)}" target="_blank">💬 واتساب</a>
+        <a class="call" href="javascript:void(0)" onclick="printInvoice('${esc(o.id)}')">🧾 طباعة الفاتورة</a>
+        ${bostaBtn}
       </div>
       <div class="products">${products || '<em style="color:var(--muted)">لا يوجد منتجات مضافة</em>'}</div>
       <div class="total"><span>الإجمالي</span><span>${money(o.total)} ج.م</span></div>
       <button class="btn btn-success" onclick="markPrepared('${esc(o.id)}', this)">✅ تم التجهيز</button>
     </div>`;
+}
+
+// Print the customer-facing invoice for one order. Fetches full order
+// details (including per-line prices) from the picker API, opens a
+// print-styled popup with our logo, and triggers window.print().
+async function printInvoice(orderId) {
+  try {
+    const j = await apiCall('invoice', { orderId });
+    const o = j.order;
+    if (!o) throw new Error('Order not found');
+    const linesGross = (o.products || []).reduce((a, p) => a + (Number(p.price) || 0) * (Number(p.qty) || 1), 0);
+    const total = Number(o.total) || 0;
+    const ship = Math.max(0, total - linesGross);
+    const dateTxt = (o.created_at || '').slice(0, 10);
+    const lines = (o.products || []).map((p, i) => {
+      const sub = (Number(p.price) || 0) * (Number(p.qty) || 1);
+      return `
+        <tr>
+          <td>${i + 1}</td>
+          <td><strong>${esc(p.name || '—')}</strong><div style="font-size:11px;color:#666;direction:ltr;text-align:start">${esc(p.code || '')}</div></td>
+          <td style="text-align:center">${p.qty}</td>
+          <td style="text-align:end">${money(p.price)}</td>
+          <td style="text-align:end"><strong>${money(sub)}</strong></td>
+        </tr>`;
+    }).join('');
+    const html = `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>Invoice ${esc(o.code || '')}</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: 'Cairo', Tahoma, Arial, sans-serif; padding: 24px; color: #201e1d; margin: 0; }
+  .brand { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 3px solid #ec3013; padding-bottom: 14px; margin-bottom: 18px; }
+  .brand-name { font-weight: 800; font-size: 30px; letter-spacing: -0.02em; color: #ec3013; }
+  .brand-sub { font-size: 12px; color: #605d5d; margin-top: 4px; letter-spacing: .1em; text-transform: uppercase; }
+  .meta { text-align: end; font-size: 12px; color: #444; }
+  .meta b { font-size: 15px; color: #201e1d; display: block; margin-top: 4px; }
+  .box { border: 2px solid #201e1d; padding: 12px 14px; margin-bottom: 12px; }
+  .box h4 { margin: 0 0 6px; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: #605d5d; }
+  .box p { margin: 2px 0; font-size: 14px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 14px; }
+  th { text-align: start; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: #605d5d; padding: 10px 8px; border-bottom: 2px solid #201e1d; }
+  td { padding: 10px 8px; border-bottom: 1px solid #ccc; font-size: 13px; }
+  tfoot td { border: 0; padding: 6px 8px; font-size: 14px; }
+  tfoot .grand td { border-top: 2px solid #201e1d; font-weight: 800; font-size: 16px; padding-top: 12px; }
+  .note { background: #fff2ef; border: 1px solid #ffc4b8; color: #ae1800; padding: 10px 12px; margin-top: 12px; font-size: 13px; font-weight: 700; }
+  .foot { margin-top: 22px; text-align: center; font-size: 12px; color: #605d5d; border-top: 1px solid #ccc; padding-top: 12px; }
+  @media print { body { padding: 12mm; } .noprint { display: none !important; } }
+</style></head><body>
+  <div class="brand">
+    <div>
+      <div class="brand-name">PROTECH</div>
+      <div class="brand-sub">Power Tools · Egypt</div>
+    </div>
+    <div class="meta">
+      <div>فاتورة رقم</div>
+      <b>${esc(o.code || '')}</b>
+      <div style="margin-top:8px">التاريخ: ${esc(dateTxt)}</div>
+      ${o.ship_code ? `<div>كود الشحن: <b style="font-size:13px">${esc(o.ship_code)}</b></div>` : ''}
+    </div>
+  </div>
+
+  <div class="box">
+    <h4>بيانات العميل</h4>
+    <p><b>${esc(o.customer_name || '')}</b></p>
+    <p>📱 <span style="direction:ltr;unicode-bidi:embed">${esc(o.phone || '')}</span></p>
+    <p>📍 ${esc(o.city || '')}${o.address ? ' — ' + esc(o.address) : ''}</p>
+  </div>
+
+  ${o.allow_open ? `<div class="note">📦 العميل يسمح بفتح الشحنة قبل الاستلام — OPEN PACKAGE ALLOWED</div>` : ''}
+  ${o.notes ? `<div class="note" style="background:#fef3c7;border-color:#fcd34d;color:#92400e">📝 ملاحظات: ${esc(o.notes)}</div>` : ''}
+
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>المنتج</th>
+        <th style="text-align:center">الكمية</th>
+        <th style="text-align:end">السعر</th>
+        <th style="text-align:end">الإجمالي</th>
+      </tr>
+    </thead>
+    <tbody>${lines}</tbody>
+    <tfoot>
+      <tr><td colspan="4" style="text-align:end">المنتجات</td><td style="text-align:end">${money(linesGross)} ج.م</td></tr>
+      ${ship > 0.5 ? `<tr><td colspan="4" style="text-align:end">الشحن</td><td style="text-align:end">${money(ship)} ج.م</td></tr>` : ''}
+      <tr class="grand"><td colspan="4" style="text-align:end">الإجمالي</td><td style="text-align:end">${money(total)} ج.م</td></tr>
+    </tfoot>
+  </table>
+
+  <div class="foot">شكراً لطلبك من بروتيك — للاستفسار: 01034482071</div>
+
+  <div class="noprint" style="text-align:center;margin-top:20px">
+    <button onclick="window.print()" style="padding:12px 24px;background:#ec3013;color:#fff;border:0;font-weight:800;font-size:15px;cursor:pointer">🖨️ طباعة</button>
+    <button onclick="window.close()" style="padding:12px 24px;background:#f3f2f2;color:#201e1d;border:1px solid #201e1d;font-weight:700;font-size:14px;cursor:pointer;margin-inline-start:8px">إغلاق</button>
+  </div>
+
+  <script>window.addEventListener('load', () => setTimeout(() => window.print(), 400));</script>
+</body></html>`;
+    const w = window.open('', '_blank', 'width=780,height=900');
+    if (!w) { alert('السماح للنوافذ المنبثقة مطلوب لطباعة الفاتورة'); return; }
+    w.document.open(); w.document.write(html); w.document.close();
+  } catch (e) { alert('تعذّر توليد الفاتورة: ' + e.message); }
 }
 
 async function loadOrders() {

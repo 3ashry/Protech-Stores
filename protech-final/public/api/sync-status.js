@@ -435,6 +435,7 @@ export default async function handler(req, res) {
         allow_open: !!o.allow_open,
         notes: o.notes || '',
         total: parseFloat(o.total || 0),
+        ship_code: o.ship_code || '',   // needed for the "Open in Bosta" button
         created_at: o.created_at,
         prepared_at: o.picker_prepared_at || null,
         // Each product line keeps name / code / qty ONLY — no price / buy_price.
@@ -465,6 +466,30 @@ export default async function handler(req, res) {
         }
         const items = [...bag.values()].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
         return res.status(200).json({ ok: true, orderCount: rows.length, items });
+      }
+      if (op === 'invoice') {
+        // Full order details for the printed invoice sheet — the ONLY
+        // op that returns per-line prices to the picker page. Called on
+        // demand when the picker taps "طباعة الفاتورة" for a single order.
+        const orderId = (req.query?.orderId || '').toString();
+        if (!/^[A-Za-z0-9_-]+$/.test(orderId)) return res.status(400).json({ error: 'Bad orderId' });
+        const rr = await sbGet(`orders?select=*&id=eq.${encodeURIComponent(orderId)}&limit=1`);
+        const o = rr && rr[0];
+        if (!o) return res.status(404).json({ error: 'Order not found' });
+        return res.status(200).json({ ok: true, order: {
+          id: o.id, code: o.code,
+          customer_name: o.customer_name, phone: o.phone, city: o.city, address: o.address,
+          allow_open: !!o.allow_open, notes: o.notes || '',
+          ship_code: o.ship_code || '', bosta_id: o.bosta_id || '',
+          total: parseFloat(o.total || 0),
+          est_shipping: parseFloat(o.est_shipping || 0),
+          created_at: o.created_at,
+          products: Array.isArray(o.products) ? o.products.map(p => ({
+            code: p.code || '', name: p.name || '',
+            qty: parseInt(p.qty || 1) || 1,
+            price: parseFloat(p.price || 0),
+          })) : [],
+        } });
       }
       if (op === 'mark') {
         const orderId = (req.query?.orderId || '').toString();
