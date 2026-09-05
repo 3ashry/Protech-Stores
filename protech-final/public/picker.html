@@ -237,6 +237,9 @@ function orderCard(o, tab) {
       </div>
       <div class="qty">×${p.qty}</div>
     </div>`).join('');
+  // data-oid + data-tab lets the diff-renderer identify cards across
+  // refreshes so unchanged rows stay in the DOM (and the ops manager's
+  // scroll position stays put).
   const bostaBtn = o.ship_code
     ? `<a class="wa" href="${bostaAwbLink(o.ship_code)}" target="_blank" rel="noopener">🚚 فتح بوسطة (AWB)</a>`
     : `<span class="wa" style="opacity:.5;cursor:not-allowed" title="لا يوجد كود شحن مسجل بعد">🚚 لا يوجد كود شحن</span>`;
@@ -259,7 +262,7 @@ function orderCard(o, tab) {
     bottomAction = `<button class="btn btn-success" onclick="markPrepared('${esc(o.id)}', this)">✅ تم التجهيز</button>`;
   }
   return `
-    <div class="card">
+    <div class="card" data-oid="${esc(o.id)}" data-tab="${tab}">
       <span class="order-code">${esc(o.code || '')}</span>
       ${o.allow_open ? '<span class="badge-open">📦 فتح الشحنة</span>' : ''}
       <h2 class="customer">${esc(o.customer_name || 'عميل')}</h2>
@@ -448,6 +451,68 @@ function _hashOrders(orders) {
   ).join('§');
 }
 
+// Diff-render a list of orders into `listEl`, preserving any card whose
+// outerHTML is unchanged. This is what actually keeps the scroll steady:
+// untouched <div class="card"> nodes never leave the DOM, so the page's
+// scroll position is preserved automatically by the browser.
+function diffRenderList(listEl, orders, tab, emptyMsg) {
+  // Empty state — a single .empty div. Only rebuild when transitioning
+  // between "have cards" and "no cards" or between different empty texts.
+  if (!orders.length) {
+    const wanted = `<div class="empty"><div class="em">${emptyMsg[0]}</div><div>${emptyMsg[1]}</div></div>`;
+    if (listEl.innerHTML !== wanted) listEl.innerHTML = wanted;
+    return;
+  }
+  // If we're leaving an "empty" state, wipe it before diffing.
+  if (listEl.querySelector('.empty')) listEl.innerHTML = '';
+
+  // Snapshot the existing cards keyed by their data-oid.
+  const existing = new Map();
+  for (const el of Array.from(listEl.children)) {
+    const oid = el.dataset && el.dataset.oid;
+    if (oid) existing.set(oid, el);
+    else el.remove();          // stray non-card node — cleanup
+  }
+  const newIds = new Set(orders.map(o => o.id));
+  // Remove cards for orders that dropped off the list.
+  for (const [oid, el] of existing) {
+    if (!newIds.has(oid)) { el.remove(); existing.delete(oid); }
+  }
+  // Insert / update / reorder to match the new list order.
+  let cursor = null;    // last card we placed, so we know where to insert next
+  const tpl = document.createElement('template');
+  for (const o of orders) {
+    const desiredHTML = orderCard(o, tab).trim();
+    let card = existing.get(o.id);
+    if (card) {
+      // Only replace the DOM if the produced HTML differs — this is the
+      // key optimization: untouched cards keep their exact DOM identity.
+      if (card.outerHTML !== desiredHTML) {
+        tpl.innerHTML = desiredHTML;
+        const replacement = tpl.content.firstElementChild;
+        card.replaceWith(replacement);
+        card = replacement;
+        existing.set(o.id, card);
+      }
+    } else {
+      tpl.innerHTML = desiredHTML;
+      card = tpl.content.firstElementChild;
+      // Insert AFTER the previous cursor, or at the very start if there
+      // isn't one yet.
+      if (cursor) cursor.insertAdjacentElement('afterend', card);
+      else        listEl.prepend(card);
+      existing.set(o.id, card);
+    }
+    // Move the card into position if it's out of order.
+    const expectedPrev = cursor;
+    if (card.previousElementSibling !== expectedPrev) {
+      if (expectedPrev) expectedPrev.insertAdjacentElement('afterend', card);
+      else              listEl.prepend(card);
+    }
+    cursor = card;
+  }
+}
+
 async function loadOrders(opts) {
   const silent = !!(opts && opts.silent);
   const listEl = document.getElementById('list');
@@ -497,25 +562,16 @@ async function loadOrders(opts) {
       ready:     ['📭', 'لا توجد طلبات جاهزة للاستلام'],
       returning: ['🏠', 'لا توجد طلبات راجعة من بوسطة'],
     }[activeTab];
-    // Skip the DOM write entirely when the rendered content would be
-    // identical. When a repaint IS needed, capture scroll first and
-    // restore after — swapping innerHTML on an ancestor collapses the
-    // page back to the top, throwing the ops manager off whatever card
-    // he was reading.
-    const newHash = _hashOrders(orders);
-    if (_renderedHash[activeTab] !== newHash || _paintedTab !== activeTab) {
-      const scrollTop = window.scrollY || document.documentElement.scrollTop || 0;
-      listEl.innerHTML = orders.length
-        ? orders.map(o => orderCard(o, activeTab)).join('')
-        : `<div class="empty"><div class="em">${emptyMsg[0]}</div><div>${emptyMsg[1]}</div></div>`;
-      _renderedHash[activeTab] = newHash;
-      _paintedTab = activeTab;
-      // Restore twice — once synchronously to catch layout-jump on
-      // browsers that reset scroll on innerHTML, and once on the next
-      // animation frame in case font / image loads shift heights.
-      window.scrollTo({ top: scrollTop, behavior: 'auto' });
-      requestAnimationFrame(() => window.scrollTo({ top: scrollTop, behavior: 'auto' }));
-    }
+    // ── True DIFF render — the reason the page kept jumping to the
+    //    top is that we were rebuilding innerHTML on every 15 s tick.
+    //    Even swapping identical HTML resets the scroll on some browsers.
+    //    Here we only touch cards that actually changed: add new ones,
+    //    remove ones that dropped off the list, and replace only the
+    //    exact <div class="card"> whose outerHTML differs. Untouched
+    //    cards stay in the DOM, so scroll doesn't move at all.
+    diffRenderList(listEl, orders, activeTab, emptyMsg);
+    _renderedHash[activeTab] = _hashOrders(orders);   // kept for debugging only
+    _paintedTab = activeTab;
     _refreshTabButtons();
   } catch (e) {
     // Only show the error card if the list is empty — otherwise leave the
