@@ -93,8 +93,13 @@ async function doLogout() {
   }
 })();
 
-// Keep the access token fresh (Supabase access tokens expire ~1h).
-setInterval(() => { if (refreshToken) refreshSession(); }, 45 * 60 * 1000);
+// Keep the access token fresh. Supabase JWTs are ~1h TTL; refresh every
+// 20 minutes so we always have a huge safety margin, and also refresh
+// whenever the tab regains focus (covers the "laptop was asleep" case).
+setInterval(() => { if (refreshToken) refreshSession(); }, 20 * 60 * 1000);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && refreshToken) refreshSession();
+});
 
 // Allow Enter key on login
 document.addEventListener('DOMContentLoaded', () => {

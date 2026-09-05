@@ -767,13 +767,24 @@ async function toggleSentToPicker(orderId, isCurrentlySent) {
     : 'إرسال هذا الطلب لموظف التجهيز؟\n(سيظهر على شاشته فوراً)';
   if (!confirm(msg)) return;
   const newValue = isCurrentlySent ? null : new Date().toISOString();
+  const doPatch = () => fetch(`${SUPPLIER_SB_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
+    method: 'PATCH',
+    headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+    body: JSON.stringify({ sent_to_picker_at: newValue }),
+  });
   try {
-    const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
-      method: 'PATCH',
-      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-      body: JSON.stringify({ sent_to_picker_at: newValue }),
-    });
-    if (!res.ok) throw new Error(await res.text());
+    let res = await doPatch();
+    // JWT expired — try refreshing once and retrying. Avoids the user
+    // hitting "Error: JWT expired" and having to log out / back in.
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      if (/PGRST303|JWT expired|invalid.*jwt/i.test(txt) && typeof refreshSession === 'function' && await refreshSession()) {
+        res = await doPatch();
+        if (!res.ok) throw new Error(await res.text());
+      } else {
+        throw new Error(txt || `HTTP ${res.status}`);
+      }
+    }
     const i = cache.orders.findIndex(o => o.id === orderId);
     if (i >= 0) cache.orders[i].sent_to_picker_at = newValue;
     renderOrders();
