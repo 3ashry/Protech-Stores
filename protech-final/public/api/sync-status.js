@@ -517,6 +517,66 @@ export default async function handler(req, res) {
     if (!acct) return res.status(401).json({ error: 'اسم المستخدم أو الرمز غير صحيح' });
     const op = (req.query?.op || 'list').toString();
     try {
+      // Bundle-of expansion: any product on an order line whose code
+      // maps to a product with a bundle_of composition gets swapped for
+      // its components (with qty multiplied by the ordered qty). The
+      // picker sees the individual items to grab from the warehouse
+      // rather than the bundle name. Bundle products fetched once per
+      // request and cached in `bundleMap`.
+      let _bundleMap = null;
+      async function loadBundleMap() {
+        if (_bundleMap) return _bundleMap;
+        _bundleMap = new Map();
+        try {
+          const rows = await sbGet('products?select=code,name,bundle_of&bundle_of=not.is.null&limit=2000');
+          for (const p of (rows || [])) {
+            if (Array.isArray(p.bundle_of) && p.bundle_of.length && p.code) {
+              _bundleMap.set(String(p.code).toUpperCase(), {
+                name: p.name || '',
+                components: p.bundle_of.map(c => ({ code: String(c.code || '').toUpperCase(), qty: parseInt(c.qty) || 1 })),
+              });
+            }
+          }
+        } catch { /* fall through — orders render un-expanded on error */ }
+        return _bundleMap;
+      }
+      // Given a raw products array from an order, return the picker-view
+      // version: bundles replaced by their components (with a small
+      // "من طقم X" label on each component line so it's obvious where
+      // they came from). Non-bundle lines pass through unchanged.
+      async function expandBundles(lines) {
+        if (!Array.isArray(lines) || !lines.length) return [];
+        const map = await loadBundleMap();
+        const out = [];
+        for (const p of lines) {
+          const code = String(p.code || '').toUpperCase();
+          const orderQty = parseInt(p.qty || 1) || 1;
+          const b = code && map.get(code);
+          if (!b) { out.push({ code: p.code || '', name: p.name || '', qty: orderQty }); continue; }
+          // Look up each component's real name from cache.products via a
+          // lightweight query. Only fetched on demand.
+          for (const c of b.components) {
+            const compName = await lookupProductName(c.code);
+            out.push({
+              code: c.code,
+              name: (compName || c.code) + ` — من طقم "${b.name}"`,
+              qty: orderQty * c.qty,
+            });
+          }
+        }
+        return out;
+      }
+      const _nameCache = new Map();
+      async function lookupProductName(code) {
+        const key = String(code || '').toUpperCase(); if (!key) return '';
+        if (_nameCache.has(key)) return _nameCache.get(key);
+        try {
+          const rows = await sbGet(`products?select=name&code=eq.${encodeURIComponent(code)}&limit=1`);
+          const n = (rows && rows[0] && rows[0].name) || '';
+          _nameCache.set(key, n); return n;
+        } catch { _nameCache.set(key, ''); return ''; }
+      }
+
       // Sanitise a raw order row into the picker-safe shape (no prices,
       // no buy costs, no shipping figures — only what he needs to pack).
       const strip = (o) => ({
@@ -537,6 +597,13 @@ export default async function handler(req, res) {
           code: p.code || '', name: p.name || '', qty: parseInt(p.qty || 1) || 1,
         })) : [],
       });
+      // Expand bundle products in every stripped order's product list so
+      // the picker sees the individual items. Runs after strip() so the
+      // rest of the shape (customer, phone, total etc.) is untouched.
+      async function expandAll(orders) {
+        for (const o of orders) o.products = await expandBundles(o.products);
+        return orders;
+      }
       if (op === 'list' || op === 'today') {
         // Preparing queue — sent by admin, not yet marked prepared, AND
         // Bosta hasn't picked it up (still 'Processing'). Once the picker
@@ -544,13 +611,16 @@ export default async function handler(req, res) {
         // Once Bosta actually picks the parcel up (status leaves
         // 'Processing') it drops off both queues automatically.
         const rows = await sbGet('orders?select=*&sent_to_picker_at=not.is.null&picker_prepared_at=is.null&status=eq.Processing&order=sent_to_picker_at.desc&limit=500');
-        if (op === 'list') return res.status(200).json({ ok: true, orders: rows.map(strip) });
+        if (op === 'list') return res.status(200).json({ ok: true, orders: await expandAll(rows.map(strip)) });
         // op === 'today' — aggregate products across every visible order
         // (all confirmed & not prepared, not "today" strictly; that's the
         // useful set for the picker to grab from the warehouse in one pass).
         const bag = new Map();
         for (const o of rows) {
-          for (const p of (Array.isArray(o.products) ? o.products : [])) {
+          // Expand any bundle before aggregating so the "today's picking
+          // list" totals individual components across all queued orders.
+          const expanded = await expandBundles(Array.isArray(o.products) ? o.products : []);
+          for (const p of expanded) {
             const key = p.code || p.name || '';
             if (!key) continue;
             const cur = bag.get(key) || { code: p.code || '', name: p.name || '', qty: 0, orderCodes: [] };
@@ -591,7 +661,7 @@ export default async function handler(req, res) {
         // un-sends an already-prepared order, it drops off this queue
         // (matches the "cancel send" mental model on the admin side).
         const rows = await sbGet('orders?select=*&sent_to_picker_at=not.is.null&picker_prepared_at=not.is.null&status=eq.Processing&order=picker_prepared_at.desc&limit=500');
-        return res.status(200).json({ ok: true, orders: rows.map(strip) });
+        return res.status(200).json({ ok: true, orders: await expandAll(rows.map(strip)) });
       }
       if (op === 'returning') {
         // Parcels Bosta is bringing back — customer refused / uncollectable.
@@ -599,7 +669,7 @@ export default async function handler(req, res) {
         // (warehouse_confirmed=false). Once the ops manager taps "تم
         // الاستلام في المخزن" that flag flips and the row drops off.
         const rows = await sbGet('orders?select=*&status=eq.On%20its%20way%20to%20me&or=(warehouse_confirmed.is.false,warehouse_confirmed.is.null)&order=updated_at.desc.nullslast,created_at.desc&limit=500');
-        return res.status(200).json({ ok: true, orders: rows.map(strip) });
+        return res.status(200).json({ ok: true, orders: await expandAll(rows.map(strip)) });
       }
       if (op === 'receive-back') {
         // Ops manager confirms the returning parcel is physically back in

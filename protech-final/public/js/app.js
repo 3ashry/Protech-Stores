@@ -544,6 +544,7 @@ function openAddProduct() {
     document.getElementById('p-is-published').checked = true;
     document.querySelectorAll('.p-cat-cb').forEach(cb => cb.checked = false);
     renderVariantRows([]);
+    renderBundleOfRows([]);
     document.getElementById('p-idx').value = '';
     document.getElementById('m-product-title').textContent = 'Add Product';
     renderImagePreviews([]);
@@ -589,6 +590,82 @@ function collectVariants() {
 }
 window.addVariantRow = addVariantRow;
 
+// ── Bundle-of editor (real kits) ──
+// Each row: { code, qty }. The picker expands the bundle into these
+// components when preparing the order; the customer's invoice still
+// shows the bundle name.
+function renderBundleOfRows(items) {
+  const list = document.getElementById('p-bundle-of-list');
+  if (!list) return;
+  list.innerHTML = '';
+  (Array.isArray(items) ? items : []).forEach(it => addBundleComponentRow(it?.code || '', it?.qty || 1));
+  refreshBundleTotal();
+}
+function addBundleComponentRow(code = '', qty = 1) {
+  const list = document.getElementById('p-bundle-of-list');
+  if (!list) return;
+  const row = document.createElement('div');
+  row.className = 'p-bundle-row';
+  row.style.cssText = 'display:grid;grid-template-columns:1fr 90px 34px;gap:6px;align-items:center';
+  // Datalist gives the admin a quick autocomplete of existing product codes.
+  const opts = (cache.products || []).slice().sort((a,b) => (a.code||'').localeCompare(b.code||''))
+    .map(p => `<option value="${esc(p.code)}">${esc(p.name || '')}</option>`).join('');
+  row.innerHTML = `
+    <input class="p-bundle-code" type="text" value="${esc(code)}" placeholder="كود المنتج (مثل TAC1200404)" list="p-bundle-codes-dl"
+      style="padding:8px 10px;border:1px solid #f0abfc;border-radius:6px;font-family:inherit;font-size:13px;text-transform:uppercase">
+    <input class="p-bundle-qty" type="number" min="1" step="1" value="${qty || 1}" placeholder="qty"
+      style="padding:8px 10px;border:1px solid #f0abfc;border-radius:6px;font-family:inherit;font-size:13px">
+    <button type="button" title="Remove"
+      style="width:34px;height:34px;background:#fee2e2;color:#b91c1c;border:0;border-radius:6px;cursor:pointer;font-size:16px;font-weight:800">×</button>`;
+  // Shared <datalist> so all rows autocomplete against product codes.
+  if (!document.getElementById('p-bundle-codes-dl')) {
+    const dl = document.createElement('datalist'); dl.id = 'p-bundle-codes-dl'; dl.innerHTML = opts;
+    document.body.appendChild(dl);
+  }
+  row.querySelector('button').addEventListener('click', () => { row.remove(); refreshBundleTotal(); });
+  row.querySelector('.p-bundle-code').addEventListener('input', refreshBundleTotal);
+  row.querySelector('.p-bundle-qty').addEventListener('input', refreshBundleTotal);
+  list.appendChild(row);
+}
+function collectBundleOf() {
+  const rows = document.querySelectorAll('#p-bundle-of-list .p-bundle-row');
+  const out = [];
+  rows.forEach(row => {
+    const code = row.querySelector('.p-bundle-code').value.trim().toUpperCase();
+    const qty  = parseInt(row.querySelector('.p-bundle-qty').value || 1) || 1;
+    if (code) out.push({ code, qty });
+  });
+  return out;
+}
+function refreshBundleTotal() {
+  const el = document.getElementById('p-bundle-of-total'); if (!el) return;
+  const items = collectBundleOf();
+  if (!items.length) { el.textContent = ''; return; }
+  let sum = 0; const missing = [];
+  for (const it of items) {
+    const p = (cache.products || []).find(x => (x.code || '').toUpperCase() === it.code);
+    if (!p) { missing.push(it.code); continue; }
+    sum += (parseFloat(p.buy_price) || 0) * (it.qty || 1);
+  }
+  el.innerHTML = `مجموع سعر الشراء من المكونات: <b>EGP ${fmt(sum)}</b>${missing.length ? ` — <span style="color:#dc2626">لم يُعثر: ${missing.join(', ')}</span>` : ''}`;
+}
+function recomputeBundleBuyPrice() {
+  const items = collectBundleOf();
+  if (!items.length) { showToast('أضف مكونات أولاً'); return; }
+  let sum = 0; const missing = [];
+  for (const it of items) {
+    const p = (cache.products || []).find(x => (x.code || '').toUpperCase() === it.code);
+    if (!p) { missing.push(it.code); continue; }
+    sum += (parseFloat(p.buy_price) || 0) * (it.qty || 1);
+  }
+  if (missing.length) { showToast('أكواد غير موجودة: ' + missing.join(', ')); return; }
+  document.getElementById('p-buy-price').value = Math.round(sum * 100) / 100;
+  refreshBundleTotal();
+  showToast('✓ حُسب سعر الشراء من المكونات');
+}
+window.addBundleComponentRow = addBundleComponentRow;
+window.recomputeBundleBuyPrice = recomputeBundleBuyPrice;
+
 function editProduct(id) {
   const p = cache.products.find(x => x.id === id);
   if (!p) return;
@@ -613,6 +690,7 @@ function editProduct(id) {
     const cats = Array.isArray(p.categories) ? p.categories : (p.category ? [p.category] : []);
     document.querySelectorAll('.p-cat-cb').forEach(cb => { cb.checked = cats.includes(cb.value); });
     renderVariantRows(Array.isArray(p.variants) ? p.variants : []);
+    renderBundleOfRows(Array.isArray(p.bundle_of) ? p.bundle_of : []);
     document.getElementById('p-idx').value = id;
     document.getElementById('m-product-title').textContent = 'Edit Product';
     renderImagePreviews(currentProductImages);
@@ -640,12 +718,13 @@ async function saveProduct() {
   // Keep first category in 'category' field for backward compatibility with store
   const category = categories[0] || null;
   const variants = collectVariants();
+  const bundle_of = collectBundleOf();
 
   if (!code || !name) { showToast('Please fill in code and name'); return; }
   if (is_offer && !offer_price) { showToast('Please enter the discounted price'); return; }
 
   const id = document.getElementById('p-idx').value;
-const payload = { code, name, qty, price, buy_price, brand, description, is_offer, offer_price, is_published, free_shipping, is_suggested, bundle_with, categories, category, variants, images: currentProductImages };
+const payload = { code, name, qty, price, buy_price, brand, description, is_offer, offer_price, is_published, free_shipping, is_suggested, bundle_with, bundle_of, categories, category, variants, images: currentProductImages };
   try {
     if (id) {
       await dbUpdate('products', id, payload);
