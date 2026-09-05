@@ -1710,6 +1710,40 @@ function renderFinancials() {
       <span>EGP ${fmt(Math.abs(netProfit))}</span>
     </div>`;
 
+  // ── CONFIRMED PROFIT — cash-cycle closed, DELIVERED only ──────────
+  // Same shape as Revenue, but restricted to orders where Bosta has
+  // already finalised the invoice. Uses ACTUAL shipping (Bosta invoice)
+  // and buying cost of DELIVERED orders only — returned orders don't
+  // participate (nothing was collected on them and their goods are
+  // supposed to come back to stock).
+  const cfDelivered = closedDelivered;
+  const cfCollectedGross = cfDelivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
+  const cfShipping = cfDelivered.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
+  const cfCollectedNet = cfCollectedGross - cfShipping;
+  const cfBuying = cfDelivered.reduce((a, o) =>
+    a + (o.products || []).reduce((b, p) =>
+      b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
+  const cfProfit = cfCollectedNet - cfBuying;
+  const confEl = document.getElementById('fin-confirmed');
+  if (confEl) confEl.innerHTML = `
+    <div class="fin-row" style="opacity:.75;font-size:12px">
+      <span>${cfDelivered.length} delivered orders (cash-cycle closed)</span>
+      <span>Bosta invoiced ✓</span>
+    </div>
+    <div class="fin-row"><span>Collected from customers (gross)</span><span class="fin-val">EGP ${fmt(cfCollectedGross)}</span></div>
+    <div class="fin-row"><span>Actual shipping (Bosta invoice)</span><span class="fin-val deduct">− EGP ${fmt(cfShipping)}</span></div>
+    <div class="fin-row"><span>Collected − shipping</span><span class="fin-val">EGP ${fmt(cfCollectedNet)}</span></div>
+    <div class="fin-row"><span>Total buying cost (delivered goods only)</span><span class="fin-val deduct">− EGP ${fmt(cfBuying)}</span></div>
+    <div class="fin-row ${cfProfit >= 0 ? 'profit' : 'loss'}" style="border-top:2px solid var(--line);padding-top:12px;font-size:1.05rem">
+      <span>${cfProfit >= 0 ? '🟢 Confirmed profit (before expenses)' : '🔴 Confirmed loss (before expenses)'}</span>
+      <span>EGP ${fmt(Math.abs(cfProfit))}</span>
+    </div>
+    <div style="margin-top:10px;font-size:11px;opacity:.7;line-height:1.5">
+      Only delivered orders whose cash cycle Bosta has finalised. Ads, media
+      buyer, packaging, and other expenses are excluded — this is the raw
+      margin on shipments that have already settled.
+    </div>`;
+
   // The two money sections (Bosta receivable + Elashry owed) render into their own containers.
   if (typeof renderBostaCash === 'function') renderBostaCash();
   if (typeof renderSupplierAccount === 'function') renderSupplierAccount();
