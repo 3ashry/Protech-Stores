@@ -491,10 +491,12 @@ export default async function handler(req, res) {
         });
       }
       if (op === 'ready') {
-        // Ready-for-Bosta-pickup queue — prepared AND Bosta hasn't
-        // picked it up yet (status still 'Processing'). Ordered by
-        // most-recently-prepared first.
-        const rows = await sbGet('orders?select=*&picker_prepared_at=not.is.null&status=eq.Processing&order=picker_prepared_at.desc&limit=500');
+        // Ready-for-Bosta-pickup queue — the admin must STILL have this
+        // order flagged as sent, it must be marked prepared, and Bosta
+        // hasn't picked it up yet (status='Processing'). If the admin
+        // un-sends an already-prepared order, it drops off this queue
+        // (matches the "cancel send" mental model on the admin side).
+        const rows = await sbGet('orders?select=*&sent_to_picker_at=not.is.null&picker_prepared_at=not.is.null&status=eq.Processing&order=picker_prepared_at.desc&limit=500');
         return res.status(200).json({ ok: true, orders: rows.map(strip) });
       }
       if (op === 'returning') {

@@ -624,10 +624,13 @@ function notifyReturning(freshOrders) {
 // Request notification permission whenever the user logs in fresh too.
 document.addEventListener('click', () => requestNotifPerm(), { once: true });
 
-// Refresh every 60s while visible so newly-confirmed orders appear
+// Refresh every 15s while visible so new orders + admin un-sends
+// show up quickly on the picker screen without a manual reload.
+// 15s stays well inside Bosta / Vercel rate limits while feeling
+// near-instant to the operations manager.
 setInterval(() => {
   if (document.getElementById('app').style.display !== 'none' && !document.hidden) loadOrders();
-}, 60000);
+}, 15000);
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && document.getElementById('app').style.display !== 'none') loadOrders();
 });
