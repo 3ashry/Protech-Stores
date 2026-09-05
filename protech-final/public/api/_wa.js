@@ -16,6 +16,10 @@ const WA_TEMPLATE_NAME = process.env.WA_TEMPLATE_NAME || 'order_confirm';
 const WA_TEMPLATE_LANG = process.env.WA_TEMPLATE_LANG || 'ar';
 // Post-delivery feedback template. Approved separately in Meta Business Manager.
 const WA_FEEDBACK_TEMPLATE = process.env.WA_FEEDBACK_TEMPLATE || 'order_feedback';
+// Abandoned-cart recovery template. Approved separately in Meta Business
+// Manager. Default 2 body vars: {{1}} customer name, {{2}} items summary.
+// Override the name via WA_CART_TEMPLATE if yours is named differently.
+const WA_CART_TEMPLATE = process.env.WA_CART_TEMPLATE || 'cart_recovery';
 
 export function waConfigured() {
   return !!(WA_TOKEN && WA_PHONE_NUMBER_ID);
@@ -96,6 +100,43 @@ export async function sendConfirmTemplate(order = {}) {
           { type: 'body', parameters: params.map(text => ({ type: 'text', text })) },
           { type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: 'CONFIRM' }] },
           { type: 'button', sub_type: 'quick_reply', index: '1', parameters: [{ type: 'payload', payload: 'CANCEL' }] },
+        ],
+      },
+    }),
+  });
+  const data = await r.json().catch(() => null);
+  if (!r.ok) return { ok: false, error: data };
+  return { ok: true, msgId: data?.messages?.[0]?.id || null };
+}
+
+// Abandoned-cart recovery. Fired 3h after a cart went idle so the customer
+// gets a gentle nudge with a one-line items summary. Two body vars:
+//   {{1}} customer name (falls back to "عميلنا العزيز")
+//   {{2}} items summary — "منتج × 2 ، منتج آخر × 1"
+// The cart shape is Supabase-native: { name, phone, items: [{ name/code, qty }] }.
+export async function sendCartRecoveryTemplate(cart = {}) {
+  const cartItems = (Array.isArray(cart.items) ? cart.items : [])
+    .map(i => `${i.name || i.code || 'منتج'} × ${i.qty || 1}`)
+    .join(' ، ')
+    .replace(/[\n\t]+/g, ' ')
+    .replace(/ {2,}/g, ' ')
+    .trim();
+  const params = [
+    String(cart.name || 'عميلنا العزيز'),
+    cartItems || '—',
+  ];
+  const r = await fetch(`https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to: waPhone(cart.phone),
+      type: 'template',
+      template: {
+        name: WA_CART_TEMPLATE,
+        language: { code: WA_TEMPLATE_LANG },
+        components: [
+          { type: 'body', parameters: params.map(text => ({ type: 'text', text })) },
         ],
       },
     }),

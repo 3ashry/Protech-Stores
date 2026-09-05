@@ -14,7 +14,7 @@
 //
 // Env: WA_* (see _wa.js), SUPABASE_URL, SUPABASE_KEY (service_role), CRON_SECRET,
 //      optional WA_CONFIRM_DELAY_HOURS (default 6).
-import { sendConfirmTemplate, sendFeedbackTemplate, waConfigured } from './_wa.js';
+import { sendConfirmTemplate, sendFeedbackTemplate, sendCartRecoveryTemplate, waConfigured } from './_wa.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
@@ -126,11 +126,51 @@ export default async function handler(req, res) {
       }
     }
 
+    // ─────────────────────────────────────────────────────────────────
+    //  ABANDONED-CART PASS — nudge customers who started an order but
+    //  never finished. Fires 3h after the cart went idle. Sends the
+    //  cart-recovery template ONCE (wa_reminder_sent_at prevents dupes).
+    //  Cap: skip carts older than 3 days so we don't message stale ones.
+    // ─────────────────────────────────────────────────────────────────
+    const cartCutoff = new Date(now - (test ? 0 : 3 * 3600 * 1000)).toISOString();
+    const cartFloor  = new Date(now - 72 * 3600 * 1000).toISOString();
+    const cartParts = [
+      'select=id,name,phone,items,updated_at,created_at,status,wa_reminder_sent_at',
+      'status=eq.open',
+      'wa_reminder_sent_at=is.null',
+      'phone=not.is.null',
+      `updated_at=lte.${encodeURIComponent(cartCutoff)}`,
+      `updated_at=gte.${encodeURIComponent(cartFloor)}`,
+    ];
+    if (ONLY_PHONE) cartParts.push(`phone=eq.${encodeURIComponent(ONLY_PHONE)}`);
+    cartParts.push('order=updated_at.desc', `limit=${test ? 1 : 50}`);
+    let cartCandidates = [];
+    try { cartCandidates = await sbGet(`abandoned_carts?${cartParts.join('&')}`); } catch (e) { console.warn('abandoned_carts query failed:', e.message); }
+    const cartSent = [], cartFailed = [];
+    for (const c of cartCandidates) {
+      try {
+        const r = await sendCartRecoveryTemplate(c);
+        if (r.ok) {
+          // Mark reminder as sent so we don't message this cart again.
+          await fetch(`${SUPABASE_URL}/rest/v1/abandoned_carts?id=eq.${encodeURIComponent(c.id)}`, {
+            method: 'PATCH',
+            headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+            body: JSON.stringify({ wa_reminder_sent_at: new Date().toISOString(), wa_reminder_msg_id: r.msgId }),
+          }).catch(() => {});
+          cartSent.push({ id: c.id, name: c.name, msgId: r.msgId });
+        } else {
+          cartFailed.push({ id: c.id, name: c.name, error: r.error });
+        }
+      } catch (e) { cartFailed.push({ id: c.id, name: c.name, error: e.message }); }
+    }
+
     const result = { ok: true, test, onlyPhone: ONLY_PHONE || null, delayHours: DELAY_HOURS,
       confirm: { candidates: orders.length, sent: sent.length, failed: failed.length, waitingShipCode: waitingShipCode.length,
         details: { sent, failed: failed.slice(0, 5), waitingShipCode: waitingShipCode.slice(0, 5) } },
       feedback: { candidates: fbOrders.length, sent: fbSent.length, failed: fbFailed.length,
         details: { sent: fbSent.slice(0, 10), failed: fbFailed.slice(0, 5) } },
+      cartRecovery: { candidates: cartCandidates.length, sent: cartSent.length, failed: cartFailed.length,
+        details: { sent: cartSent.slice(0, 10), failed: cartFailed.slice(0, 5) } },
     };
     console.log('wa-cron', JSON.stringify(result));
     return res.status(200).json(result);
