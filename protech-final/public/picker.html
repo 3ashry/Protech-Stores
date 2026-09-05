@@ -41,6 +41,14 @@
   .tab.active { color: var(--orange); border-bottom-color: var(--orange); }
   .tab-count { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; background: var(--line); color: var(--ink); font-size: 11px; font-weight: 800; }
   .tab.active .tab-count { background: var(--orange); color: #fff; }
+
+  /* Sticky search bar right under the tab strip */
+  .searchbar { position: sticky; top: 106px; z-index: 14; background: #fff; padding: 10px 12px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; max-width: 720px; margin: 0 auto; }
+  .searchbar .search-ico { font-size: 15px; opacity: .6; }
+  .searchbar input { flex: 1; min-height: 40px; padding: 8px 10px; border: 1.5px solid var(--line); border-radius: 8px; font-size: 14px; font-family: inherit; background: #fff; color: var(--ink); -webkit-appearance: none; }
+  .searchbar input:focus { outline: none; border-color: var(--orange); }
+  .search-clear { background: var(--line); border: 0; border-radius: 999px; width: 32px; height: 32px; font-size: 16px; cursor: pointer; color: var(--ink); font-weight: 800; padding: 0; }
+  .search-clear:hover { background: var(--muted); color: #fff; }
   .card { background: var(--card); border-radius: 14px; padding: 14px; box-shadow: 0 1px 4px rgba(0,0,0,.05); margin-bottom: 12px; border: 1px solid var(--line); }
   .row { display: flex; justify-content: space-between; gap: 8px; margin: 4px 0; font-size: 14px; }
   .row .k { color: var(--muted); }
@@ -150,6 +158,13 @@
     <button id="tab-returning" class="tab" onclick="switchTab('returning')">
       ↩️ راجعة من بوسطة <span class="tab-count" id="tab-count-returning">0</span>
     </button>
+  </div>
+  <div class="searchbar">
+    <span class="search-ico">🔍</span>
+    <input id="search-input" type="search" autocomplete="off"
+           placeholder="بحث: الكود / اسم العميل / التليفون / المدينة / كود المنتج…"
+           oninput="onSearchInput()">
+    <button id="search-clear" class="search-clear" onclick="clearSearch()" style="display:none">✕</button>
   </div>
   <main>
     <div id="list"></div>
@@ -442,6 +457,41 @@ function switchTab(tab) {
 // `null` on first load means "just observe, don't ring" — we don't want a
 // shower of notifications the first time the page opens.
 let _knownPreparing = null, _knownReturning = null;
+
+// ── Search filter — kept in memory + persisted across refreshes ──
+let _searchQuery = (function() { try { return sessionStorage.getItem('protech_picker_search_v1') || ''; } catch { return ''; } })();
+function _saveSearch() { try { sessionStorage.setItem('protech_picker_search_v1', _searchQuery); } catch {} }
+function onSearchInput() {
+  _searchQuery = (document.getElementById('search-input').value || '').trim();
+  _saveSearch();
+  document.getElementById('search-clear').style.display = _searchQuery ? 'inline-flex' : 'none';
+  // Force re-render on the same data — no need to re-fetch.
+  _renderedHash[activeTab] = null;
+  loadOrders({ silent: true });
+}
+function clearSearch() {
+  _searchQuery = ''; _saveSearch();
+  const el = document.getElementById('search-input'); if (el) el.value = '';
+  document.getElementById('search-clear').style.display = 'none';
+  _renderedHash[activeTab] = null;
+  loadOrders({ silent: true });
+}
+// Case-insensitive substring match across every field the picker
+// actually sees (code, customer name, phone, city, address, product
+// codes & names). Arabic digits ٠-٩ normalised to ASCII so "٠١٠"
+// still finds "010" in a phone field.
+function _filterOrders(orders, query) {
+  if (!query) return orders;
+  const norm = (s) => String(s || '').toLowerCase().replace(/[٠-٩]/g, c => '٠١٢٣٤٥٦٧٨٩'.indexOf(c));
+  const q = norm(query);
+  return orders.filter(o => {
+    const hay = [
+      o.code, o.customer_name, o.phone, o.city, o.address, o.ship_code,
+      ...(Array.isArray(o.products) ? o.products.flatMap(p => [p.code, p.name]) : []),
+    ].map(norm).join(' ');
+    return hay.includes(q);
+  });
+}
 // Cheap hash of the currently-rendered list so we can skip the innerHTML
 // replace when nothing changed — that's what was scrolling the page to
 // the top on every 15 s tick. Keyed by tab so switching tabs still renders.
@@ -581,18 +631,27 @@ async function loadOrders(opts) {
     }
     _knownPreparing = new Set(pOrders.map(o => o.id));
     _knownReturning = new Set(bOrders.map(o => o.id));
-    document.getElementById('tab-count-preparing').textContent = pOrders.length;
-    document.getElementById('tab-count-ready').textContent = rOrders.length;
-    document.getElementById('tab-count-returning').textContent = bOrders.length;
-    const orders = activeTab === 'ready' ? rOrders
-                 : activeTab === 'returning' ? bOrders
-                 : pOrders;
-    document.getElementById('count').textContent = `${orders.length} طلب`;
-    const emptyMsg = {
-      preparing: ['✅', 'لا توجد طلبات لتجهيزها الآن'],
-      ready:     ['📭', 'لا توجد طلبات جاهزة للاستلام'],
-      returning: ['🏠', 'لا توجد طلبات راجعة من بوسطة'],
-    }[activeTab];
+    // Tab counters: when a search is active, show "filtered / total"
+    // per tab (e.g. "3 / 24"). Otherwise show the raw totals.
+    const fP = _filterOrders(pOrders, _searchQuery);
+    const fR = _filterOrders(rOrders, _searchQuery);
+    const fB = _filterOrders(bOrders, _searchQuery);
+    document.getElementById('tab-count-preparing').textContent = _searchQuery ? `${fP.length}/${pOrders.length}` : pOrders.length;
+    document.getElementById('tab-count-ready').textContent     = _searchQuery ? `${fR.length}/${rOrders.length}` : rOrders.length;
+    document.getElementById('tab-count-returning').textContent = _searchQuery ? `${fB.length}/${bOrders.length}` : bOrders.length;
+    const orders = activeTab === 'ready' ? fR
+                 : activeTab === 'returning' ? fB
+                 : fP;
+    document.getElementById('count').textContent = _searchQuery
+      ? `${orders.length} نتيجة`
+      : `${orders.length} طلب`;
+    const emptyMsg = _searchQuery
+      ? ['🔍', `لا نتائج لـ "${_searchQuery}" في هذا التبويب`]
+      : {
+          preparing: ['✅', 'لا توجد طلبات لتجهيزها الآن'],
+          ready:     ['📭', 'لا توجد طلبات جاهزة للاستلام'],
+          returning: ['🏠', 'لا توجد طلبات راجعة من بوسطة'],
+        }[activeTab];
     // ── True DIFF render — the reason the page kept jumping to the
     //    top is that we were rebuilding innerHTML on every 15 s tick.
     //    Even swapping identical HTML resets the scroll on some browsers.
@@ -771,7 +830,16 @@ function notifyReturning(freshOrders) {
 // Boot — auto-enter if credentials are already saved for this session
 {
   const c = getCreds();
-  if (c.username && c.pin) apiCall('list').then(() => { showApp(); requestNotifPerm(); }).catch(() => showGate(''));
+  if (c.username && c.pin) apiCall('list').then(() => {
+    showApp();
+    requestNotifPerm();
+    // Restore any saved search query into the box (sessionStorage).
+    const s = document.getElementById('search-input');
+    if (s && _searchQuery) {
+      s.value = _searchQuery;
+      document.getElementById('search-clear').style.display = 'inline-flex';
+    }
+  }).catch(() => showGate(''));
   else showGate('');
 }
 // Request notification permission whenever the user logs in fresh too.
