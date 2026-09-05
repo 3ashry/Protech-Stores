@@ -417,8 +417,12 @@ function _refreshTabButtons() {
   document.getElementById('tab-returning').classList.toggle('active', activeTab === 'returning');
 }
 function switchTab(tab) {
+  if (tab === activeTab) return;
   activeTab = tab; saveActiveTab();
   _refreshTabButtons();
+  // Force a fresh paint for the new tab — the skip-if-unchanged guard
+  // only applies within the SAME tab across auto-refresh ticks.
+  _paintedTab = null;
   loadOrders();
 }
 
@@ -427,10 +431,32 @@ function switchTab(tab) {
 // `null` on first load means "just observe, don't ring" — we don't want a
 // shower of notifications the first time the page opens.
 let _knownPreparing = null, _knownReturning = null;
+// Cheap hash of the currently-rendered list so we can skip the innerHTML
+// replace when nothing changed — that's what was scrolling the page to
+// the top on every 15 s tick. Keyed by tab so switching tabs still renders.
+let _renderedHash = { preparing: null, ready: null, returning: null };
+// Track whether we've painted the list at all for the current tab so the
+// first real load overrides the "loading…" placeholder even if the hash
+// matches an empty state.
+let _paintedTab = null;
+function _hashOrders(orders) {
+  // Stable summary: id + fields the picker actually sees (status affects
+  // action buttons, ship_code affects the Bosta button, prepared_at gates
+  // the ↩️ undo button).
+  return orders.map(o =>
+    `${o.id}|${o.customer_name || ''}|${o.city || ''}|${o.address || ''}|${o.total}|${o.ship_code || ''}|${o.allow_open ? 1 : 0}|${o.prepared_at || ''}|${(o.products||[]).length}`
+  ).join('§');
+}
 
 async function loadOrders(opts) {
   const silent = !!(opts && opts.silent);
-  document.getElementById('list').innerHTML = '<div class="empty">جاري التحميل…</div>';
+  const listEl = document.getElementById('list');
+  // Only show the "loading…" spinner on the FIRST paint for this tab.
+  // Subsequent refreshes leave the current cards in place so the ops
+  // manager doesn't get bounced back to the top of the page.
+  if (_paintedTab !== activeTab) {
+    listEl.innerHTML = '<div class="empty">جاري التحميل…</div>';
+  }
   try {
     // Fetch all three queues + monthly stats in parallel. Tab counters
     // and the "هذا الشهر" pill stay live regardless of the visible tab.
@@ -471,12 +497,24 @@ async function loadOrders(opts) {
       ready:     ['📭', 'لا توجد طلبات جاهزة للاستلام'],
       returning: ['🏠', 'لا توجد طلبات راجعة من بوسطة'],
     }[activeTab];
-    document.getElementById('list').innerHTML = orders.length
-      ? orders.map(o => orderCard(o, activeTab)).join('')
-      : `<div class="empty"><div class="em">${emptyMsg[0]}</div><div>${emptyMsg[1]}</div></div>`;
+    // Skip the DOM write entirely when the rendered content would be
+    // identical. Preserves scroll position + doesn't interrupt any
+    // half-scrolled card the picker is reading.
+    const newHash = _hashOrders(orders);
+    if (_renderedHash[activeTab] !== newHash || _paintedTab !== activeTab) {
+      listEl.innerHTML = orders.length
+        ? orders.map(o => orderCard(o, activeTab)).join('')
+        : `<div class="empty"><div class="em">${emptyMsg[0]}</div><div>${emptyMsg[1]}</div></div>`;
+      _renderedHash[activeTab] = newHash;
+      _paintedTab = activeTab;
+    }
     _refreshTabButtons();
   } catch (e) {
-    document.getElementById('list').innerHTML = `<div class="empty"><div class="em">⚠️</div><div>خطأ: ${esc(e.message)}</div></div>`;
+    // Only show the error card if the list is empty — otherwise leave the
+    // last-good render in place. The error will retry on the next tick.
+    if (!listEl.querySelector('.card')) {
+      listEl.innerHTML = `<div class="empty"><div class="em">⚠️</div><div>خطأ: ${esc(e.message)}</div></div>`;
+    }
   }
 }
 
