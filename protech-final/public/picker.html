@@ -19,7 +19,11 @@
     --success-bg: #dcfce7;
     --danger: #dc2626;
   }
-  html, body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--bg); color: var(--ink); font-size: 16px; }
+  html, body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--bg); color: var(--ink); font-size: 16px; overflow-anchor: none; scroll-behavior: auto; }
+  /* Disable browser scroll anchoring on the scroll container and the list —
+     otherwise the browser silently re-anchors when a card is added or a
+     text length changes, which looks like the page "jumping". */
+  main, #list { overflow-anchor: none; }
   header { background: var(--orange); color: #fff; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; gap: 10px; position: sticky; top: 0; z-index: 20; box-shadow: 0 2px 8px rgba(0,0,0,.1); }
   header h1 { margin: 0; font-size: 17px; font-weight: 800; flex-shrink: 1; min-width: 0; }
   header .head-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
@@ -164,6 +168,10 @@
 </div>
 
 <script>
+// Take manual control of scroll restoration so the browser never
+// snaps back to top on soft navigations / bfcache restores.
+try { if ('scrollRestoration' in history) history.scrollRestoration = 'manual'; } catch {}
+
 const API = '/api/sync-status?action=picker';
 const CREDS_KEY = 'protech_picker_creds_v2';
 
@@ -513,6 +521,29 @@ function diffRenderList(listEl, orders, tab, emptyMsg) {
   }
 }
 
+// Hard scroll-preservation wrapper. Some browsers reset scroll when
+// any innerHTML swap happens on an ancestor. We snapshot the exact
+// scroll pixel BEFORE the render, then forcibly restore it after —
+// twice, once sync and once next-frame — so no re-layout can throw
+// the ops manager off whatever card he's reading. Also detects the
+// pull-to-refresh browser gesture and skips the restore in that case.
+function _withScrollPreserved(fn) {
+  const scrollEl = document.scrollingElement || document.documentElement;
+  const before = scrollEl.scrollTop || window.scrollY || 0;
+  const result = fn();
+  const restore = () => {
+    // If the user manually scrolled to the top since we started (< 8 px
+    // change), leave them there — don't fight them.
+    const now = scrollEl.scrollTop || window.scrollY || 0;
+    if (Math.abs(now - before) < 8) return;
+    scrollEl.scrollTop = before;
+    window.scrollTo(0, before);
+  };
+  restore();
+  requestAnimationFrame(restore);
+  return result;
+}
+
 async function loadOrders(opts) {
   const silent = !!(opts && opts.silent);
   const listEl = document.getElementById('list');
@@ -569,10 +600,12 @@ async function loadOrders(opts) {
     //    remove ones that dropped off the list, and replace only the
     //    exact <div class="card"> whose outerHTML differs. Untouched
     //    cards stay in the DOM, so scroll doesn't move at all.
-    diffRenderList(listEl, orders, activeTab, emptyMsg);
-    _renderedHash[activeTab] = _hashOrders(orders);   // kept for debugging only
-    _paintedTab = activeTab;
-    _refreshTabButtons();
+    _withScrollPreserved(() => {
+      diffRenderList(listEl, orders, activeTab, emptyMsg);
+      _renderedHash[activeTab] = _hashOrders(orders);   // kept for debugging only
+      _paintedTab = activeTab;
+      _refreshTabButtons();
+    });
   } catch (e) {
     // Only show the error card if the list is empty — otherwise leave the
     // last-good render in place. The error will retry on the next tick.
