@@ -498,15 +498,23 @@ async function loadOrders(opts) {
       returning: ['🏠', 'لا توجد طلبات راجعة من بوسطة'],
     }[activeTab];
     // Skip the DOM write entirely when the rendered content would be
-    // identical. Preserves scroll position + doesn't interrupt any
-    // half-scrolled card the picker is reading.
+    // identical. When a repaint IS needed, capture scroll first and
+    // restore after — swapping innerHTML on an ancestor collapses the
+    // page back to the top, throwing the ops manager off whatever card
+    // he was reading.
     const newHash = _hashOrders(orders);
     if (_renderedHash[activeTab] !== newHash || _paintedTab !== activeTab) {
+      const scrollTop = window.scrollY || document.documentElement.scrollTop || 0;
       listEl.innerHTML = orders.length
         ? orders.map(o => orderCard(o, activeTab)).join('')
         : `<div class="empty"><div class="em">${emptyMsg[0]}</div><div>${emptyMsg[1]}</div></div>`;
       _renderedHash[activeTab] = newHash;
       _paintedTab = activeTab;
+      // Restore twice — once synchronously to catch layout-jump on
+      // browsers that reset scroll on innerHTML, and once on the next
+      // animation frame in case font / image loads shift heights.
+      window.scrollTo({ top: scrollTop, behavior: 'auto' });
+      requestAnimationFrame(() => window.scrollTo({ top: scrollTop, behavior: 'auto' }));
     }
     _refreshTabButtons();
   } catch (e) {
