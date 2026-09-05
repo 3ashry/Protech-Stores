@@ -263,27 +263,44 @@ async function loadAll() {
     setInterval(silentBostaSync, 5 * 60 * 1000);
   }
 
-  // Silent 1-min push-updates loop: if the admin edits an order after it
+  // Silent Bosta push-updates loop: if the admin edits an order after it
   // was sent to Bosta (COD, allow-open, phone, address), the change gets
-  // reflected on the Bosta shipment automatically without a dashboard
-  // button. Only pushes on genuine drift — first pass on any order just
-  // seeds the "last synced" snapshot silently. See ?action=push-updates
-  // in /api/sync-status for the diff / seed / push logic and safety net.
+  // mirrored to the Bosta shipment automatically. See ?action=push-updates
+  // in /api/sync-status for the diff / seed / push logic.
+  //
+  // Runs every 5 min while the tab is open — that's frequent enough for
+  // dashboard-typed edits to reach Bosta before the parcel is picked up,
+  // but rare enough not to jam the browser or blow past Vercel's 10s
+  // function timeout on the first (seeding) run. Guarded so overlapping
+  // calls are impossible: if the previous request is still in flight,
+  // the next tick just skips.
   if (!window._bostaPushUpdatesStarted) {
     window._bostaPushUpdatesStarted = true;
+    let pushRunning = false;
     const pushUpdates = async () => {
-      if (document.hidden) return;
+      if (document.hidden || pushRunning) return;
+      pushRunning = true;
+      // 12s abort so a slow Bosta doesn't hang the browser call.
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 12000);
       try {
-        const r = await fetch('/api/sync-status?action=push-updates', { method: 'POST' });
+        const r = await fetch('/api/sync-status?action=push-updates',
+          { method: 'POST', signal: ctl.signal });
         const j = await r.json().catch(() => null);
-        if (j && (j.pushed || (j.errors && j.errors.length))) {
+        clearTimeout(timer);
+        if (j && j.pushed) {
           console.log('[bosta push-updates]', j);
-          if (j.pushed) showToast(`↗️ تم تحديث ${j.pushed} طلب في بوسطة`);
+          showToast(`↗️ تم تحديث ${j.pushed} طلب في بوسطة`);
         }
-      } catch(_) {}
+      } catch (e) {
+        // Fully silent — the loop retries on the next tick. Common reason
+        // is Vercel's 10 s cold-start on the very first run.
+        clearTimeout(timer);
+      } finally { pushRunning = false; }
     };
-    setTimeout(pushUpdates, 10000);
-    setInterval(pushUpdates, 60 * 1000);
+    // First tick 30 s after login so the initial data render finishes first.
+    setTimeout(pushUpdates, 30 * 1000);
+    setInterval(pushUpdates, 5 * 60 * 1000);
   }
 }
 

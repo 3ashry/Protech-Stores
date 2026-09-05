@@ -399,7 +399,12 @@ export default async function handler(req, res) {
   if (action === 'push-updates') {
     if (!BOSTA_API_KEY) return res.status(500).json({ error: 'BOSTA_API_KEY not set' });
     try {
-      const orders = await sbGet('orders?select=id,code,total,allow_open,phone,address,city,bosta_id,bosta_synced_snapshot&status=eq.Processing&bosta_id=not.is.null&limit=500');
+      // Cap tight so a single run stays well inside Vercel's 10 s
+      // function timeout even when many orders need seeding on the very
+      // first invocation. Anything unprocessed rolls to the next tick
+      // (client runs this every 5 min). Order-by created_at.desc so the
+      // freshest / most likely to have drift are checked first.
+      const orders = await sbGet('orders?select=id,code,total,allow_open,phone,address,city,bosta_id,bosta_synced_snapshot&status=eq.Processing&bosta_id=not.is.null&order=created_at.desc&limit=30');
       const normPhone = (p) => {
         let s = String(p || '').trim().replace(/[\s()-]/g, '');
         if (!s) return '';
