@@ -203,14 +203,38 @@
       <button class="btn btn-primary btn-sm" onclick="openExpense()">+ Add Expense</button>
       <button class="btn btn-ghost btn-sm" onclick="downloadAllFinancesExcel()" style="margin-inline-start:8px">📥 All finances Excel</button>
     </div>
+
+    <!-- 1. Money from Bosta — closed cycle vs open cycle -->
+    <div class="card">
+      <div class="card-header"><span class="card-title">💰 Money From Bosta</span></div>
+      <div class="card-body" id="fin-bosta-money"></div>
+    </div>
+
+    <!-- 2. Bank transfers from Bosta (manual + soon auto) -->
     <div id="bosta-cash"></div>
+
+    <!-- 3. Elashry — total buying cost of shipped orders + payment tracker -->
     <div id="supplier-account"></div>
     <div class="card">
-      <div class="card-header"><span class="card-title">🧮 Media Buyer Payment (20% of paid ads + 1% of delivered sales)</span>
+      <div class="card-header"><span class="card-title">🏭 Elashry — Total Buying Cost (shipped orders)</span></div>
+      <div class="card-body" id="fin-elashry-total"></div>
+    </div>
+
+    <!-- 4. Media Buyer Salary -->
+    <div class="card">
+      <div class="card-header"><span class="card-title">🧮 Media Buyer Salary (20% of paid ads + 1% of delivered sales)</span>
         <button class="btn btn-ghost btn-xs" onclick="downloadMediaBuyerExcel()" style="margin-inline-start:auto">📥 Excel</button>
       </div>
       <div class="card-body" id="fin-mediabuyer"></div>
     </div>
+
+    <!-- 5. Packaging Center Salary -->
+    <div class="card">
+      <div class="card-header"><span class="card-title">📦 Packaging Center Salary (10 EGP × shipped orders)</span></div>
+      <div class="card-body" id="fin-packaging"></div>
+    </div>
+
+    <!-- 6. Expenses -->
     <div class="card">
       <div class="card-header"><span class="card-title">Expenses</span>
         <button class="btn btn-ghost btn-xs" onclick="downloadExpensesExcel()" style="margin-inline-start:auto">📥 Excel</button>
@@ -223,17 +247,39 @@
         </table>
       </div>
     </div>
+
+    <!-- 7. Revenue — delivered-only -->
     <div class="card">
-      <div class="card-header"><span class="card-title">Revenue Summary</span></div>
+      <div class="card-header"><span class="card-title">📊 Revenue (delivered orders only)</span></div>
       <div class="card-body" id="fin-revenue"></div>
     </div>
-    <div class="card" id="fin-confirmed-card">
+
+    <!-- 8. Net Profit — revenue minus expenses + return shipping -->
+    <div class="card" id="fin-net-card">
+      <div class="card-header"><span class="card-title" style="color:var(--orange)">🏁 Net Profit</span></div>
+      <div class="card-body" id="fin-net"></div>
+    </div>
+
+    <!-- 9a. Monthly delivered orders chart -->
+    <div class="card">
+      <div class="card-header"><span class="card-title">📈 Delivered Orders per Month</span></div>
+      <div class="card-body" style="padding:16px">
+        <div style="position:relative;height:280px"><canvas id="monthly-delivered-chart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- 9b. Top products by qty (delivered) -->
+    <div class="card">
+      <div class="card-header"><span class="card-title">🏆 Top Products by Quantity (delivered)</span></div>
+      <div class="card-body" style="padding:16px">
+        <div style="position:relative;height:340px"><canvas id="top-products-chart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Confirmed-profit legacy card retained (hidden by default; uncomment to bring back) -->
+    <div class="card" id="fin-confirmed-card" style="display:none">
       <div class="card-header"><span class="card-title" style="color:var(--orange)">💰 Confirmed Profit — Cash-Cycle Closed Orders Only</span></div>
       <div class="card-body" id="fin-confirmed"></div>
-    </div>
-    <div class="card" id="fin-net-card">
-      <div class="card-header"><span class="card-title" style="color:var(--orange)">Net Profit Summary</span></div>
-      <div class="card-body" id="fin-net"></div>
     </div>
     <div class="card" id="fin-chart-card">
       <div class="card-header"><span class="card-title">📈 Projected Profit — Weekly (since June)</span></div>

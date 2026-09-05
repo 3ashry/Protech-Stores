@@ -1489,69 +1489,108 @@ function renderFinancials() {
   const orders = cache.orders;
   const delivered = orders.filter(o => o.status === 'Delivered');
   const returned = orders.filter(o => o.status === 'Returned');
-  const totalCollected = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
-  const totalActualShip = delivered.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
-  const netFromBosta = totalCollected - totalActualShip;
-  const retShipCost = returned.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
+
+  // Money maths keyed off delivered / returned finals.
+  const totalCollected     = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
+  const totalActualShip    = delivered.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
+  const netFromBostaDeliv  = totalCollected - totalActualShip; // delivered-only, net of shipping
+  const retShipCost        = returned.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
+
+  // ── 1. MONEY FROM BOSTA — closed vs open cash cycle ────────────────
+  const closedFinal = orders.filter(o =>
+    (o.status === 'Delivered' || o.status === 'Returned') && o.cash_cycle_closed === true
+  );
+  const closedDelivered = closedFinal.filter(o => o.status === 'Delivered');
+  const closedReturned  = closedFinal.filter(o => o.status === 'Returned');
+  const closedNetFromBosta =
+      closedDelivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0)), 0)
+    - closedReturned .reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
+
+  const OPEN_STATUSES = ['In Transit', 'Heading to Customer', 'On its way to me', 'Awaiting Action'];
+  const openOrders = orders.filter(o =>
+    OPEN_STATUSES.includes(o.status)
+    || ((o.status === 'Delivered' || o.status === 'Returned') && o.cash_cycle_closed !== true)
+  );
+  const openNetFromBosta = openOrders.reduce((a, o) => {
+    if (o.status === 'Delivered') return a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0));
+    if (o.status === 'Returned')  return a - parseFloat(o.actual_shipping || 0);
+    return a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || o.est_shipping || 0));
+  }, 0);
+
+  const bostaMoneyEl = document.getElementById('fin-bosta-money');
+  if (bostaMoneyEl) bostaMoneyEl.innerHTML = `
+    <div class="fin-row" style="font-weight:800;color:#16a34a">
+      <span>🔒 Closed cash-cycle (definitive)</span>
+      <span>${closedFinal.length} orders</span>
+    </div>
+    <div class="fin-row"><span>Net receivable from Bosta (closed cycles)</span>
+      <span class="fin-val" style="color:#16a34a;font-size:1.05rem">EGP ${fmt(closedNetFromBosta)}</span>
+    </div>
+    <div style="height:14px;border-bottom:1px dashed var(--line);margin-bottom:14px"></div>
+    <div class="fin-row" style="font-weight:800;color:#d97706">
+      <span>🕒 Open cash-cycle (estimated)</span>
+      <span>${openOrders.length} orders in transit / heading back</span>
+    </div>
+    <div class="fin-row"><span>Estimated net still coming from Bosta</span>
+      <span class="fin-val" style="color:#d97706;font-size:1.05rem">EGP ${fmt(openNetFromBosta)}</span>
+    </div>
+    <div style="height:12px"></div>
+    <div class="fin-row subtotal" style="border-top:2px solid var(--line);padding-top:12px">
+      <span>Total (closed + open)</span>
+      <span class="fin-val" style="color:var(--orange);font-size:1.15rem">EGP ${fmt(closedNetFromBosta + openNetFromBosta)}</span>
+    </div>`;
+
+  // ── 3. ELASHRY — TOTAL BUYING COST OF SHIPPED ORDERS ────────────────
+  const shippedOrders = orders.filter(o => o.status !== 'Processing' && o.status !== 'Cancelled');
+  const shippedBuyCost = shippedOrders.reduce((a, o) =>
+    a + (o.products || []).reduce((b, p) =>
+      b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
+  const elashryTotalEl = document.getElementById('fin-elashry-total');
+  if (elashryTotalEl) elashryTotalEl.innerHTML = `
+    <div class="fin-row" style="opacity:.75;font-size:12px"><span>Every order past Processing counts (delivered, in transit, heading back, returned).</span>
+      <span>${shippedOrders.length} orders</span></div>
+    <div class="fin-row subtotal">
+      <span>Total buying cost owed to Elashry</span>
+      <span class="fin-val" style="color:var(--orange);font-size:1.15rem">EGP ${fmt(shippedBuyCost)}</span>
+    </div>`;
+
+  // Elashry expenses folded into buying cost so the Expenses section stays clean.
   const orderGoods = orders.filter(owesElashry).reduce((a, o) => a + (o.products || []).reduce((b, p) =>
     b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
-  // Things bought from Elashry for Protech (logged as "Elashry" expenses) are part of the
-  // Elashry cost, not generic expenses — fold them into buying cost and out of extra expenses.
   const elashryExp = cache.expenses.filter(e => e.category === 'Elashry').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
   const buyingCost = orderGoods + elashryExp;
-  const totalExp = cache.expenses.filter(e => e.category !== 'Elashry').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-  const netProfit = netFromBosta - retShipCost - buyingCost - totalExp;
+  const totalExp   = cache.expenses.filter(e => e.category !== 'Elashry').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
 
-  // Projected scenario: assume every In-Transit order is delivered & paid in full, and all
-  // Returned goods are restocked (so their cost is excluded). The true per-order "am I
-  // winning?" once the pipeline clears.
-  const projOrders = orders.filter(o => o.status === 'In Transit' || o.status === 'Heading to Customer' || o.status === 'Delivered');
-  const projRevenue = projOrders.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0)), 0);
-  const projCOGS = projOrders.reduce((a, o) => a + (o.products || []).reduce((b, p) => b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
-  const allExpenses = cache.expenses.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-  const projProfit = projRevenue - projCOGS - allExpenses - retShipCost;
-
-  // Delivered product sales (excl. shipping) — used by the media buyer fee.
-  const productSalesDelivered = delivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
-
-  // Media buyer cycle: fixed window (start of cycle → end of cycle).
-  // Edit MB_CYCLE_START_ISO / MB_CYCLE_END_ISO to switch to the next
-  // monthly cycle (e.g. 2026-09-02 → 2026-09-30 next month).
-  const MB_CYCLE_START_ISO = '2026-08-01T00:00:00';
-  const MB_CYCLE_END_ISO   = '2026-08-31T23:59:59';
+  // ── 4. MEDIA BUYER — since last payment ─────────────────────────────
+  // Per spec: paid ads + delivered sales counted from the LAST time the
+  // media buyer was paid, up to right now (rolling window, no fixed month).
   const mbPayments = cache.expenses.filter(e => e.category === 'Media Buyer');
   const lastPaymentAt = mbPayments.reduce((max, e) => {
     const t = String(e.created_at || e.date || '');
     return t > max ? t : max;
   }, '');
+  const cycleStartISO = lastPaymentAt || '1970-01-01T00:00:00';
   const inCycle = (t) => {
     const s = String(t || '');
-    if (!s) return false;
-    if (s < MB_CYCLE_START_ISO) return false;
-    if (s > MB_CYCLE_END_ISO) return false;
-    return true;
+    return !!s && s > cycleStartISO;
   };
-
-  // Paid-ads expenses inside the cycle window.
   const paidAdsCycle = cache.expenses
     .filter(e => e.category === 'Paid Ads' && inCycle(e.created_at || e.date))
     .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-
-  // ONLY orders whose status is 'Delivered' AND which were placed inside the
-  // cycle window — the media buyer is rewarded for deliveries in this cycle,
-  // not for orders that only reached in-transit / cancelled / awaiting action.
   const cycleDelivered = delivered.filter(o => inCycle(o.created_at || o.date));
-  const cycleSales = cycleDelivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
+  const cycleSales = cycleDelivered.reduce((a, o) =>
+    a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
 
-  const adsShare = paidAdsCycle * 0.20;
-  const salesShare = cycleSales * 0.01;
+  const adsShare      = paidAdsCycle * 0.20;
+  const salesShare    = cycleSales   * 0.01;
   const mediaBuyerFee = adsShare + salesShare;
-  const mbOwed = Math.round(Math.max(0, mediaBuyerFee) * 100) / 100;
+  const mbOwed        = Math.round(Math.max(0, mediaBuyerFee) * 100) / 100;
 
-  // Header label so the admin knows the exact cycle boundary.
-  const cutoffDay = MB_CYCLE_END_ISO.slice(0, 10);
-  const startDay  = MB_CYCLE_START_ISO.slice(0, 10);
-  const lastPaidTxt = `الدورة: من ${startDay} إلى ${cutoffDay}`;
+  const startDay = lastPaymentAt ? lastPaymentAt.slice(0, 10) : 'the beginning';
+  const nowDay   = new Date().toISOString().slice(0, 10);
+  const cycleLabel = lastPaymentAt
+    ? `منذ آخر دفعة: ${startDay} → ${nowDay}`
+    : `منذ البداية → ${nowDay} (لا توجد دفعة سابقة)`;
 
   const mbEl = document.getElementById('fin-mediabuyer');
   if (mbEl) {
@@ -1563,36 +1602,65 @@ function renderFinancials() {
             <td>${esc(o.customer_name || '')}</td>
             <td style="text-align:right">EGP ${fmt(parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0))}</td>
           </tr>`).join('')
-      : `<tr><td colspan="4" style="text-align:center;opacity:.6;padding:12px">No delivered orders in this cycle yet</td></tr>`;
+      : `<tr><td colspan="4" style="text-align:center;opacity:.6;padding:12px">No delivered orders since last payment</td></tr>`;
     mbEl.innerHTML = `
-    <div class="fin-row" style="opacity:.75;font-size:12px"><span>${lastPaidTxt}</span><span>${cycleDelivered.length} <b>delivered</b> orders in this cycle</span></div>
-    <div class="fin-row"><span>Paid ads spend (this cycle)</span><span class="fin-val">EGP ${fmt(paidAdsCycle)}</span></div>
-    <div class="fin-row"><span>20% of paid ads</span><span class="fin-val">EGP ${fmt(adsShare)}</span></div>
-    <div class="fin-row"><span><b>Delivered</b> product sales (this cycle, excl. shipping, ${startDay} → ${cutoffDay})</span><span class="fin-val">EGP ${fmt(cycleSales)}</span></div>
-    <div class="fin-row"><span>1% of delivered sales</span><span class="fin-val">EGP ${fmt(salesShare)}</span></div>
-    <div class="fin-row subtotal"><span>Owed for cycle ${startDay} → ${cutoffDay}</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(mbOwed)}</span></div>
-    <details style="margin-top:12px;border:1px solid var(--line);border-radius:8px;padding:8px 12px">
-      <summary style="cursor:pointer;font-weight:600">📋 Delivered orders in this cycle (${cycleDelivered.length})</summary>
-      <div style="max-height:280px;overflow:auto;margin-top:8px">
-        <table style="width:100%;border-collapse:collapse;font-size:13px">
-          <thead>
-            <tr style="text-align:right;border-bottom:1px solid var(--line)">
-              <th style="text-align:left;padding:6px 4px">Code</th>
-              <th style="text-align:left;padding:6px 4px">Date</th>
-              <th style="text-align:left;padding:6px 4px">Customer</th>
-              <th style="text-align:right;padding:6px 4px">Product sales</th>
-            </tr>
-          </thead>
-          <tbody>${ordersRows}</tbody>
-        </table>
-      </div>
-    </details>
-    <div style="margin-top:12px">
-      <button class="btn btn-primary btn-sm" ${mbOwed > 0 ? '' : 'disabled'} onclick="payMediaBuyer(${mbOwed})">✅ Mark as paid (record EGP ${fmt(mbOwed)} to expenses)</button>
-    </div>`;
+      <div class="fin-row" style="opacity:.75;font-size:12px"><span>${cycleLabel}</span><span>${cycleDelivered.length} delivered orders in this cycle</span></div>
+      <div class="fin-row"><span>Paid ads spend (since last payment)</span><span class="fin-val">EGP ${fmt(paidAdsCycle)}</span></div>
+      <div class="fin-row"><span>20% of paid ads</span><span class="fin-val">EGP ${fmt(adsShare)}</span></div>
+      <div class="fin-row"><span>Delivered product sales (excl. shipping)</span><span class="fin-val">EGP ${fmt(cycleSales)}</span></div>
+      <div class="fin-row"><span>1% of delivered sales</span><span class="fin-val">EGP ${fmt(salesShare)}</span></div>
+      <div class="fin-row subtotal"><span>Owed now (${startDay} → ${nowDay})</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(mbOwed)}</span></div>
+      <details style="margin-top:12px;border:1px solid var(--line);padding:8px 12px">
+        <summary style="cursor:pointer;font-weight:600">📋 Delivered orders in this cycle (${cycleDelivered.length})</summary>
+        <div style="max-height:280px;overflow:auto;margin-top:8px">
+          <table style="width:100%;border-collapse:collapse;font-size:13px">
+            <thead>
+              <tr style="text-align:right;border-bottom:1px solid var(--line)">
+                <th style="text-align:left;padding:6px 4px">Code</th>
+                <th style="text-align:left;padding:6px 4px">Date</th>
+                <th style="text-align:left;padding:6px 4px">Customer</th>
+                <th style="text-align:right;padding:6px 4px">Product sales</th>
+              </tr>
+            </thead>
+            <tbody>${ordersRows}</tbody>
+          </table>
+        </div>
+      </details>
+      <div style="margin-top:12px">
+        <button class="btn btn-primary btn-sm" ${mbOwed > 0 ? '' : 'disabled'} onclick="payMediaBuyer(${mbOwed})">✅ Mark as paid (record EGP ${fmt(mbOwed)} to expenses)</button>
+      </div>`;
   }
 
-  // General expenses list — exclude "Elashry" (shown in the Elashry supplier box instead).
+  // ── 5. PACKAGING CENTER SALARY — 10 EGP × shipped orders ──────────
+  // Rewards the packing employee for every order that has actually left
+  // Processing (in transit / delivered / returned / heading back) since
+  // the LAST packaging payment. Rolling window like the media buyer.
+  const PACK_RATE = 10; // EGP per packed order
+  const packPayments = cache.expenses.filter(e => e.category === 'Packaging');
+  const lastPackAt = packPayments.reduce((max, e) => {
+    const t = String(e.created_at || e.date || '');
+    return t > max ? t : max;
+  }, '');
+  const packStartISO = lastPackAt || '1970-01-01T00:00:00';
+  const packedCycle = shippedOrders.filter(o =>
+    String(o.created_at || o.date || '') > packStartISO
+  );
+  const packOwed = Math.round(packedCycle.length * PACK_RATE * 100) / 100;
+  const packStartDay = lastPackAt ? lastPackAt.slice(0, 10) : 'the beginning';
+  const packEl = document.getElementById('fin-packaging');
+  if (packEl) packEl.innerHTML = `
+    <div class="fin-row" style="opacity:.75;font-size:12px">
+      <span>${lastPackAt ? `منذ آخر دفعة: ${packStartDay} → ${nowDay}` : `منذ البداية → ${nowDay}`}</span>
+      <span>${packedCycle.length} orders packed</span>
+    </div>
+    <div class="fin-row"><span>Rate per packed order</span><span class="fin-val">EGP ${fmt(PACK_RATE)}</span></div>
+    <div class="fin-row"><span>Packed orders since last payment</span><span class="fin-val">${packedCycle.length}</span></div>
+    <div class="fin-row subtotal"><span>Owed now</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(packOwed)}</span></div>
+    <div style="margin-top:12px">
+      <button class="btn btn-primary btn-sm" ${packOwed > 0 ? '' : 'disabled'} onclick="payPackagingCenter(${packOwed})">✅ Mark as paid (record EGP ${fmt(packOwed)} to expenses)</button>
+    </div>`;
+
+  // General expenses list — exclude Elashry (folded into supplier box).
   const generalExpenses = cache.expenses.filter(e => e.category !== 'Elashry');
   document.getElementById('exp-tbody').innerHTML = generalExpenses.length ? generalExpenses.map(e => `
     <tr>
@@ -1603,110 +1671,164 @@ function renderFinancials() {
       <td><button class="btn btn-danger btn-xs" onclick="delExpense('${e.id}')">✕</button></td>
     </tr>`).join('') : '<tr><td colspan="5"><div class="empty">No expenses recorded</div></td></tr>';
 
-  // Pure Bosta-minus-Elashry balance — the single number the owner cares
-  // about: "what I should receive from Bosta MINUS what I should pay to
-  // Elashry". Ignores ads / media buyer / other expenses. If positive, that's
-  // the cash you actually keep from those orders' supplier cycle.
-  const bostaMinusElashry = netFromBosta - buyingCost - retShipCost;
-
-  // ── Delivered-only profit ─────────────────────────────────────────────
-  // Answers: "did the orders that actually delivered make money, BEFORE any
-  // other costs (ads, media buyer, expenses, returns)?"  Only looks at
-  // Delivered orders: money received from Bosta for them vs. their Elashry
-  // buy cost.  Nothing else added, nothing else subtracted.
-  const deliveredElashryOwed = delivered.reduce((a, o) =>
+  // ── 7. REVENUE — delivered only ───────────────────────────────────
+  // Per spec: "subtracting the total collected money after subtracting
+  // shipping then subtract it from the total buying costs for delivered
+  // orders only only only". So:
+  //   Revenue = (delivered_collected − delivered_actual_shipping) − delivered_buying_cost
+  const deliveredBuyingCost = delivered.reduce((a, o) =>
     a + (o.products || []).reduce((b, p) =>
       b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
-  const deliveredGrossProfit = netFromBosta - deliveredElashryOwed;
-
-  // Revenue Summary — realised money in/out on Delivered + Returned orders.
+  const revenue = netFromBostaDeliv - deliveredBuyingCost;
   const rev = document.getElementById('fin-revenue');
   if (rev) rev.innerHTML = `
-    <div class="fin-row"><span>Total collected (orders + shipping)</span><span class="fin-val">EGP ${fmt(totalCollected)}</span></div>
-    <div class="fin-row"><span>Total actual shipping cost</span><span class="fin-val deduct">− EGP ${fmt(totalActualShip)}</span></div>
-    <div class="fin-row subtotal"><span>Net amount from Bosta</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(netFromBosta)}</span></div>
-    <div style="height:10px"></div>
-    <div class="fin-row"><span>Return shipping cost</span><span class="fin-val deduct">− EGP ${fmt(retShipCost)}</span></div>
-    <div class="fin-row"><span>Total Elashry cost (goods + purchases)</span><span class="fin-val deduct">− EGP ${fmt(buyingCost)}</span></div>
-    <div style="height:12px"></div>
-    <div class="fin-row ${bostaMinusElashry >= 0 ? 'profit' : 'loss'}" style="border-top:2px solid var(--line);padding-top:12px;font-size:1.05rem">
-      <span>${bostaMinusElashry >= 0 ? '🟢 Net (Bosta − Elashry)' : '🔴 Net (Bosta − Elashry)'}</span>
-      <span>EGP ${fmt(Math.abs(bostaMinusElashry))}</span>
-    </div>
-    <div style="height:18px"></div>
-    <div style="border:1px dashed var(--line);border-radius:10px;padding:12px;background:rgba(255,255,255,.02)">
-      <div class="fin-row" style="font-weight:800;color:var(--orange);margin-bottom:6px">
-        <span>📦 Delivered orders only — before any other costs</span>
-        <span style="opacity:.7;font-weight:500;font-size:12px">${delivered.length} orders</span>
-      </div>
-      <div class="fin-row"><span>Received from Bosta (delivered, net of shipping)</span><span class="fin-val">EGP ${fmt(netFromBosta)}</span></div>
-      <div class="fin-row"><span>Owed to Elashry (buy cost of delivered goods)</span><span class="fin-val deduct">− EGP ${fmt(deliveredElashryOwed)}</span></div>
-      <div class="fin-row ${deliveredGrossProfit >= 0 ? 'profit' : 'loss'}" style="border-top:1px solid var(--line);padding-top:8px;margin-top:4px">
-        <span>${deliveredGrossProfit >= 0 ? '🟢 Gross profit on delivered orders' : '🔴 Gross loss on delivered orders'}</span>
-        <span>EGP ${fmt(Math.abs(deliveredGrossProfit))}</span>
-      </div>
-    </div>`;
-
-  // ── Confirmed Profit — cash-cycle closed only ──────────────────────
-  // Answers: "for orders where Bosta has already invoiced (cash cycle
-  // closed), what's my actual profit before ads/expenses?"
-  //   Collected (delivered COD, 0 for returned)
-  //   − Buying cost (Elashry buy price × qty)
-  //   − Actual shipping (real Bosta invoice, both outbound and return legs)
-  // Uses ONLY orders whose cash_cycle_closed = true, so every number is
-  // definitive (no formula estimates leaking in).
-  const closedFinal = orders.filter(o =>
-    (o.status === 'Delivered' || o.status === 'Returned') && o.cash_cycle_closed === true
-  );
-  const closedDelivered = closedFinal.filter(o => o.status === 'Delivered');
-  const closedReturned = closedFinal.filter(o => o.status === 'Returned');
-  const cfCollected = closedDelivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
-  const cfBuying = closedFinal.reduce((a, o) =>
-    a + (o.products || []).reduce((b, p) =>
-      b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
-  const cfShipping = closedFinal.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
-  const cfProfit = cfCollected - cfBuying - cfShipping;
-  const confEl = document.getElementById('fin-confirmed');
-  if (confEl) confEl.innerHTML = `
     <div class="fin-row" style="opacity:.75;font-size:12px">
-      <span>${closedFinal.length} orders (${closedDelivered.length} delivered · ${closedReturned.length} returned)</span>
-      <span>Cash-cycle closed — Bosta invoiced ✓</span>
+      <span>${delivered.length} delivered orders</span>
+      <span>Realised money only</span>
     </div>
-    <div class="fin-row"><span>Collected from customers (delivered only)</span><span class="fin-val">EGP ${fmt(cfCollected)}</span></div>
-    <div class="fin-row"><span>Total buying cost (Elashry)</span><span class="fin-val deduct">− EGP ${fmt(cfBuying)}</span></div>
-    <div class="fin-row"><span>Total actual shipping (Bosta invoice)</span><span class="fin-val deduct">− EGP ${fmt(cfShipping)}</span></div>
-    <div class="fin-row ${cfProfit >= 0 ? 'profit' : 'loss'}" style="border-top:2px solid var(--line);padding-top:12px;font-size:1.05rem">
-      <span>${cfProfit >= 0 ? '🟢 Confirmed profit (before expenses)' : '🔴 Confirmed loss (before expenses)'}</span>
-      <span>EGP ${fmt(Math.abs(cfProfit))}</span>
-    </div>
-    <div style="margin-top:10px;font-size:11px;opacity:.7;line-height:1.5">
-      Only orders where Bosta has finalised the invoice count here.
-      Ads, media buyer, and other expenses are excluded — this is the
-      raw margin on shipments that have already settled.
+    <div class="fin-row"><span>Total collected from customers</span><span class="fin-val">EGP ${fmt(totalCollected)}</span></div>
+    <div class="fin-row"><span>Total actual shipping</span><span class="fin-val deduct">− EGP ${fmt(totalActualShip)}</span></div>
+    <div class="fin-row"><span>Net from Bosta (delivered)</span><span class="fin-val">EGP ${fmt(netFromBostaDeliv)}</span></div>
+    <div class="fin-row"><span>Total buying cost (delivered goods only)</span><span class="fin-val deduct">− EGP ${fmt(deliveredBuyingCost)}</span></div>
+    <div class="fin-row ${revenue >= 0 ? 'profit' : 'loss'}" style="border-top:2px solid var(--line);padding-top:12px;font-size:1.05rem">
+      <span>${revenue >= 0 ? '🟢 Revenue' : '🔴 Revenue (negative)'}</span>
+      <span>EGP ${fmt(Math.abs(revenue))}</span>
     </div>`;
 
-  // Net Profit Summary — realised profit now, plus the projected profit once the pipeline clears.
+  // ── 8. NET PROFIT ─────────────────────────────────────────────────
+  // Per spec: "get the total expenses + the actual shipping of returned
+  // orders, and subtract both from the total revenue"
+  const allExpensesForNet = cache.expenses.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const netProfit = revenue - allExpensesForNet - retShipCost;
   const net = document.getElementById('fin-net');
   if (net) net.innerHTML = `
-    <div class="fin-row"><span>Net from Bosta</span><span class="fin-val">EGP ${fmt(netFromBosta)}</span></div>
-    <div class="fin-row"><span>Total Elashry cost (goods + purchases)</span><span class="fin-val deduct">− EGP ${fmt(buyingCost)}</span></div>
-    <div class="fin-row"><span>Total extra expenses</span><span class="fin-val deduct">− EGP ${fmt(totalExp)}</span></div>
-    <div class="fin-row"><span>Return shipping costs</span><span class="fin-val deduct">− EGP ${fmt(retShipCost)}</span></div>
-    <div class="fin-row ${netProfit >= 0 ? 'profit' : 'loss'}"><span>${netProfit >= 0 ? '🟢 Net Profit' : '🔴 Net Loss'}</span><span>EGP ${fmt(Math.abs(netProfit))}</span></div>
-    <div style="height:16px"></div>
-    <div class="fin-row"><span style="font-weight:800;color:var(--orange)">Projected — if all In-Transit deliver & returns restocked</span></div>
-    <div class="fin-row"><span>Projected revenue (delivered + in-transit, net of shipping)</span><span class="fin-val">EGP ${fmt(projRevenue)}</span></div>
-    <div class="fin-row"><span>Cost of those goods (returns excluded)</span><span class="fin-val deduct">− EGP ${fmt(projCOGS)}</span></div>
-    <div class="fin-row"><span>All expenses (ads, Elashry purchases, Bosta fees…)</span><span class="fin-val deduct">− EGP ${fmt(allExpenses)}</span></div>
-    <div class="fin-row"><span>Return shipping</span><span class="fin-val deduct">− EGP ${fmt(retShipCost)}</span></div>
-    <div class="fin-row ${projProfit >= 0 ? 'profit' : 'loss'}"><span>${projProfit >= 0 ? '🟢 Projected Profit' : '🔴 Projected Loss'}</span><span>EGP ${fmt(Math.abs(projProfit))}</span></div>`;
+    <div class="fin-row"><span>Revenue (from section above)</span><span class="fin-val">EGP ${fmt(revenue)}</span></div>
+    <div class="fin-row"><span>Total expenses (all categories)</span><span class="fin-val deduct">− EGP ${fmt(allExpensesForNet)}</span></div>
+    <div class="fin-row"><span>Return shipping (returned orders)</span><span class="fin-val deduct">− EGP ${fmt(retShipCost)}</span></div>
+    <div class="fin-row ${netProfit >= 0 ? 'profit' : 'loss'}" style="border-top:2px solid var(--line);padding-top:12px;font-size:1.15rem">
+      <span>${netProfit >= 0 ? '🟢 Net Profit' : '🔴 Net Loss'}</span>
+      <span>EGP ${fmt(Math.abs(netProfit))}</span>
+    </div>`;
 
   // The two money sections (Bosta receivable + Elashry owed) render into their own containers.
   if (typeof renderBostaCash === 'function') renderBostaCash();
   if (typeof renderSupplierAccount === 'function') renderSupplierAccount();
 
-  // Weekly projected-profit chart (since June).
+  // Charts.
+  if (typeof renderMonthlyDeliveredChart === 'function') renderMonthlyDeliveredChart();
+  if (typeof renderTopProductsChart === 'function') renderTopProductsChart();
   if (typeof renderWeeklyProfitChart === 'function') renderWeeklyProfitChart();
+}
+
+// ── Record a packaging-center payment (mirrors payMediaBuyer). ─────────
+async function payPackagingCenter(amount) {
+  const amt = Math.round((parseFloat(amount) || 0) * 100) / 100;
+  if (amt <= 0) { showToast('Nothing due to the packaging center'); return; }
+  if (!confirm(`Record a packaging-center payment of EGP ${fmt(amt)}?\nThis adds it to expenses and resets the counter to zero.`)) return;
+  try {
+    const data = { id: genId(), category: 'Packaging', description: 'Packaging center payment',
+      amount: amt, date: today(), created_at: new Date().toISOString() };
+    await dbInsert('expenses', data);
+    cache.expenses.unshift(data);
+    showToast('Packaging paid ✓'); renderAll();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+// ── CHART: Delivered orders per month ─────────────────────────────────
+let _monthlyDelChart = null;
+function renderMonthlyDeliveredChart() {
+  const canvas = document.getElementById('monthly-delivered-chart');
+  if (!canvas || typeof Chart === 'undefined') return;
+  const delivered = (cache.orders || []).filter(o => o.status === 'Delivered');
+  // Bucket by YYYY-MM using created_at / date.
+  const buckets = new Map();
+  for (const o of delivered) {
+    const raw = String(o.created_at || o.date || '').slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(raw)) continue;
+    buckets.set(raw, (buckets.get(raw) || 0) + 1);
+  }
+  if (!buckets.size) {
+    if (_monthlyDelChart) { _monthlyDelChart.destroy(); _monthlyDelChart = null; }
+    return;
+  }
+  // Fill gaps between first and current month so bars stay contiguous.
+  const keys = Array.from(buckets.keys()).sort();
+  const [fy, fm] = keys[0].split('-').map(Number);
+  const now = new Date();
+  const ly = now.getFullYear(), lm = now.getMonth() + 1;
+  const allKeys = [];
+  let y = fy, m = fm;
+  while (y < ly || (y === ly && m <= lm)) {
+    allKeys.push(`${y}-${String(m).padStart(2, '0')}`);
+    m++; if (m > 12) { m = 1; y++; }
+  }
+  const MO = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const labels = allKeys.map(k => { const [yy, mm] = k.split('-'); return `${MO[+mm - 1]} ${yy}`; });
+  const data = allKeys.map(k => buckets.get(k) || 0);
+  if (_monthlyDelChart) {
+    _monthlyDelChart.data.labels = labels;
+    _monthlyDelChart.data.datasets[0].data = data;
+    _monthlyDelChart.update();
+    return;
+  }
+  _monthlyDelChart = new Chart(canvas.getContext('2d'), {
+    type: 'bar',
+    data: { labels, datasets: [{ label: 'Delivered orders', data,
+      backgroundColor: 'rgba(236,48,19,0.75)', borderRadius: 4 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.y} orders` } } },
+      scales: {
+        y: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: 'rgba(0,0,0,0.06)' } },
+        x: { grid: { display: false } },
+      },
+    },
+  });
+}
+
+// ── CHART: Top products by qty (delivered only) ───────────────────────
+let _topProductsChart = null;
+function renderTopProductsChart() {
+  const canvas = document.getElementById('top-products-chart');
+  if (!canvas || typeof Chart === 'undefined') return;
+  const delivered = (cache.orders || []).filter(o => o.status === 'Delivered');
+  const counts = new Map();
+  for (const o of delivered) {
+    for (const p of (o.products || [])) {
+      const key = String(p.name || p.code || '').trim();
+      if (!key) continue;
+      counts.set(key, (counts.get(key) || 0) + (parseInt(p.qty || 1) || 1));
+    }
+  }
+  if (!counts.size) {
+    if (_topProductsChart) { _topProductsChart.destroy(); _topProductsChart = null; }
+    return;
+  }
+  const sorted = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const labels = sorted.map(x => x[0].length > 32 ? x[0].slice(0, 30) + '…' : x[0]);
+  const data = sorted.map(x => x[1]);
+  if (_topProductsChart) {
+    _topProductsChart.data.labels = labels;
+    _topProductsChart.data.datasets[0].data = data;
+    _topProductsChart.update();
+    return;
+  }
+  _topProductsChart = new Chart(canvas.getContext('2d'), {
+    type: 'bar',
+    data: { labels, datasets: [{ label: 'Qty sold (delivered)', data,
+      backgroundColor: 'rgba(32,30,29,0.85)', borderRadius: 4 }] },
+    options: {
+      indexAxis: 'y',
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.x} pcs` } } },
+      scales: {
+        x: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: 'rgba(0,0,0,0.06)' } },
+        y: { grid: { display: false } },
+      },
+    },
+  });
 }
 
 // ── EXPENSES ──
@@ -2037,20 +2159,19 @@ function financeData() {
   const notReturnedCost = returned.filter(o => !o.warehouse_confirmed)
     .reduce((a, o) => a + (o.products || []).reduce((b, p) => b + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0), 0);
 
-  // Media buyer — MUST mirror the cycle logic used in renderFinancials so
-  // the Excel export shows the same numbers as the dashboard card. Keep
-  // these two dates in lockstep with the constants in renderFinancials.
-  const MB_CYCLE_START_ISO = '2026-08-01T00:00:00';
-  const MB_CYCLE_END_ISO   = '2026-08-31T23:59:59';
+  // Media buyer — MUST mirror the cycle logic used in renderFinancials.
+  // Cycle = time since the last Media Buyer payment (rolling window).
   const productSalesDelivered = delivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
   const paidAdsAll = expenses.filter(e => e.category === 'Paid Ads').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
   const mbPayments = expenses.filter(e => e.category === 'Media Buyer');
+  const lastPaymentAt = mbPayments.reduce((max, e) => {
+    const t = String(e.created_at || e.date || '');
+    return t > max ? t : max;
+  }, '');
+  const cycleStartISO = lastPaymentAt || '1970-01-01T00:00:00';
   const inCycle = (t) => {
     const s = String(t || '');
-    if (!s) return false;
-    if (s < MB_CYCLE_START_ISO) return false;
-    if (s > MB_CYCLE_END_ISO) return false;
-    return true;
+    return !!s && s > cycleStartISO;
   };
   const cycleDelivered = delivered
     .filter(o => inCycle(o.created_at || o.date))
@@ -2065,8 +2186,8 @@ function financeData() {
   const mbFee = adsShare + salesShare;
   const mbPaid = mbPayments.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
   const mbOwed = Math.max(0, mbFee);
-  const cycleFrom = MB_CYCLE_START_ISO.slice(0, 10);
-  const cycleTo   = MB_CYCLE_END_ISO.slice(0, 10);
+  const cycleFrom = lastPaymentAt ? lastPaymentAt.slice(0, 10) : '—';
+  const cycleTo   = new Date().toISOString().slice(0, 10);
 
   const generalExpenses = expenses.filter(e => e.category !== 'Elashry');
   return { collected, delShip, retShip, shouldReceive, receipts, received, bostaRemaining,
