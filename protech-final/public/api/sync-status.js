@@ -386,6 +386,95 @@ export default async function handler(req, res) {
     catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
+  // ?action=push-updates — for every order still in Processing that we
+  // sent to Bosta, compare a snapshot of {cod, allow_open, phone, address}
+  // against the copy we last pushed. If anything changed since then, PATCH
+  // Bosta with the updated fields and save the new snapshot. Called every
+  // minute from the admin dashboard silent-sync loop.
+  //
+  // First-time behaviour: if bosta_synced_snapshot IS NULL we seed it with
+  // the current values WITHOUT pushing — assumes existing orders are
+  // already in sync with Bosta (they were created via /api/bosta), so we
+  // only start pushing on genuine drift after the initial seed.
+  if (action === 'push-updates') {
+    if (!BOSTA_API_KEY) return res.status(500).json({ error: 'BOSTA_API_KEY not set' });
+    try {
+      const orders = await sbGet('orders?select=id,code,total,allow_open,phone,address,city,bosta_id,bosta_synced_snapshot&status=eq.Processing&bosta_id=not.is.null&limit=500');
+      const normPhone = (p) => {
+        let s = String(p || '').trim().replace(/[\s()-]/g, '');
+        if (!s) return '';
+        if (s.startsWith('+')) return s;
+        if (s.startsWith('00')) return '+' + s.slice(2);
+        if (s.startsWith('0'))  return '+20' + s.slice(1);
+        if (s.startsWith('20')) return '+' + s;
+        return '+20' + s;
+      };
+      const results = { checked: 0, pushed: 0, unchanged: 0, seeded: 0, errors: [], changes: [] };
+      for (const o of (orders || [])) {
+        results.checked++;
+        const current = {
+          cod:        Math.round((Number(o.total) || 0) * 100) / 100,
+          allow_open: !!o.allow_open,
+          phone:      normPhone(o.phone),
+          address:    String(o.address || '').trim(),
+        };
+        const last = (o.bosta_synced_snapshot && typeof o.bosta_synced_snapshot === 'object')
+          ? o.bosta_synced_snapshot : null;
+        // First encounter — seed the snapshot silently, no Bosta push.
+        if (!last) {
+          const sr = await fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(o.id)}`, {
+            method: 'PATCH',
+            headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+            body: JSON.stringify({ bosta_synced_snapshot: current }),
+          });
+          if (sr.ok) results.seeded++;
+          else results.errors.push({ code: o.code, why: 'seed failed', detail: (await sr.text()).slice(0, 120) });
+          continue;
+        }
+        // Diff — only fields that actually changed.
+        const changed = {};
+        for (const k of ['cod', 'allow_open', 'phone', 'address']) {
+          if (String(current[k]) !== String(last[k] ?? '')) changed[k] = current[k];
+        }
+        if (!Object.keys(changed).length) { results.unchanged++; continue; }
+        // Build the partial Bosta payload for just the changed fields.
+        const payload = {};
+        if ('cod' in changed) payload.cod = current.cod;
+        if ('allow_open' in changed) payload.allowToOpenPackage = current.allow_open;
+        if ('phone' in changed) payload.receiver = { phone: current.phone };
+        if ('address' in changed) payload.dropOffAddress = { firstLine: current.address, secondLine: current.address };
+        try {
+          const br = await fetch(`${BOSTA_BASE_URL}/deliveries/${encodeURIComponent(o.bosta_id)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', 'Authorization': BOSTA_API_KEY },
+            body: JSON.stringify(payload),
+          });
+          const bodyTxt = await br.text().catch(() => '');
+          if (!br.ok) {
+            results.errors.push({ code: o.code, status: br.status, err: bodyTxt.slice(0, 200), changed });
+            continue;
+          }
+          // Save the pushed snapshot so we don't push it again until the
+          // next real change.
+          await fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(o.id)}`, {
+            method: 'PATCH',
+            headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+            body: JSON.stringify({ bosta_synced_snapshot: current }),
+          });
+          results.pushed++;
+          results.changes.push({ code: o.code, changed });
+          console.log('push-updates', o.code, JSON.stringify(changed));
+        } catch (e) {
+          results.errors.push({ code: o.code, err: e.message, changed });
+        }
+      }
+      return res.status(200).json({ ok: true, ...results });
+    } catch (e) {
+      console.error('push-updates', e.message);
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
   // Helper: look up an account row by (username, pin) — each packaging
   // person has their own credentials, no shared PINs. `wantRole` filters
   // by role ('picker' or 'admin'). Also touches last_login_at on success.

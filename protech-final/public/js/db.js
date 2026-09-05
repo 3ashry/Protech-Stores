@@ -262,5 +262,28 @@ async function loadAll() {
     setTimeout(silentBostaSync, 5000);
     setInterval(silentBostaSync, 5 * 60 * 1000);
   }
+
+  // Silent 1-min push-updates loop: if the admin edits an order after it
+  // was sent to Bosta (COD, allow-open, phone, address), the change gets
+  // reflected on the Bosta shipment automatically without a dashboard
+  // button. Only pushes on genuine drift — first pass on any order just
+  // seeds the "last synced" snapshot silently. See ?action=push-updates
+  // in /api/sync-status for the diff / seed / push logic and safety net.
+  if (!window._bostaPushUpdatesStarted) {
+    window._bostaPushUpdatesStarted = true;
+    const pushUpdates = async () => {
+      if (document.hidden) return;
+      try {
+        const r = await fetch('/api/sync-status?action=push-updates', { method: 'POST' });
+        const j = await r.json().catch(() => null);
+        if (j && (j.pushed || (j.errors && j.errors.length))) {
+          console.log('[bosta push-updates]', j);
+          if (j.pushed) showToast(`↗️ تم تحديث ${j.pushed} طلب في بوسطة`);
+        }
+      } catch(_) {}
+    };
+    setTimeout(pushUpdates, 10000);
+    setInterval(pushUpdates, 60 * 1000);
+  }
 }
 
