@@ -247,7 +247,12 @@ function orderCard(o, tab) {
   //                 physically back in the warehouse
   let bottomAction;
   if (tab === 'ready') {
-    bottomAction = `<div class="ready-banner">⏳ في انتظار استلام بوسطة</div>`;
+    bottomAction = `
+      <div class="ready-banner">⏳ في انتظار استلام بوسطة</div>
+      <button class="btn btn-ghost" style="width:100%;margin-top:6px;background:transparent;border:1px solid var(--line);color:var(--muted);padding:10px;font-size:13px;font-weight:700"
+              onclick="unmarkPrepared('${esc(o.id)}', this)">
+        ↩️ إرجاع لقيد التجهيز
+      </button>`;
   } else if (tab === 'returning') {
     bottomAction = `<button class="btn btn-success" style="background:#7c3aed" onclick="confirmReceivedBack('${esc(o.id)}', this)">✅ تم الاستلام في المخزن</button>`;
   } else {
@@ -472,6 +477,19 @@ async function loadOrders(opts) {
     _refreshTabButtons();
   } catch (e) {
     document.getElementById('list').innerHTML = `<div class="empty"><div class="em">⚠️</div><div>خطأ: ${esc(e.message)}</div></div>`;
+  }
+}
+
+async function unmarkPrepared(orderId, btn) {
+  if (!confirm('إرجاع هذا الطلب إلى قائمة "قيد التجهيز"؟')) return;
+  btn.disabled = true; btn.textContent = 'جاري الحفظ…';
+  try {
+    await apiCall('unmark', { orderId });
+    btn.closest('.card').style.transition = 'opacity .3s'; btn.closest('.card').style.opacity = '0';
+    setTimeout(() => loadOrders(), 300);
+  } catch (e) {
+    btn.disabled = false; btn.textContent = '↩️ إرجاع لقيد التجهيز';
+    alert('فشل الحفظ: ' + e.message);
   }
 }
 

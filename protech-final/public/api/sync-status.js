@@ -546,6 +546,20 @@ export default async function handler(req, res) {
           })) : [],
         } });
       }
+      if (op === 'unmark') {
+        // Undo: move an order back from Ready → Preparing. Clears
+        // picker_prepared_at so the row shows up in the Preparing queue
+        // again on the picker's next refresh. Same auth as op=mark.
+        const orderId = (req.query?.orderId || '').toString();
+        if (!/^[A-Za-z0-9_-]+$/.test(orderId)) return res.status(400).json({ error: 'Bad orderId' });
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
+          method: 'PATCH',
+          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+          body: JSON.stringify({ picker_prepared_at: null }),
+        });
+        if (!r.ok) return res.status(502).json({ error: 'DB write failed', detail: await r.text() });
+        return res.status(200).json({ ok: true });
+      }
       if (op === 'mark') {
         const orderId = (req.query?.orderId || '').toString();
         if (!/^[A-Za-z0-9_-]+$/.test(orderId)) return res.status(400).json({ error: 'Bad orderId' });
