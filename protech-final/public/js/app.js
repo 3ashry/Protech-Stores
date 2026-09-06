@@ -1496,49 +1496,14 @@ function renderFinancials() {
   const netFromBostaDeliv  = totalCollected - totalActualShip; // delivered-only, net of shipping
   const retShipCost        = returned.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
 
-  // ── 1. MONEY FROM BOSTA — closed vs open cash cycle ────────────────
+  // Block #1 (Money From Bosta) renders via renderBostaCash() below.
+  // Keep a local copy of the "closed" subset here — it's still used by the
+  // Confirmed Profit card at the bottom of this function.
   const closedFinal = orders.filter(o =>
     (o.status === 'Delivered' || o.status === 'Returned') && o.cash_cycle_closed === true
   );
   const closedDelivered = closedFinal.filter(o => o.status === 'Delivered');
   const closedReturned  = closedFinal.filter(o => o.status === 'Returned');
-  const closedNetFromBosta =
-      closedDelivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0)), 0)
-    - closedReturned .reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
-
-  const OPEN_STATUSES = ['In Transit', 'Heading to Customer', 'On its way to me', 'Awaiting Action'];
-  const openOrders = orders.filter(o =>
-    OPEN_STATUSES.includes(o.status)
-    || ((o.status === 'Delivered' || o.status === 'Returned') && o.cash_cycle_closed !== true)
-  );
-  const openNetFromBosta = openOrders.reduce((a, o) => {
-    if (o.status === 'Delivered') return a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0));
-    if (o.status === 'Returned')  return a - parseFloat(o.actual_shipping || 0);
-    return a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || o.est_shipping || 0));
-  }, 0);
-
-  const bostaMoneyEl = document.getElementById('fin-bosta-money');
-  if (bostaMoneyEl) bostaMoneyEl.innerHTML = `
-    <div class="fin-row" style="font-weight:800;color:#16a34a">
-      <span>🔒 Closed cash-cycle (definitive)</span>
-      <span>${closedFinal.length} orders</span>
-    </div>
-    <div class="fin-row"><span>Net receivable from Bosta (closed cycles)</span>
-      <span class="fin-val" style="color:#16a34a;font-size:1.05rem">EGP ${fmt(closedNetFromBosta)}</span>
-    </div>
-    <div style="height:14px;border-bottom:1px dashed var(--line);margin-bottom:14px"></div>
-    <div class="fin-row" style="font-weight:800;color:#d97706">
-      <span>🕒 Open cash-cycle (estimated)</span>
-      <span>${openOrders.length} orders in transit / heading back</span>
-    </div>
-    <div class="fin-row"><span>Estimated net still coming from Bosta</span>
-      <span class="fin-val" style="color:#d97706;font-size:1.05rem">EGP ${fmt(openNetFromBosta)}</span>
-    </div>
-    <div style="height:12px"></div>
-    <div class="fin-row subtotal" style="border-top:2px solid var(--line);padding-top:12px">
-      <span>Total (closed + open)</span>
-      <span class="fin-val" style="color:var(--orange);font-size:1.15rem">EGP ${fmt(closedNetFromBosta + openNetFromBosta)}</span>
-    </div>`;
 
   // ── 3. ELASHRY — TOTAL BUYING COST OF SHIPPED ORDERS ────────────────
   const shippedOrders = orders.filter(o => o.status !== 'Processing' && o.status !== 'Cancelled');
@@ -2872,55 +2837,147 @@ async function loadBostaReceipts() {
   renderBostaCash();
 }
 
+// Normalise a stored order_codes value into an array of upper-cased codes.
+// Accepts JSONB array, comma / newline separated string, or null.
+function _receiptOrderCodes(r) {
+  if (!r) return [];
+  const raw = r.order_codes;
+  if (!raw) return [];
+  const arr = Array.isArray(raw) ? raw : String(raw).split(/[\s,;]+/);
+  return arr.map(x => String(x || '').trim().toUpperCase()).filter(Boolean);
+}
+
 function renderBostaCash() {
   const host = document.getElementById('bosta-cash');
   if (!host) return;
   const orders = (typeof cache !== 'undefined' && cache.orders) ? cache.orders : [];
   const delivered = orders.filter(o => o.status === 'Delivered');
-  const returned = orders.filter(o => o.status === 'Returned');
-  // Money I should receive from Bosta =
-  //   total Bosta collected from customers (delivered order totals)
-  //   − (actual shipping of delivered orders + actual shipping of returned orders).
-  const collected = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
-  const delShip = delivered.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
-  const retShip = returned.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
-  const shouldReceive = collected - (delShip + retShip);
-  const received = (bostaCashCache.receipts || []).reduce((a, r) => a + parseFloat(r.amount || 0), 0);
-  const remaining = shouldReceive - received;
 
-  const rows = (bostaCashCache.receipts || []).length
-    ? bostaCashCache.receipts.map(r => `
-        <tr>
-          <td>${esc(r.date) || '—'}</td>
-          <td><strong>EGP ${fmt(r.amount)}</strong></td>
-          <td>${esc(r.note) || '—'}</td>
-          <td><button class="btn btn-danger btn-xs" onclick="delBostaReceipt('${r.id}')">✕</button></td>
-        </tr>`).join('')
-    : '<tr><td colspan="4"><div class="empty">No money received logged yet</div></td></tr>';
+  // ── Money I SHOULD receive from Bosta ───────────────────────────────
+  // Per spec: total collected of DELIVERED orders − their actual shipping.
+  // Returned orders are NOT part of this figure (nothing to collect on them).
+  const collected     = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
+  const delShip       = delivered.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
+  const shouldReceive = collected - delShip;
+
+  // ── Received so far — sum of manually-recorded bank transfers ───────
+  const receipts = (bostaCashCache.receipts || [])
+    .slice()
+    .sort((a, b) => String(b.date || b.created_at || '').localeCompare(String(a.date || a.created_at || '')));
+  const received = receipts.reduce((a, r) => a + parseFloat(r.amount || 0), 0);
+
+  // ── Per-order paid map from every receipt's order_codes list ────────
+  // paidBy[code] = list of receipt objects that referenced this order.
+  const paidBy = new Map();
+  for (const r of receipts) {
+    for (const code of _receiptOrderCodes(r)) {
+      if (!paidBy.has(code)) paidBy.set(code, []);
+      paidBy.get(code).push(r);
+    }
+  }
+
+  // Split delivered orders into paid / unpaid by whether any receipt covers them.
+  const paidOrders   = delivered.filter(o => paidBy.has(String(o.code || '').toUpperCase()));
+  const unpaidOrders = delivered
+    .filter(o => !paidBy.has(String(o.code || '').toUpperCase()))
+    .sort((a, b) => String(a.created_at || a.date || '').localeCompare(String(b.created_at || b.date || '')));
+
+  // Money still to receive = sum over UNPAID delivered orders of (total − actual shipping)
+  const stillToReceive = unpaidOrders.reduce((a, o) =>
+    a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0)), 0);
+
+  // Sanity metric: does the cash we've received match the paid orders' net?
+  const paidNet = paidOrders.reduce((a, o) =>
+    a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0)), 0);
+  const diff = received - paidNet;
+
+  // ── Bank transfers table ────────────────────────────────────────────
+  const transferRows = receipts.length
+    ? receipts.map(r => {
+        const codes = _receiptOrderCodes(r);
+        const codesHtml = codes.length
+          ? `<div style="max-height:80px;overflow:auto;font-size:11px;line-height:1.5">
+               ${codes.map(c => `<span class="badge b-orange" style="margin:1px 3px 1px 0">${esc(c)}</span>`).join('')}
+             </div>`
+          : '<span style="opacity:.6;font-size:12px">— no orders listed —</span>';
+        return `
+          <tr>
+            <td>${esc(r.date) || '—'}</td>
+            <td><strong>EGP ${fmt(r.amount)}</strong></td>
+            <td>${codes.length} orders${codesHtml}</td>
+            <td>${esc(r.note) || '—'}</td>
+            <td>
+              <button class="btn btn-ghost btn-xs" onclick="editBostaReceipt('${r.id}')">✎</button>
+              <button class="btn btn-danger btn-xs" onclick="delBostaReceipt('${r.id}')">✕</button>
+            </td>
+          </tr>`;
+      }).join('')
+    : '<tr><td colspan="5"><div class="empty">No bank transfers logged yet</div></td></tr>';
+
+  // ── Unpaid orders table ─────────────────────────────────────────────
+  const unpaidRows = unpaidOrders.length
+    ? unpaidOrders.map(o => {
+        const net = parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0);
+        return `
+          <tr>
+            <td><span class="badge b-orange">${esc(o.code || '')}</span></td>
+            <td style="opacity:.75">${esc(String(o.created_at || o.date || '').slice(0, 10))}</td>
+            <td>${esc(o.customer_name || '')}</td>
+            <td>EGP ${fmt(o.total)}</td>
+            <td>EGP ${fmt(o.actual_shipping)}</td>
+            <td><strong>EGP ${fmt(net)}</strong></td>
+          </tr>`;
+      }).join('')
+    : '<tr><td colspan="6"><div class="empty">🎉 Every delivered order has been paid out by Bosta</div></td></tr>';
+
   host.innerHTML = `
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">
-        <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:8px">💰 Bosta — Money to receive
+        <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:8px">💰 Money From Bosta
           ${bostaCashCache.loading ? '<span style="font-size:12px;color:var(--muted)">loading…</span>' : ''}
         </h3>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-ghost btn-sm" onclick="downloadBostaExcel()">📥 Excel</button>
-          <button class="btn btn-primary btn-sm" onclick="openBostaReceipt()">+ Record Receipt</button>
+          <button class="btn btn-primary btn-sm" onclick="openBostaReceipt()">+ Record Bank Transfer</button>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:8px">
-        <div class="stat-card orange"><div class="stat-val">EGP ${fmt(shouldReceive)}</div><div class="stat-label">Total I should receive from Bosta</div></div>
-        <div class="stat-card green"><div class="stat-val">EGP ${fmt(received)}</div><div class="stat-label">Received so far</div></div>
-        <div class="stat-card ${remaining > 0 ? 'blue' : 'green'}"><div class="stat-val">EGP ${fmt(Math.abs(remaining))}</div><div class="stat-label">${remaining > 0 ? 'Still to collect' : 'All collected ✓'}</div></div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:8px">
+        <div class="stat-card orange">
+          <div class="stat-val">EGP ${fmt(shouldReceive)}</div>
+          <div class="stat-label">Total I should receive<br><span style="opacity:.7;font-size:11px">${delivered.length} delivered orders · collected − actual shipping</span></div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-val">EGP ${fmt(received)}</div>
+          <div class="stat-label">Received so far<br><span style="opacity:.7;font-size:11px">${receipts.length} bank transfers</span></div>
+        </div>
+        <div class="stat-card ${stillToReceive > 0 ? 'blue' : 'green'}">
+          <div class="stat-val">EGP ${fmt(Math.abs(stillToReceive))}</div>
+          <div class="stat-label">Still to receive<br><span style="opacity:.7;font-size:11px">${unpaidOrders.length} unpaid delivered orders</span></div>
+        </div>
       </div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:18px">
-        Bosta collected (delivered): EGP ${fmt(collected)} &nbsp;−&nbsp; delivered shipping: EGP ${fmt(delShip)} &nbsp;−&nbsp; returned shipping: EGP ${fmt(retShip)} &nbsp;=&nbsp; EGP ${fmt(shouldReceive)}
+
+      <div style="font-size:12px;color:var(--muted);margin:14px 0 6px">
+        Delivered collected: EGP ${fmt(collected)} &nbsp;−&nbsp; delivered shipping: EGP ${fmt(delShip)} &nbsp;=&nbsp; <b>EGP ${fmt(shouldReceive)}</b>
+        ${Math.abs(diff) >= 1
+          ? `<div style="margin-top:4px;color:${diff > 0 ? '#d97706' : '#dc2626'}">
+              ⚠️ Cash received (${fmt(received)}) ${diff > 0 ? 'exceeds' : 'is short of'} the paid orders' net (${fmt(paidNet)}) by EGP ${fmt(Math.abs(diff))} — check the order-code lists on the transfers below.
+            </div>` : ''}
       </div>
-      <h4 style="margin:6px 0;font-size:13px;color:var(--muted)">Payments received from Bosta</h4>
+
+      <h4 style="margin:18px 0 6px;font-size:13px;color:var(--muted)">🏦 Bank transfers from Bosta</h4>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Date</th><th>Amount</th><th>Note</th><th></th></tr></thead>
-          <tbody>${rows}</tbody>
+          <thead><tr><th>Date</th><th>Amount</th><th>Orders covered</th><th>Note</th><th></th></tr></thead>
+          <tbody>${transferRows}</tbody>
+        </table>
+      </div>
+
+      <h4 style="margin:18px 0 6px;font-size:13px;color:var(--muted)">⏳ Delivered orders NOT yet paid by Bosta (${unpaidOrders.length})</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Order</th><th>Date</th><th>Customer</th><th>Total</th><th>Shipping</th><th>Net to receive</th></tr></thead>
+          <tbody>${unpaidRows}</tbody>
         </table>
       </div>
     </div>`;
@@ -2935,19 +2992,37 @@ function saveStartingCapital(v) {
   showToast('Starting capital saved ✓');
 }
 
-function openBostaReceipt() {
+function openBostaReceipt(existingId) {
+  const editing = existingId ? (bostaCashCache.receipts || []).find(r => r.id === existingId) : null;
+  const codesText = editing ? _receiptOrderCodes(editing).join('\n') : '';
   const overlay = document.getElementById('overlay');
   overlay.innerHTML = `
-    <div style="background:#fff;border-radius:14px;max-width:440px;width:92%;padding:24px;max-height:90vh;overflow:auto">
+    <div style="background:#fff;border-radius:14px;max-width:520px;width:92%;padding:24px;max-height:90vh;overflow:auto">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px">
-        <h3 style="margin:0;font-size:17px">💰 Record Money Received from Bosta</h3>
+        <h3 style="margin:0;font-size:17px">💰 ${editing ? 'Edit' : 'Record'} Bank Transfer from Bosta</h3>
         <button class="btn btn-ghost btn-xs" onclick="closeModal()">✕</button>
       </div>
-      <div class="form-group"><label>Amount Received (EGP) *</label><input type="number" id="br-amt" min="0" placeholder="0" inputmode="decimal"></div>
-      <div class="form-group"><label>Date</label><input type="text" id="br-date" value="${today()}"></div>
-      <div class="form-group"><label>Note (optional)</label><input type="text" id="br-note" placeholder="e.g. bank transfer"></div>
+      <div class="form-group"><label>Amount Received (EGP) *</label>
+        <input type="number" id="br-amt" min="0" placeholder="0" inputmode="decimal" value="${editing ? esc(editing.amount) : ''}">
+      </div>
+      <div class="form-group"><label>Date</label>
+        <input type="text" id="br-date" value="${editing ? esc(editing.date || '') : today()}">
+      </div>
+      <div class="form-group"><label>Note (optional)</label>
+        <input type="text" id="br-note" placeholder="e.g. bank transfer reference" value="${editing ? esc(editing.note || '') : ''}">
+      </div>
+      <div class="form-group">
+        <label>Orders covered by this transfer</label>
+        <textarea id="br-codes" rows="6" placeholder="Paste the order codes from Bosta's transfer breakdown, one per line (or separated by spaces / commas):
+ORD-3AT4Q
+ORD-UYD68
+ORD-XXXXX">${esc(codesText)}</textarea>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">
+          Each Bosta bank transfer lists which orders it covered. Paste those codes here so the dashboard can mark those orders as paid and only count the rest as "still to receive".
+        </div>
+      </div>
       <div style="display:flex;gap:10px;margin-top:8px">
-        <button class="btn btn-primary" style="flex:1" onclick="saveBostaReceipt()">Save</button>
+        <button class="btn btn-primary" style="flex:1" onclick="saveBostaReceipt(${editing ? `'${editing.id}'` : 'null'})">${editing ? 'Save changes' : 'Save'}</button>
         <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
       </div>
     </div>`;
@@ -2956,25 +3031,37 @@ function openBostaReceipt() {
   setTimeout(() => document.getElementById('br-amt')?.focus(), 60);
 }
 
-async function saveBostaReceipt() {
+function editBostaReceipt(id) { openBostaReceipt(id); }
+
+async function saveBostaReceipt(existingId) {
   const amount = parseFloat(document.getElementById('br-amt').value || 0);
   const note = document.getElementById('br-note').value.trim();
   const date = document.getElementById('br-date').value.trim() || today();
+  const codesRaw = document.getElementById('br-codes')?.value || '';
+  const order_codes = codesRaw.split(/[\s,;]+/).map(x => x.trim().toUpperCase()).filter(Boolean);
   if (!amount || amount <= 0) { showToast('Please enter a valid amount'); return; }
-  const data = { id: genId(), amount, note, date, created_at: new Date().toISOString() };
   try {
-    const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/bosta_receipts`, {
-      method: 'POST',
-      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=representation' },
-      body: JSON.stringify(data)
-    });
-    if (!res.ok) throw new Error(await res.text());
-    const saved = await res.json().catch(() => []);
-    if (!Array.isArray(saved) || !saved.length) throw new Error('Row not persisted');
+    if (existingId) {
+      const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/bosta_receipts?id=eq.${encodeURIComponent(existingId)}`, {
+        method: 'PATCH',
+        headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=representation' },
+        body: JSON.stringify({ amount, note, date, order_codes })
+      });
+      if (!res.ok) throw new Error(await res.text());
+    } else {
+      const data = { id: genId(), amount, note, date, order_codes, created_at: new Date().toISOString() };
+      const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/bosta_receipts`, {
+        method: 'POST',
+        headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=representation' },
+        body: JSON.stringify(data)
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const saved = await res.json().catch(() => []);
+      if (!Array.isArray(saved) || !saved.length) throw new Error('Row not persisted');
+    }
     const fresh = await sbSupplierGet('bosta_receipts');
     if (fresh) { bostaCashCache.receipts = fresh; bostaCashCache.loaded = true; }
-    else bostaCashCache.receipts = [saved[0], ...bostaCashCache.receipts];
-    showToast('Receipt recorded ✓');
+    showToast(existingId ? 'Transfer updated ✓' : 'Transfer recorded ✓');
     closeModal();
     renderBostaCash();
   } catch (e) { showToast('Error: ' + e.message); }
