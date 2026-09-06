@@ -2511,11 +2511,33 @@ function renderBostaCash() {
   const delivered = orders.filter(o => o.status === 'Delivered');
 
   // ── Money I SHOULD receive from Bosta ───────────────────────────────
-  // Per spec: total collected of DELIVERED orders − their actual shipping.
-  // Returned orders are NOT part of this figure (nothing to collect on them).
-  const collected     = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
-  const delShip       = delivered.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
+  // Per spec: total collected of DELIVERED orders − their shipping.
+  //
+  // Which "shipping" to use:
+  //   • cash_cycle_closed=true  → actual_shipping (real Bosta wallet fee).
+  //   • cash_cycle_closed=false → est_shipping    (what the customer paid at
+  //                               checkout — matches Bosta's rate table).
+  //     The stored actual_shipping on an open cycle is a formula estimate
+  //     that rounds up + VATs, so it over-deducts and under-counts what
+  //     Bosta owes us. est_shipping (the amount actually collected as
+  //     shipping) is the right proxy until Bosta finalises the invoice.
+  //   • If est_shipping is missing/0 on an open cycle, fall back to
+  //     actual_shipping so we never leave shipping unaccounted for.
+  const shippingFeeFor = (o) => {
+    const est    = parseFloat(o.est_shipping    || 0);
+    const actual = parseFloat(o.actual_shipping || 0);
+    if (o.cash_cycle_closed === true) return actual;
+    return est > 0 ? est : actual;
+  };
+  const collected = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
+  const delShip   = delivered.reduce((a, o) => a + shippingFeeFor(o), 0);
   const shouldReceive = collected - delShip;
+
+  // Split so we can show the reader closed vs open cycle receivable.
+  const closedD  = delivered.filter(o => o.cash_cycle_closed === true);
+  const openD    = delivered.filter(o => o.cash_cycle_closed !== true);
+  const closedNet = closedD.reduce((a, o) => a + parseFloat(o.total || 0) - shippingFeeFor(o), 0);
+  const openNet   = openD  .reduce((a, o) => a + parseFloat(o.total || 0) - shippingFeeFor(o), 0);
 
   // ── Received so far — sum of manually-recorded bank transfers ───────
   const receipts = (bostaCashCache.receipts || [])
@@ -2539,13 +2561,13 @@ function renderBostaCash() {
     .filter(o => !paidBy.has(String(o.code || '').toUpperCase()))
     .sort((a, b) => String(a.created_at || a.date || '').localeCompare(String(b.created_at || b.date || '')));
 
-  // Money still to receive = sum over UNPAID delivered orders of (total − actual shipping)
+  // Money still to receive = sum over UNPAID delivered orders of (total − shipping)
   const stillToReceive = unpaidOrders.reduce((a, o) =>
-    a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0)), 0);
+    a + (parseFloat(o.total || 0) - shippingFeeFor(o)), 0);
 
   // Sanity metric: does the cash we've received match the paid orders' net?
   const paidNet = paidOrders.reduce((a, o) =>
-    a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0)), 0);
+    a + (parseFloat(o.total || 0) - shippingFeeFor(o)), 0);
   const diff = received - paidNet;
 
   // ── Bank transfers table ────────────────────────────────────────────
@@ -2616,11 +2638,50 @@ function renderBostaCash() {
 
       <div style="font-size:12px;color:var(--muted);margin:14px 0 6px">
         Delivered collected: EGP ${fmt(collected)} &nbsp;−&nbsp; delivered shipping: EGP ${fmt(delShip)} &nbsp;=&nbsp; <b>EGP ${fmt(shouldReceive)}</b>
+        <div style="margin-top:4px">
+          🔒 Closed cash cycles (${closedD.length} orders): <b>EGP ${fmt(closedNet)}</b>
+          &nbsp;•&nbsp; 🕒 Open cash cycles (${openD.length} orders): <b>EGP ${fmt(openNet)}</b>
+        </div>
         ${Math.abs(diff) >= 1
           ? `<div style="margin-top:4px;color:${diff > 0 ? '#d97706' : '#dc2626'}">
               ⚠️ Cash received (${fmt(received)}) ${diff > 0 ? 'exceeds' : 'is short of'} the paid orders' net (${fmt(paidNet)}) by EGP ${fmt(Math.abs(diff))} — check the order-code lists on the transfers below.
             </div>` : ''}
       </div>
+
+      <details style="margin:10px 0 6px;border:1px solid var(--line);padding:8px 12px">
+        <summary style="cursor:pointer;font-weight:600;font-size:13px">🔍 Per-order breakdown (${delivered.length} delivered)</summary>
+        <div style="max-height:340px;overflow:auto;margin-top:8px">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead>
+              <tr style="text-align:left;border-bottom:1px solid var(--line)">
+                <th style="padding:6px 4px">Order</th>
+                <th style="padding:6px 4px">Cycle</th>
+                <th style="padding:6px 4px;text-align:right">Total</th>
+                <th style="padding:6px 4px;text-align:right">Est. ship</th>
+                <th style="padding:6px 4px;text-align:right">Actual ship</th>
+                <th style="padding:6px 4px;text-align:right">Used</th>
+                <th style="padding:6px 4px;text-align:right">Net</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${delivered.slice().sort((a, b) => String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || ''))).map(o => {
+                const used = shippingFeeFor(o);
+                const net  = parseFloat(o.total || 0) - used;
+                const cyc  = o.cash_cycle_closed === true ? '🔒 closed' : '🕒 open';
+                return `<tr>
+                  <td style="padding:4px">${esc(o.code || '')}</td>
+                  <td style="padding:4px">${cyc}</td>
+                  <td style="padding:4px;text-align:right">${fmt(o.total)}</td>
+                  <td style="padding:4px;text-align:right">${fmt(o.est_shipping)}</td>
+                  <td style="padding:4px;text-align:right">${fmt(o.actual_shipping)}</td>
+                  <td style="padding:4px;text-align:right"><b>${fmt(used)}</b></td>
+                  <td style="padding:4px;text-align:right"><b>${fmt(net)}</b></td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </details>
 
       <h4 style="margin:18px 0 6px;font-size:13px;color:var(--muted)">🏦 Bank transfers from Bosta</h4>
       <div class="table-wrap">
