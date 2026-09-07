@@ -1529,30 +1529,57 @@ function renderMediaBuyer() {
   const delivered = orders.filter(o => o.status === 'Delivered');
 
   // ── Current calendar month window ──────────────────────────────────
+  // Two subtleties that used to skew the numbers:
+  //  1) `new Date(y, m, 1).toISOString()` returns UTC. For any browser
+  //     east of UTC (Egypt +02/+03), local Sep-1 midnight becomes
+  //     Aug-31 21:00 UTC — so the sliced "day" started with the
+  //     PREVIOUS month, which pulled Aug-31 rows into September.
+  //  2) Old expenses were saved with `date` in `DD/MM/YYYY` and newer
+  //     ones in `YYYY-MM-DD`. A string-compare against `2026-09-01`
+  //     silently excluded every `03/09/2026` row.
+  // The fix is to parse each row's date into a real `{y, m}` and
+  // compare against the local month/year, not lexicographic strings.
   const now = new Date();
-  const y = now.getFullYear(), m = now.getMonth();
-  const monthStart = new Date(y, m, 1, 0, 0, 0).toISOString();
-  const nextMonth  = new Date(y, m + 1, 1, 0, 0, 0).toISOString();
+  const curY = now.getFullYear();
+  const curM = now.getMonth() + 1;              // 1..12
+  const _parseMonthYear = (raw) => {
+    const s = String(raw || '').trim();
+    if (!s) return null;
+    let mm, yy;
+    // ISO: YYYY-MM-DD (also matches full ISO timestamps that start that way).
+    let m1 = s.match(/^(\d{4})-(\d{1,2})/);
+    if (m1) { yy = +m1[1]; mm = +m1[2]; return { y: yy, m: mm }; }
+    // DD/MM/YYYY (Egyptian) or D/M/YYYY.
+    m1 = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (m1) { mm = +m1[2]; yy = +m1[3]; return { y: yy, m: mm }; }
+    // Fallback: let JS parse.
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) return { y: d.getFullYear(), m: d.getMonth() + 1 };
+    return null;
+  };
+  const monthOfExpense = (e) =>
+    _parseMonthYear(e.date) || _parseMonthYear(e.created_at);
+  const monthOfOrder = (o) =>
+    _parseMonthYear(o.created_at) || _parseMonthYear(o.date);
+  const inMonth = (my) => !!my && my.y === curY && my.m === curM;
+  // Compat labels used elsewhere in the render (drawer table etc).
   const dateOfExpense = (e) => String(e.date || e.created_at || '').slice(0, 10);
   const dateOfOrder   = (o) => String(o.created_at || o.date || '').slice(0, 10);
-  const monthStartDay = monthStart.slice(0, 10);
-  const nextMonthDay  = nextMonth.slice(0, 10);
-  const inMonth = (day) => day >= monthStartDay && day < nextMonthDay;
 
   const MO_AR = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
   const MO_EN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const monthLabel = `${MO_AR[m]} ${y} · ${MO_EN[m]} ${y}`;
+  const monthLabel = `${MO_AR[curM - 1]} ${curY} · ${MO_EN[curM - 1]} ${curY}`;
 
   // ── This month's owed amount ───────────────────────────────────────
   //   Owed = 20% × Paid Ads spent this month
   //        +  1% × delivered product sales (excl. shipping) this month
   //        −  Media Buyer payments already made this month
   const paidAdsMonth = expenses
-    .filter(e => e.category === 'Paid Ads' && inMonth(dateOfExpense(e)))
+    .filter(e => e.category === 'Paid Ads' && inMonth(monthOfExpense(e)))
     .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
 
   const monthDelivered = delivered
-    .filter(o => inMonth(dateOfOrder(o)))
+    .filter(o => inMonth(monthOfOrder(o)))
     .slice()
     .sort((a, b) => String(a.created_at || a.date || '').localeCompare(String(b.created_at || b.date || '')));
   // Sales base for the 1% share = total − actual_shipping (real Bosta
@@ -1571,7 +1598,7 @@ function renderMediaBuyer() {
 
   const mbPayments = expenses.filter(e => e.category === 'Media Buyer');
   const paidThisMonth = mbPayments
-    .filter(e => inMonth(dateOfExpense(e)))
+    .filter(e => inMonth(monthOfExpense(e)))
     .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
 
   const mbOwed = Math.round(Math.max(0, grossOwed - paidThisMonth) * 100) / 100;
@@ -1588,8 +1615,9 @@ function renderMediaBuyer() {
     'أغسطس':8,'اغسطس':8,'سبتمبر':9,'أكتوبر':10,'اكتوبر':10,'نوفمبر':11,'ديسمبر':12 };
   const monthKeyForPayment = (e) => {
     const desc = String(e.description || '').toLowerCase();
-    const fallbackDay = dateOfExpense(e);
-    const fallbackYear = /^(\d{4})/.test(fallbackDay) ? parseInt(fallbackDay.slice(0, 4)) : new Date().getFullYear();
+    // Parse the payment date properly so DD/MM/YYYY rows aren't ignored.
+    const fallback = monthOfExpense(e);
+    const fallbackYear = fallback ? fallback.y : new Date().getFullYear();
     // English match: "for <month> [year]" or just "<month> [year]".
     const enRe = new RegExp('(?:\\bfor\\s+)?\\b(' + Object.keys(MONTHS_EN).join('|') + ')\\b(?:\\s+(\\d{4}))?', 'i');
     const enM = desc.match(enRe);
@@ -1607,8 +1635,8 @@ function renderMediaBuyer() {
         return `${yy}-${String(mm).padStart(2, '0')}`;
       }
     }
-    // Fallback: group by the payment date itself.
-    return /^\d{4}-\d{2}/.test(fallbackDay) ? fallbackDay.slice(0, 7) : null;
+    // Fallback: group by the payment date's parsed month.
+    return fallback ? `${fallback.y}-${String(fallback.m).padStart(2, '0')}` : null;
   };
 
   const byMonth = new Map();
