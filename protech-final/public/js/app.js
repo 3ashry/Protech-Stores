@@ -1505,7 +1505,6 @@ function renderFinancials() {
 
   if (typeof renderBostaCash === 'function') renderBostaCash();
   if (typeof renderSupplierAccount === 'function') renderSupplierAccount();
-  if (typeof renderDeliveredMargin === 'function') renderDeliveredMargin();
 }
 
 // ═══════════════════════════════════════════════════════════════════
