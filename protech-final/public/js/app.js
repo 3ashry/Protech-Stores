@@ -1504,6 +1504,7 @@ function renderFinancials() {
     </tr>`).join('') : '<tr><td colspan="5"><div class="empty">No expenses recorded</div></td></tr>';
 
   if (typeof renderBostaCash === 'function') renderBostaCash();
+  if (typeof renderSupplierAccount === 'function') renderSupplierAccount();
 }
 
 // ── EXPENSES ──
@@ -2320,29 +2321,21 @@ function renderSupplierAccount() {
   const host = document.getElementById('supplier-account');
   if (!host) return;
 
-  const goodsOwed = computeSupplierOwed(); // goods for delivered + returned-not-restocked only
-  // Extra things bought from Elashry (e.g. for videos) = expenses with category "Elashry".
-  const elashryPurchases = (cache.expenses || []).filter(e => e.category === 'Elashry');
-  const purchasesTotal = elashryPurchases.reduce((a, c) => a + parseFloat(c.amount || 0), 0);
-  const owed = goodsOwed + purchasesTotal;
-  const paid = supplierCache.payments.reduce((a, p) => a + parseFloat(p.amount || 0), 0);
-  const remaining = owed - paid;
-  const settled = remaining <= 0;
-  const purchaseRows = elashryPurchases.length
-    ? elashryPurchases.map(c => `
-        <tr>
-          <td>${esc(c.date) || '—'}</td>
-          <td><strong>EGP ${fmt(c.amount)}</strong></td>
-          <td>${esc(c.description) || '—'}</td>
-          <td><button class="btn btn-danger btn-xs" onclick="delExpense('${c.id}')">✕</button></td>
-        </tr>`).join('')
-    : '<tr><td colspan="4"><div class="empty">No purchases from Elashry yet</div></td></tr>';
-  // Buy cost of goods from Returned orders not yet returned to the warehouse.
-  const notReturnedCost = (cache.orders || [])
-    .filter(o => o.status === 'Returned' && !o.warehouse_confirmed)
-    .reduce((a, o) => a + (o.products || []).reduce((b, p) => b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
+  // ── Owed to Elashry — DELIVERED orders only ─────────────────────────
+  // Strict spec: sum of buy_price × qty across every delivered order's
+  // product lines. No returned-not-restocked branch, no ad-hoc Elashry
+  // purchases folded in — those live in the Expenses section now.
+  const delivered = (cache.orders || []).filter(o => o.status === 'Delivered');
+  const goodsOwed = delivered.reduce((a, o) =>
+    a + (o.products || []).reduce((b, p) =>
+      b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
 
-  const payRows = supplierCache.payments.length
+  const paid = (supplierCache.payments || [])
+    .reduce((a, p) => a + parseFloat(p.amount || 0), 0);
+  const remaining = goodsOwed - paid;
+  const settled = remaining <= 0;
+
+  const payRows = (supplierCache.payments || []).length
     ? supplierCache.payments.map(p => `
         <tr>
           <td>${esc(p.date) || '—'}</td>
@@ -2352,6 +2345,23 @@ function renderSupplierAccount() {
         </tr>`).join('')
     : '<tr><td colspan="4"><div class="empty">No payments to Elashry recorded yet</div></td></tr>';
 
+  // Per-order breakdown so any wrongly-priced line is easy to spot.
+  const breakdownRows = delivered.length
+    ? delivered.slice()
+        .sort((a, b) => String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || '')))
+        .map(o => {
+          const buy = (o.products || []).reduce((b, p) =>
+            b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0);
+          return `
+            <tr>
+              <td style="padding:4px">${esc(o.code || '')}</td>
+              <td style="padding:4px;opacity:.75">${esc(String(o.created_at || o.date || '').slice(0, 10))}</td>
+              <td style="padding:4px">${esc(o.customer_name || '')}</td>
+              <td style="padding:4px;text-align:right"><b>EGP ${fmt(buy)}</b></td>
+            </tr>`;
+        }).join('')
+    : '<tr><td colspan="4"><div class="empty">No delivered orders yet</div></td></tr>';
+
   host.innerHTML = `
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">
@@ -2360,34 +2370,48 @@ function renderSupplierAccount() {
           ${supplierCache.loading ? '<span style="font-size:12px;color:var(--muted)">loading…</span>' : ''}
         </h3>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-ghost btn-sm" onclick="downloadElashryExcel()">📥 Excel</button>
-          <button class="btn btn-ghost btn-sm" onclick="openExpense('Elashry')">+ Record Purchase</button>
+          <button class="btn btn-ghost btn-sm" onclick="downloadSupplierBreakdownExcel()">📥 Excel</button>
           <button class="btn btn-primary btn-sm" onclick="openSupplierPayment()">+ Record Payment</button>
         </div>
       </div>
 
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:8px">
-        <div class="stat-card orange"><div class="stat-val">EGP ${fmt(owed)}</div><div class="stat-label">How much I owe Elashry (goods + purchases)</div></div>
-        <div class="stat-card blue"><div class="stat-val">EGP ${fmt(paid)}</div><div class="stat-label">Total Paid to Elashry</div></div>
-        <div class="stat-card ${settled ? 'green' : 'red'}"><div class="stat-val">EGP ${fmt(Math.abs(remaining))}</div><div class="stat-label">${settled ? (remaining < 0 ? 'Overpaid / Credit' : 'Fully Settled') : 'Remaining to Pay'}</div></div>
-      </div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
-        Owed = buy price × qty for <strong>Delivered</strong> orders + <strong>Returned</strong> orders not yet returned to the warehouse (returned-and-restocked don't count) <strong>+ purchases from Elashry</strong> below. &nbsp;Goods: EGP ${fmt(goodsOwed)} &nbsp;+&nbsp; Purchases: EGP ${fmt(purchasesTotal)}
-      </div>
-      <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:12px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-        <span style="font-weight:700;font-size:13px">↩️ Goods not returned to warehouse yet (buy cost)</span>
-        <span style="font-weight:900;font-size:16px;color:#c2410c">EGP ${fmt(notReturnedCost)}</span>
-      </div>
-
-      <h4 style="margin:6px 0;font-size:13px;color:var(--muted)">Purchases from Elashry (for videos etc. — added to what you owe)</h4>
-      <div class="table-wrap" style="margin-bottom:16px">
-        <table>
-          <thead><tr><th>Date</th><th>Amount</th><th>What</th><th></th></tr></thead>
-          <tbody>${purchaseRows}</tbody>
-        </table>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:8px">
+        <div class="stat-card orange">
+          <div class="stat-val">EGP ${fmt(goodsOwed)}</div>
+          <div class="stat-label">Total owed to Elashry<br><span style="opacity:.7;font-size:11px">${delivered.length} delivered orders · Σ buy price × qty</span></div>
+        </div>
+        <div class="stat-card blue">
+          <div class="stat-val">EGP ${fmt(paid)}</div>
+          <div class="stat-label">Total paid to Elashry<br><span style="opacity:.7;font-size:11px">${(supplierCache.payments || []).length} payments</span></div>
+        </div>
+        <div class="stat-card ${settled ? 'green' : 'red'}">
+          <div class="stat-val">EGP ${fmt(Math.abs(remaining))}</div>
+          <div class="stat-label">${settled ? (remaining < 0 ? 'Overpaid / Credit' : 'Fully Settled ✓') : 'Remaining to pay'}</div>
+        </div>
       </div>
 
-      <h4 style="margin:6px 0;font-size:13px;color:var(--muted)">Payments to Elashry</h4>
+      <div style="font-size:12px;color:var(--muted);margin:14px 0 6px">
+        Owed = Σ (buy price × qty) across every <b>delivered</b> order's product lines.
+      </div>
+
+      <details style="margin:10px 0 6px;border:1px solid var(--line);padding:8px 12px">
+        <summary style="cursor:pointer;font-weight:600;font-size:13px">🔍 Per-order breakdown (${delivered.length} delivered)</summary>
+        <div style="max-height:340px;overflow:auto;margin-top:8px">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead>
+              <tr style="text-align:left;border-bottom:1px solid var(--line)">
+                <th style="padding:6px 4px">Order</th>
+                <th style="padding:6px 4px">Date</th>
+                <th style="padding:6px 4px">Customer</th>
+                <th style="padding:6px 4px;text-align:right">Buy cost</th>
+              </tr>
+            </thead>
+            <tbody>${breakdownRows}</tbody>
+          </table>
+        </div>
+      </details>
+
+      <h4 style="margin:18px 0 6px;font-size:13px;color:var(--muted)">💵 Payments to Elashry</h4>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Date</th><th>Amount</th><th>Note</th><th></th></tr></thead>
@@ -2473,11 +2497,16 @@ async function delSupplierPayment(id) {
 }
 
 
-// The Elashry supplier block is disabled while we rebuild the financials
-// screen block-by-block. `renderSupplierAccount` and the Elashry payment
-// data model are kept intact so we can re-enable them as a dedicated block
-// later — this init just no-longer auto-injects the card or loads its data.
-function injectSupplierUI() { /* disabled: rebuilding block-by-block */ }
+// The supplier card lives inside a static <div id="supplier-account"> in
+// index.html now, so no DOM injection is needed. This init just kicks off
+// the payment ledger load on boot so the card renders with fresh data.
+function injectSupplierUI() { /* not needed — div is in index.html */ }
+
+(function initSupplier() {
+  const run = () => { loadSupplierPayments(); };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
+  else run();
+})();
 
 // ═══════════════════════════════════════════════════════════════════
 //  SAFE / BANK — money received from Bosta (logged manually)
