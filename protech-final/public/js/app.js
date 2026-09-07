@@ -388,6 +388,99 @@ function renderHome() {
       </div>
       ${f.comment ? `<div style="font-size:13px;color:var(--muted);font-style:italic;margin-top:6px">"${esc(f.comment)}"</div>` : ''}
     </div>`).join('');
+
+  if (typeof renderHomeTopProductsChart === 'function') renderHomeTopProductsChart();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  🏆 HOME — TOP PRODUCTS BY QUANTITY SOLD (delivered orders)
+//  Horizontal bar chart, sorted largest → smallest. Aggregates
+//  quantity across every delivered order's product lines and ranks
+//  products by pieces sold.
+// ═══════════════════════════════════════════════════════════════════
+let _homeTopProductsChart = null;
+function renderHomeTopProductsChart() {
+  const canvas = document.getElementById('home-top-products-chart');
+  const note = document.getElementById('home-top-products-note');
+  if (!canvas || typeof Chart === 'undefined') return;
+
+  const delivered = (cache.orders || []).filter(o => o.status === 'Delivered');
+  const counts = new Map();      // code → { name, qty }
+  for (const o of delivered) {
+    for (const p of (o.products || [])) {
+      const code = String(p.code || '').trim();
+      const key  = code || String(p.name || '').trim();
+      if (!key) continue;
+      const name = p.name
+        || (cache.products || []).find(x => x.code === code)?.name
+        || code
+        || '(unnamed)';
+      const cur = counts.get(key) || { name, qty: 0 };
+      cur.qty += (parseInt(p.qty || 1) || 1);
+      counts.set(key, cur);
+    }
+  }
+  if (!counts.size) {
+    if (_homeTopProductsChart) { _homeTopProductsChart.destroy(); _homeTopProductsChart = null; }
+    if (note) note.textContent = 'No delivered orders yet';
+    return;
+  }
+
+  const sorted = Array.from(counts.entries())
+    .map(([code, v]) => ({ code, name: v.name, qty: v.qty }))
+    .sort((a, b) => b.qty - a.qty)
+    .slice(0, 15); // top 15 keeps the chart legible
+
+  const labels = sorted.map(x => {
+    const s = x.name.length > 40 ? x.name.slice(0, 38) + '…' : x.name;
+    return s;
+  });
+  const data = sorted.map(x => x.qty);
+  const totalPieces = Array.from(counts.values()).reduce((a, v) => a + v.qty, 0);
+  if (note) note.textContent = `${sorted.length} of ${counts.size} products · ${totalPieces} pcs total delivered`;
+
+  if (_homeTopProductsChart) {
+    _homeTopProductsChart.data.labels = labels;
+    _homeTopProductsChart.data.datasets[0].data = data;
+    _homeTopProductsChart.update();
+    return;
+  }
+  _homeTopProductsChart = new Chart(canvas.getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Pieces sold (delivered)',
+        data,
+        backgroundColor: 'rgba(236,48,19,0.85)',
+        borderRadius: 4,
+      }],
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const row = sorted[ctx.dataIndex];
+              return `${row.qty} pcs${row.code ? ` · ${row.code}` : ''}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          beginAtZero: true,
+          ticks: { precision: 0 },
+          grid: { color: 'rgba(0,0,0,0.06)' },
+        },
+        y: { grid: { display: false } },
+      },
+    },
+  });
 }
 
 // ── CATEGORY LABELS ──
