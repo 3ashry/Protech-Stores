@@ -1559,12 +1559,18 @@ function renderMediaBuyer() {
   };
   const monthOfExpense = (e) =>
     _parseMonthYear(e.date) || _parseMonthYear(e.created_at);
+  // For delivered-orders bucketing we prefer the ACTUAL delivery date
+  // (the day Bosta finished the delivery, stamped into orders.delivered_at
+  // by the sync). Falls back to created_at for historical rows that
+  // pre-date the delivered_at column being populated.
   const monthOfOrder = (o) =>
-    _parseMonthYear(o.created_at) || _parseMonthYear(o.date);
+    _parseMonthYear(o.delivered_at)
+    || _parseMonthYear(o.created_at)
+    || _parseMonthYear(o.date);
   const inMonth = (my) => !!my && my.y === curY && my.m === curM;
   // Compat labels used elsewhere in the render (drawer table etc).
   const dateOfExpense = (e) => String(e.date || e.created_at || '').slice(0, 10);
-  const dateOfOrder   = (o) => String(o.created_at || o.date || '').slice(0, 10);
+  const dateOfOrder   = (o) => String(o.delivered_at || o.created_at || o.date || '').slice(0, 10);
 
   const MO_AR = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
   const MO_EN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];

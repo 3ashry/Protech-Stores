@@ -983,7 +983,21 @@ export default async function handler(req, res) {
       // 1) Auto-advance status (skip only if warehouse has already reclaimed
       //    the parcel — a full close, nothing more to sync).
       if (!o.warehouse_confirmed) {
-        if (mapped && mapped !== o.status) patch.status = mapped;
+        if (mapped && mapped !== o.status) {
+          patch.status = mapped;
+          // Stamp delivered_at when this sync is the one that flips the
+          // order to Delivered — so the Media Buyer salary can bucket
+          // sales by the day Bosta actually delivered, not the day we
+          // created the order. Prefer Bosta's own delivery timestamp
+          // when it's on the delivery object; fall back to server now().
+          if (mapped === 'Delivered' && !o.delivered_at) {
+            const bostaTs = d?.deliveredAt
+              || d?.state?.updateTimestamp
+              || d?.stateHistory?.find?.(s => (s?.value || '').toLowerCase().includes('deliver'))?.date
+              || null;
+            patch.delivered_at = bostaTs || new Date().toISOString();
+          }
+        }
         else if (!mapped && d.state?.value) unknownStates.add(d.state.value);
       }
 
@@ -1026,10 +1040,11 @@ export default async function handler(req, res) {
       if (trace) trace.steps.push({ step: 'patch', currentStatus: o.status, finalMapped: mapped, patch, warehouse_confirmed: o.warehouse_confirmed });
       if (Object.keys(patch).length) {
         const r = await sbPatch(o.id, patch);
-        // If cash_cycle_closed column doesn't exist yet (migration not run),
-        // retry without it so the rest of the sync still succeeds.
-        if (!r.ok && 'cash_cycle_closed' in patch) {
-          const { cash_cycle_closed, ...rest } = patch;
+        // If cash_cycle_closed or delivered_at columns don't exist yet
+        // (migration not run), retry without them so the rest of the
+        // sync still succeeds.
+        if (!r.ok && ('cash_cycle_closed' in patch || 'delivered_at' in patch)) {
+          const { cash_cycle_closed, delivered_at, ...rest } = patch;
           if (Object.keys(rest).length) await sbPatch(o.id, rest);
         }
         if (trace) trace.steps.push({ step: 'sbPatch', ok: r.ok, status: r.status });
@@ -1119,7 +1134,21 @@ export default async function handler(req, res) {
         // 1) Status — same mapping logic as the main loop.
         if (!o.warehouse_confirmed) {
           const mapped = mapState(del);
-          if (mapped && mapped !== o.status) patch.status = mapped;
+          if (mapped && mapped !== o.status) {
+          patch.status = mapped;
+          // Stamp delivered_at when this sync is the one that flips the
+          // order to Delivered — so the Media Buyer salary can bucket
+          // sales by the day Bosta actually delivered, not the day we
+          // created the order. Prefer Bosta's own delivery timestamp
+          // when it's on the delivery object; fall back to server now().
+          if (mapped === 'Delivered' && !o.delivered_at) {
+            const bostaTs = d?.deliveredAt
+              || d?.state?.updateTimestamp
+              || d?.stateHistory?.find?.(s => (s?.value || '').toLowerCase().includes('deliver'))?.date
+              || null;
+            patch.delivered_at = bostaTs || new Date().toISOString();
+          }
+        }
         }
         // 2) Actual shipping + cash-cycle flag (only meaningful once the
         //    order has reached a final state).
@@ -1135,8 +1164,8 @@ export default async function handler(req, res) {
         }
         if (Object.keys(patch).length) {
           const pr = await sbPatch(o.id, patch);
-          if (!pr.ok && 'cash_cycle_closed' in patch) {
-            const { cash_cycle_closed, ...rest } = patch;
+          if (!pr.ok && ('cash_cycle_closed' in patch || 'delivered_at' in patch)) {
+            const { cash_cycle_closed, delivered_at, ...rest } = patch;
             if (Object.keys(rest).length) await sbPatch(o.id, rest);
           }
           backfillChanges.push({ code: o.code, from: o.status, ...patch });
@@ -1175,7 +1204,21 @@ export default async function handler(req, res) {
         if (!o.bosta_id && bostaId) patch.bosta_id = bostaId;
         if (!o.warehouse_confirmed) {
           const mapped = mapState(del);
-          if (mapped && mapped !== o.status) patch.status = mapped;
+          if (mapped && mapped !== o.status) {
+          patch.status = mapped;
+          // Stamp delivered_at when this sync is the one that flips the
+          // order to Delivered — so the Media Buyer salary can bucket
+          // sales by the day Bosta actually delivered, not the day we
+          // created the order. Prefer Bosta's own delivery timestamp
+          // when it's on the delivery object; fall back to server now().
+          if (mapped === 'Delivered' && !o.delivered_at) {
+            const bostaTs = d?.deliveredAt
+              || d?.state?.updateTimestamp
+              || d?.stateHistory?.find?.(s => (s?.value || '').toLowerCase().includes('deliver'))?.date
+              || null;
+            patch.delivered_at = bostaTs || new Date().toISOString();
+          }
+        }
         }
         const effStatus = patch.status || o.status;
         if (effStatus === 'Delivered' || effStatus === 'Returned') {
@@ -1189,8 +1232,8 @@ export default async function handler(req, res) {
         }
         if (Object.keys(patch).length) {
           const pr = await sbPatch(o.id, patch);
-          if (!pr.ok && 'cash_cycle_closed' in patch) {
-            const { cash_cycle_closed, ...rest } = patch;
+          if (!pr.ok && ('cash_cycle_closed' in patch || 'delivered_at' in patch)) {
+            const { cash_cycle_closed, delivered_at, ...rest } = patch;
             if (Object.keys(rest).length) await sbPatch(o.id, rest);
           }
           shipCodeChanges.push({ code: o.code, from: o.status, ...patch });
