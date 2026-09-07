@@ -1511,7 +1511,75 @@ function renderFinancials() {
   if (typeof renderSupplierAccount === 'function') renderSupplierAccount();
   if (typeof renderMediaBuyer === 'function') renderMediaBuyer();
   if (typeof renderWeeklySalesChart === 'function') renderWeeklySalesChart();
-  if (typeof renderReturnsBlock === 'function') renderReturnsBlock();
+  if (typeof renderNetProfitBlock === 'function') renderNetProfitBlock();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  NET PROFIT — the one-number bottom line
+//    Bosta receivable (confirmed delivered, net of actual shipping)
+//    − Returns shipping (Bosta charged us for the return leg)
+//    − All expenses (every category, including Media Buyer + Elashry
+//                    supplier payments — those are real cash outflows)
+//    − Elashry owed on confirmed delivered orders (goods we still
+//      owe the supplier for)
+//    = Net Profit
+//  Uses the same "cash cycle closed" filter the Bosta and Elashry
+//  KPIs use, so both sides of the equation are apples-to-apples.
+// ═══════════════════════════════════════════════════════════════════
+function renderNetProfitBlock() {
+  const el = document.getElementById('fin-net');
+  if (!el) return;
+  const orders = cache.orders || [];
+  const products = cache.products || [];
+  const expenses = cache.expenses || [];
+
+  const shipOf = (o) => {
+    const a = parseFloat(o.actual_shipping || 0);
+    return a > 0 ? a : parseFloat(o.est_shipping || 0);
+  };
+
+  // 1. Bosta receivable — confirmed delivered, net of actual shipping.
+  const deliveredConfirmed = orders.filter(o =>
+    o.status === 'Delivered' && o.cash_cycle_closed === true
+  );
+  const bostaReceivable = deliveredConfirmed.reduce((a, o) =>
+    a + (parseFloat(o.total || 0) - shipOf(o)), 0);
+
+  // 2. Returns shipping — Bosta's fee for the return leg on every
+  //    Returned order. Falls back to est_shipping while the cycle is
+  //    still open, same as the Bosta/Elashry cards.
+  const returnedOrders = orders.filter(o => o.status === 'Returned');
+  const returnsShipping = returnedOrders.reduce((a, o) => a + shipOf(o), 0);
+
+  // 3. All expenses — every category. Includes Media Buyer payouts,
+  //    Paid Ads, and any Elashry-supplier payments the owner has
+  //    already recorded as expenses.
+  const totalExpenses = expenses.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+
+  // 4. Elashry owed — buy cost of confirmed delivered orders.
+  const elashryOwed = deliveredConfirmed.reduce((a, o) =>
+    a + (o.products || []).reduce((b, p) =>
+      b + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0), 0);
+
+  const netProfit = bostaReceivable - returnsShipping - totalExpenses - elashryOwed;
+  const winning = netProfit >= 0;
+
+  el.innerHTML = `
+    <div class="fin-row" style="opacity:.75;font-size:12px">
+      <span>${deliveredConfirmed.length} confirmed delivered · ${returnedOrders.length} returned · ${expenses.length} expenses</span>
+      <span>Cash-cycle closed only</span>
+    </div>
+    <div class="fin-row"><span>💰 Bosta receivable (confirmed delivered, net of actual shipping)</span><span class="fin-val">EGP ${fmt(bostaReceivable)}</span></div>
+    <div class="fin-row"><span>↩️ Returns shipping (Bosta's fee for return legs)</span><span class="fin-val deduct">− EGP ${fmt(returnsShipping)}</span></div>
+    <div class="fin-row"><span>🧾 All expenses (every category)</span><span class="fin-val deduct">− EGP ${fmt(totalExpenses)}</span></div>
+    <div class="fin-row"><span>🏭 Elashry owed (buy cost of confirmed delivered goods)</span><span class="fin-val deduct">− EGP ${fmt(elashryOwed)}</span></div>
+    <div class="fin-row ${winning ? 'profit' : 'loss'}" style="border-top:2px solid var(--line);padding-top:14px;margin-top:8px;font-size:1.2rem">
+      <span>${winning ? '🟢 Net Profit' : '🔴 Net Loss'}</span>
+      <span>${winning ? '+' : '−'} EGP ${fmt(Math.abs(netProfit))}</span>
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin-top:12px;line-height:1.6">
+      This is the bottom line: money Bosta owes for confirmed deliveries, minus what they charged for returns, minus every recorded expense, minus what you still owe Elashry for the goods sold. Uses only orders whose cash cycle Bosta has finalised, so every figure is definitive.
+    </div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1523,79 +1591,6 @@ function renderFinancials() {
 //  just flipped to Returned but hasn't had its cash cycle closed yet
 //  still shows a plausible figure.
 // ═══════════════════════════════════════════════════════════════════
-function renderReturnsBlock() {
-  const el = document.getElementById('fin-returns');
-  if (!el) return;
-  const returns = (cache.orders || []).filter(o => o.status === 'Returned');
-  const shipOf = (o) => {
-    const a = parseFloat(o.actual_shipping || 0);
-    return a > 0 ? a : parseFloat(o.est_shipping || 0);
-  };
-
-  const rows = returns.slice().sort((a, b) =>
-    String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || ''))
-  );
-  const totalShip = rows.reduce((a, o) => a + shipOf(o), 0);
-  const closedCount = rows.filter(o => o.cash_cycle_closed === true).length;
-  const openCount = rows.length - closedCount;
-
-  const tbodyRows = rows.length
-    ? rows.map(o => {
-        const cyc = o.cash_cycle_closed === true ? '🔒 closed' : '🕒 open';
-        const warehouseBadge = o.warehouse_confirmed
-          ? '<span style="color:#16a34a">✅ in warehouse</span>'
-          : '<span style="color:#c2410c">⏳ not yet received</span>';
-        return `
-          <tr>
-            <td><span class="badge b-orange">${esc(o.code || '')}</span></td>
-            <td style="opacity:.75">${esc(String(o.created_at || o.date || '').slice(0, 10))}</td>
-            <td>${esc(o.customer_name || '')}</td>
-            <td>${esc(o.ship_code || '')}</td>
-            <td>${cyc}</td>
-            <td>${warehouseBadge}</td>
-            <td style="text-align:right"><b>EGP ${fmt(shipOf(o))}</b></td>
-          </tr>`;
-      }).join('')
-    : '<tr><td colspan="7"><div class="empty">No returned orders yet</div></td></tr>';
-
-  el.innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:14px">
-      <div class="stat-card red">
-        <div class="stat-val">EGP ${fmt(totalShip)}</div>
-        <div class="stat-label">Total actual shipping — returns<br><span style="opacity:.7;font-size:11px">${rows.length} returned orders · Σ actual_shipping</span></div>
-      </div>
-      <div class="stat-card orange">
-        <div class="stat-val">${closedCount}</div>
-        <div class="stat-label">🔒 Cash cycle closed<br><span style="opacity:.7;font-size:11px">definitive Bosta invoice</span></div>
-      </div>
-      <div class="stat-card blue">
-        <div class="stat-val">${openCount}</div>
-        <div class="stat-label">🕒 Cash cycle still open<br><span style="opacity:.7;font-size:11px">shipping is estimated</span></div>
-      </div>
-    </div>
-
-    <div style="font-size:12px;color:var(--muted);margin:0 0 10px">
-      Each returned order contributes its <code>actual_shipping</code> (Bosta's real fee for the return leg). Falls back to <code>est_shipping</code> if the cash cycle isn't closed yet.
-    </div>
-
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Order</th>
-            <th>Date</th>
-            <th>Customer</th>
-            <th>Ship code</th>
-            <th>Cycle</th>
-            <th>Warehouse</th>
-            <th style="text-align:right">Actual shipping</th>
-          </tr>
-        </thead>
-        <tbody>${tbodyRows}</tbody>
-      </table>
-    </div>`;
-}
-
 // ═══════════════════════════════════════════════════════════════════
 //  WEEKLY SALES CHART  — delivered orders, net of actual shipping.
 //  X axis: week (Mon → Sun) that the order was DELIVERED in.
