@@ -663,6 +663,10 @@ export default async function handler(req, res) {
         const rows = await sbGet('orders?select=*&sent_to_picker_at=not.is.null&picker_prepared_at=not.is.null&status=eq.Processing&order=picker_prepared_at.desc&limit=500');
         return res.status(200).json({ ok: true, orders: await expandAll(rows.map(strip)) });
       }
+      // Diagnostic — /api/sync-status?action=picker&op=returning&debug=1
+      // returns the raw row count and the exact URL(s) hit so we can see
+      // WHY the tab is empty without needing DB access.
+      const debug = (req.query?.debug || '') === '1';
       if (op === 'returning') {
         // Parcels heading back to us — customer refused / uncollectable.
         // Semantically "returning" = "coming back and NOT yet confirmed in
@@ -689,13 +693,39 @@ export default async function handler(req, res) {
         //      • warehouse_confirmed IS NULL → row kept
         //    That leaves exactly one or=() and one plain filter, which is
         //    the least-magic query PostgREST can accept.
-        const rows = await sbGet(
-          'orders?select=*'
+        const q1 = 'orders?select=*'
           + '&or=(status.eq.On%20its%20way%20to%20me,status.eq.Returned)'
           + '&warehouse_confirmed=not.is.true'
-          + '&order=updated_at.desc.nullslast,created_at.desc&limit=500'
-        );
-        return res.status(200).json({ ok: true, orders: await expandAll(rows.map(strip)) });
+          + '&order=updated_at.desc.nullslast,created_at.desc&limit=500';
+        let rows = await sbGet(q1);
+
+        // Diagnostic breadcrumbs so we can see why the returning tab may be
+        // empty. Also runs a fallback query that filters on status only —
+        // if q1 returns 0 rows but the fallback returns something, the
+        // warehouse_confirmed filter is what's dropping them.
+        let debugInfo = null;
+        if (debug || !rows.length) {
+          const q2 = 'orders?select=code,status,warehouse_confirmed,ship_code'
+            + '&or=(status.eq.On%20its%20way%20to%20me,status.eq.Returned)'
+            + '&limit=50';
+          let fallback = [];
+          try { fallback = await sbGet(q2); } catch(_) {}
+          debugInfo = {
+            query_url: q1,
+            query_rowCount: rows.length,
+            fallback_url: q2,
+            fallback_rowCount: fallback.length,
+            fallback_sample: fallback.slice(0, 10).map(r => ({
+              code: r.code, status: r.status,
+              warehouse_confirmed: r.warehouse_confirmed,
+              ship_code: r.ship_code,
+            })),
+          };
+          console.log('[returning] debug', JSON.stringify(debugInfo));
+        }
+        const out = { ok: true, orders: await expandAll(rows.map(strip)) };
+        if (debug) out.debug = debugInfo;
+        return res.status(200).json(out);
       }
       if (op === 'receive-back') {
         // Ops manager confirms the returning parcel is physically back in
