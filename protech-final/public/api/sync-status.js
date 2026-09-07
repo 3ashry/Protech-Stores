@@ -675,9 +675,15 @@ export default async function handler(req, res) {
         // not-yet-warehouse_confirmed makes every incoming return appear.
         // The row drops off the moment the ops manager taps
         // "تم الاستلام في المخزن" (which flips warehouse_confirmed=true).
+        //
+        // Two-step OR is spelled with a nested or=(…) instead of in.(…)
+        // because PostgREST's in.() requires DOUBLE-QUOTED values around
+        // any string containing spaces or reserved chars, and forgetting
+        // the quotes silently matches nothing — which is exactly the bug
+        // that hid every 'On its way to me' row from the returning tab.
         const rows = await sbGet(
           'orders?select=*'
-          + '&status=in.(On%20its%20way%20to%20me,Returned)'
+          + '&or=(status.eq.On%20its%20way%20to%20me,status.eq.Returned)'
           + '&or=(warehouse_confirmed.is.false,warehouse_confirmed.is.null)'
           + '&order=updated_at.desc.nullslast,created_at.desc&limit=500'
         );
