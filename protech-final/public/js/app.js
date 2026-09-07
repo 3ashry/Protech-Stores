@@ -2604,6 +2604,48 @@ function downloadAllFinancesExcel() {
 function downloadFinancialsExcel() { downloadAllFinancesExcel(); }
 
 // ═══════════════════════════════════════════════════════════════════
+//  📄 DOWNLOAD FINANCIALS PDF
+//  One-click PDF of the whole Financials screen — opens the browser's
+//  print dialog with the screen isolated + printer-friendly styling.
+//  From there the user picks "Save as PDF" (or prints).
+//  Works on every desktop + mobile browser without an external lib.
+// ═══════════════════════════════════════════════════════════════════
+function downloadFinancialsPDF() {
+  const screen = document.getElementById('screen-financials');
+  if (!screen) { showToast('Open the Financials screen first'); return; }
+
+  // Force a full render so open <details> drawers etc. print with the data.
+  if (typeof renderFinancials === 'function') renderFinancials();
+
+  // Inject a temporary print-only stylesheet: hide everything on the
+  // page EXCEPT the financials screen, expand all <details>, drop
+  // interactive buttons, tighten margins so it fits letter/A4.
+  const styleId = 'pt-print-css';
+  document.getElementById(styleId)?.remove();
+  const style = document.createElement('style');
+  style.id = styleId;
+  style.media = 'print';
+  style.textContent = `
+    @page { size: A4; margin: 12mm; }
+    body * { visibility: hidden !important; }
+    #screen-financials, #screen-financials * { visibility: visible !important; }
+    #screen-financials { position: absolute !important; left: 0; top: 0; width: 100%; padding: 0 !important; margin: 0 !important; }
+    .page-header .btn, .card .btn, .card-header .btn, [onclick] { display: none !important; }
+    details, details > * { display: block !important; }
+    details > summary { list-style: none !important; }
+    .table-wrap { max-height: none !important; overflow: visible !important; }
+    .card { break-inside: avoid; page-break-inside: avoid; box-shadow: none !important; border: 1px solid #ccc; margin-bottom: 10px !important; }
+    canvas { max-width: 100% !important; height: auto !important; }
+  `;
+  document.head.appendChild(style);
+
+  // Give the render + style a beat to settle, then invoke print.
+  const cleanup = () => { document.getElementById(styleId)?.remove(); };
+  window.addEventListener('afterprint', cleanup, { once: true });
+  setTimeout(() => window.print(), 250);
+}
+
+// ═══════════════════════════════════════════════════════════════════
 //  ANALYTICS — Customer funnel (product views → checkout → orders)
 // ═══════════════════════════════════════════════════════════════════
 const ANALYTICS_SB_URL = 'https://wljxplbcfoorqpoflcdz.supabase.co';
