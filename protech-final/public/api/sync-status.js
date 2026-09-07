@@ -664,11 +664,23 @@ export default async function handler(req, res) {
         return res.status(200).json({ ok: true, orders: await expandAll(rows.map(strip)) });
       }
       if (op === 'returning') {
-        // Parcels Bosta is bringing back — customer refused / uncollectable.
-        // status='On its way to me' AND we haven't confirmed reintake yet
-        // (warehouse_confirmed=false). Once the ops manager taps "تم
-        // الاستلام في المخزن" that flag flips and the row drops off.
-        const rows = await sbGet('orders?select=*&status=eq.On%20its%20way%20to%20me&or=(warehouse_confirmed.is.false,warehouse_confirmed.is.null)&order=updated_at.desc.nullslast,created_at.desc&limit=500');
+        // Parcels heading back to us — customer refused / uncollectable.
+        // Semantically "returning" = "coming back and NOT yet confirmed in
+        // our warehouse", regardless of whether Bosta still shows the leg
+        // as in progress ('On its way to me') or has already finalised it
+        // ('Returned'). Bosta flips some parcels straight to Returned
+        // (state code 46) as soon as the RTS is issued — before the goods
+        // physically arrive here — so filtering only on 'On its way to me'
+        // hid those from the picker. Widening to include Returned-but-
+        // not-yet-warehouse_confirmed makes every incoming return appear.
+        // The row drops off the moment the ops manager taps
+        // "تم الاستلام في المخزن" (which flips warehouse_confirmed=true).
+        const rows = await sbGet(
+          'orders?select=*'
+          + '&status=in.(On%20its%20way%20to%20me,Returned)'
+          + '&or=(warehouse_confirmed.is.false,warehouse_confirmed.is.null)'
+          + '&order=updated_at.desc.nullslast,created_at.desc&limit=500'
+        );
         return res.status(200).json({ ok: true, orders: await expandAll(rows.map(strip)) });
       }
       if (op === 'receive-back') {
