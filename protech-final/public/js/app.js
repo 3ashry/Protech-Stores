@@ -1597,18 +1597,13 @@ function renderMediaBuyer() {
   const grossOwed   = adsShare + salesShare;
 
   const mbPayments = expenses.filter(e => e.category === 'Media Buyer');
-  const paidThisMonth = mbPayments
-    .filter(e => inMonth(monthOfExpense(e)))
-    .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
 
-  const mbOwed = Math.round(Math.max(0, grossOwed - paidThisMonth) * 100) / 100;
-
-  // ── Per-month history from the Media Buyer expenses ledger ─────────
-  // Groups by the month the salary is FOR, not the month it was paid.
-  // A payment made 2026-08-02 with description "Media buyer salary for
-  // July 2026" belongs under July, not August. Parse the description
-  // for an English or Arabic month name (± year); if none found, fall
-  // back to the expense date's month.
+  // ── monthKeyForPayment moved up so BOTH the "already paid this
+  //    month" deduction AND the history table use the same rule:
+  //    respect a "for <month>" tag in the description, otherwise fall
+  //    back to the payment date's month. That way a payout dated in
+  //    September whose description says "for August" is counted
+  //    against August's owed, not September's.
   const MONTHS_EN = { jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,
     jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12 };
   const MONTHS_AR = { 'يناير':1,'فبراير':2,'مارس':3,'أبريل':4,'ابريل':4,'مايو':5,'يونيو':6,'يوليو':7,
@@ -1638,6 +1633,15 @@ function renderMediaBuyer() {
     // Fallback: group by the payment date's parsed month.
     return fallback ? `${fallback.y}-${String(fallback.m).padStart(2, '0')}` : null;
   };
+
+  // "Already paid this month" respects the "for <month>" tag too —
+  // so a payment dated 07/09 with description "for August 2026" is
+  // deducted from August's owed, not September's.
+  const curMonthKey = `${curY}-${String(curM).padStart(2, '0')}`;
+  const paidThisMonth = mbPayments
+    .filter(e => monthKeyForPayment(e) === curMonthKey)
+    .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const mbOwed = Math.round(Math.max(0, grossOwed - paidThisMonth) * 100) / 100;
 
   const byMonth = new Map();
   for (const e of mbPayments) {
