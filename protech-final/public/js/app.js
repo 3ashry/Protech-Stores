@@ -1505,6 +1505,112 @@ function renderFinancials() {
 
   if (typeof renderBostaCash === 'function') renderBostaCash();
   if (typeof renderSupplierAccount === 'function') renderSupplierAccount();
+  if (typeof renderDeliveredMargin === 'function') renderDeliveredMargin();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Am I WINNING or LOSING?  — delivered-order gross margin
+//  Independent of what Bosta has actually paid out. Pure "for the
+//  orders that shipped and delivered, did the sell price cover the
+//  shipping and the buy cost?"
+//
+//   Revenue = Σ (order.total − actual_shipping) for DELIVERED orders
+//   COGS    = Σ (buy_price × qty)               for DELIVERED orders
+//   Margin  = Revenue − COGS      ← the number that tells you if
+//                                    you're winning or losing money.
+// ═══════════════════════════════════════════════════════════════════
+function renderDeliveredMargin() {
+  const host = document.getElementById('fin-margin');
+  if (!host) return;
+  const orders = cache.orders || [];
+  const products = cache.products || [];
+  const delivered = orders.filter(o => o.status === 'Delivered');
+
+  const rows = delivered.map(o => {
+    const total  = parseFloat(o.total || 0);
+    const ship   = parseFloat(o.actual_shipping || 0);
+    const buy    = (o.products || []).reduce((b, p) =>
+      b + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0);
+    const rev    = total - ship;             // money Bosta owes me
+    const margin = rev - buy;                // winning (+) / losing (−)
+    return { o, total, ship, buy, rev, margin };
+  });
+
+  const revenue = rows.reduce((a, r) => a + r.rev, 0);
+  const cogs    = rows.reduce((a, r) => a + r.buy, 0);
+  const margin  = revenue - cogs;
+  const winning = margin >= 0;
+
+  // Losing-order surface — the ones that dragged us below zero.
+  const losers = rows.filter(r => r.margin < 0).sort((a, b) => a.margin - b.margin);
+  const loserSum = losers.reduce((a, r) => a + r.margin, 0);
+  const marginPct = revenue > 0 ? (margin / revenue) * 100 : 0;
+
+  const loserRows = losers.length
+    ? losers.slice(0, 20).map(r => `
+        <tr>
+          <td style="padding:4px">${esc(r.o.code || '')}</td>
+          <td style="padding:4px;opacity:.75">${esc(String(r.o.created_at || r.o.date || '').slice(0, 10))}</td>
+          <td style="padding:4px">${esc(r.o.customer_name || '')}</td>
+          <td style="padding:4px;text-align:right">EGP ${fmt(r.total)}</td>
+          <td style="padding:4px;text-align:right">EGP ${fmt(r.ship)}</td>
+          <td style="padding:4px;text-align:right">EGP ${fmt(r.buy)}</td>
+          <td style="padding:4px;text-align:right;color:#dc2626"><b>EGP ${fmt(r.margin)}</b></td>
+        </tr>`).join('')
+    : '<tr><td colspan="7"><div class="empty">🎉 No losing orders</div></td></tr>';
+
+  host.innerHTML = `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+        <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:8px">
+          ${winning ? '🟢' : '🔴'} Am I winning or losing? &nbsp;<span style="opacity:.6;font-weight:500;font-size:12px">(delivered orders only)</span>
+        </h3>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:8px">
+        <div class="stat-card green">
+          <div class="stat-val">EGP ${fmt(revenue)}</div>
+          <div class="stat-label">Revenue<br><span style="opacity:.7;font-size:11px">${delivered.length} delivered · total − actual shipping</span></div>
+        </div>
+        <div class="stat-card orange">
+          <div class="stat-val">EGP ${fmt(cogs)}</div>
+          <div class="stat-label">Cost of goods (Elashry)<br><span style="opacity:.7;font-size:11px">Σ buy price × qty</span></div>
+        </div>
+        <div class="stat-card ${winning ? 'green' : 'red'}">
+          <div class="stat-val">${winning ? '+' : '−'} EGP ${fmt(Math.abs(margin))}</div>
+          <div class="stat-label">${winning ? '🟢 Winning' : '🔴 Losing'} &nbsp;<span style="opacity:.7;font-size:11px">${marginPct.toFixed(1)}% margin</span></div>
+        </div>
+      </div>
+
+      <div style="font-size:12px;color:var(--muted);margin:14px 0 6px">
+        This is your gross margin on delivered orders — independent of whether
+        Bosta has actually paid the money into your bank yet. If it's positive,
+        every delivered order taken together earned money; if negative, product
+        pricing isn't covering shipping + buy cost.
+      </div>
+
+      <details style="margin:10px 0 6px;border:1px solid var(--line);padding:8px 12px">
+        <summary style="cursor:pointer;font-weight:600;font-size:13px">
+          ⚠️ Losing-margin delivered orders (${losers.length}${losers.length ? ` · EGP ${fmt(loserSum)} lost` : ''})
+        </summary>
+        <div style="max-height:340px;overflow:auto;margin-top:8px">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead>
+              <tr style="text-align:left;border-bottom:1px solid var(--line)">
+                <th style="padding:6px 4px">Order</th>
+                <th style="padding:6px 4px">Date</th>
+                <th style="padding:6px 4px">Customer</th>
+                <th style="padding:6px 4px;text-align:right">Total</th>
+                <th style="padding:6px 4px;text-align:right">Actual ship</th>
+                <th style="padding:6px 4px;text-align:right">Buy cost</th>
+                <th style="padding:6px 4px;text-align:right">Margin</th>
+              </tr>
+            </thead>
+            <tbody>${loserRows}</tbody>
+          </table>
+        </div>
+      </details>
+    </div>`;
 }
 
 // ── EXPENSES ──
