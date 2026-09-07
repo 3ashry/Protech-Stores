@@ -1616,48 +1616,62 @@ function renderNetProfitBlock() {
     const a = parseFloat(o.actual_shipping || 0);
     return a > 0 ? a : parseFloat(o.est_shipping || 0);
   };
+  const buyCostOf = (o) => (o.products || []).reduce((b, p) =>
+    b + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0);
 
-  // 1. Bosta receivable — confirmed delivered, net of actual shipping.
-  const deliveredConfirmed = orders.filter(o =>
-    o.status === 'Delivered' && o.cash_cycle_closed === true
-  );
-  const bostaReceivable = deliveredConfirmed.reduce((a, o) =>
+  // 1. Bosta receivable — Delivered + In Transit + Heading to Customer,
+  //    net of shipping. Same rule as the Bosta receivable KPI: cash-
+  //    cycle-closed is a Bosta concept and does NOT filter here.
+  const RECEIVABLE_STATUSES = new Set([
+    'Delivered', 'In Transit', 'Heading to Customer',
+  ]);
+  const receivableOrders = orders.filter(o => RECEIVABLE_STATUSES.has(o.status));
+  const bostaReceivable = receivableOrders.reduce((a, o) =>
     a + (parseFloat(o.total || 0) - shipOf(o)), 0);
 
   // 2. Returns shipping — Bosta's fee for the return leg on every
-  //    Returned order. Falls back to est_shipping while the cycle is
-  //    still open, same as the Bosta/Elashry cards.
+  //    Returned order.
   const returnedOrders = orders.filter(o => o.status === 'Returned');
   const returnsShipping = returnedOrders.reduce((a, o) => a + shipOf(o), 0);
 
   // 3. All expenses — every category. Includes Media Buyer payouts,
-  //    Paid Ads, and any Elashry-supplier payments the owner has
-  //    already recorded as expenses.
+  //    Paid Ads, and any Elashry-supplier payments already recorded.
   const totalExpenses = expenses.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
 
-  // 4. Elashry owed — buy cost of confirmed delivered orders.
-  const elashryOwed = deliveredConfirmed.reduce((a, o) =>
-    a + (o.products || []).reduce((b, p) =>
-      b + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0), 0);
+  // 4. Elashry owed — Σ buy_cost of orders whose goods were pulled
+  //    from the supplier (NOT Processing / Cancelled), minus buy_cost
+  //    of Returned orders (goods went back). Same rule as the
+  //    Elashry KPI. No cash-cycle filter.
+  const EXCLUDED_STATUSES = new Set(['Processing', 'Cancelled']);
+  const pulledFromSupplier = orders.filter(o => !EXCLUDED_STATUSES.has(o.status));
+  const pulledBuyCost   = pulledFromSupplier.reduce((a, o) => a + buyCostOf(o), 0);
+  const returnedBuyCost = returnedOrders.reduce((a, o) => a + buyCostOf(o), 0);
+  const elashryOwed = pulledBuyCost - returnedBuyCost;
 
   const netProfit = bostaReceivable - returnsShipping - totalExpenses - elashryOwed;
   const winning = netProfit >= 0;
 
   el.innerHTML = `
     <div class="fin-row" style="opacity:.75;font-size:12px">
-      <span>${deliveredConfirmed.length} confirmed delivered · ${returnedOrders.length} returned · ${expenses.length} expenses</span>
-      <span>Cash-cycle closed only</span>
+      <span>${receivableOrders.length} receivable · ${returnedOrders.length} returned · ${pulledFromSupplier.length - returnedOrders.length} owing Elashry · ${expenses.length} expenses</span>
+      <span>Every status counted per business rule</span>
     </div>
-    <div class="fin-row"><span>💰 Bosta receivable (confirmed delivered, net of actual shipping)</span><span class="fin-val">EGP ${fmt(bostaReceivable)}</span></div>
+    <div class="fin-row"><span>💰 Bosta receivable (Delivered + In Transit + Heading, net of shipping)</span><span class="fin-val">EGP ${fmt(bostaReceivable)}</span></div>
     <div class="fin-row"><span>↩️ Returns shipping (Bosta's fee for return legs)</span><span class="fin-val deduct">− EGP ${fmt(returnsShipping)}</span></div>
     <div class="fin-row"><span>🧾 All expenses (every category)</span><span class="fin-val deduct">− EGP ${fmt(totalExpenses)}</span></div>
-    <div class="fin-row"><span>🏭 Elashry owed (buy cost of confirmed delivered goods)</span><span class="fin-val deduct">− EGP ${fmt(elashryOwed)}</span></div>
+    <div class="fin-row"><span>🏭 Elashry owed (pulled − returned goods)</span><span class="fin-val deduct">− EGP ${fmt(elashryOwed)}</span></div>
     <div class="fin-row ${winning ? 'profit' : 'loss'}" style="border-top:2px solid var(--line);padding-top:14px;margin-top:8px;font-size:1.2rem">
       <span>${winning ? '🟢 Net Profit' : '🔴 Net Loss'}</span>
       <span>${winning ? '+' : '−'} EGP ${fmt(Math.abs(netProfit))}</span>
     </div>
     <div style="font-size:12px;color:var(--muted);margin-top:12px;line-height:1.6">
-      This is the bottom line: money Bosta owes for confirmed deliveries, minus what they charged for returns, minus every recorded expense, minus what you still owe Elashry for the goods sold. Uses only orders whose cash cycle Bosta has finalised, so every figure is definitive.
+      Bosta owes for delivered + in-flight orders (net of shipping);
+      returns shipping is subtracted separately. Elashry is owed for
+      every order whose goods left the supplier (Delivered / In Transit
+      / Heading to Customer / On its way to me / Awaiting Action), minus
+      Returned orders whose goods went back to stock. Cash-cycle state
+      is intentionally ignored — it's a Bosta invoicing detail, not a
+      business-truth signal.
     </div>`;
 }
 
@@ -3127,21 +3141,35 @@ function renderSupplierAccount() {
   const host = document.getElementById('supplier-account');
   if (!host) return;
 
-  // ── Owed to Elashry — CONFIRMED delivered orders only ──────────────
-  // Same rule as the Bosta receivable tile: only orders where Bosta has
-  // closed the cash cycle (actual_shipping is the real invoice value)
-  // count toward the KPI. Orders still on an estimated shipping remain
-  // in the "pending" line below but don't inflate the number the owner
-  // owes right now.
-  const deliveredAll = (cache.orders || []).filter(o => o.status === 'Delivered');
-  const delivered    = deliveredAll.filter(o => o.cash_cycle_closed === true);
+  // ── Owed to Elashry — every order whose goods were pulled from the
+  //    supplier's warehouse, minus the ones whose goods went back.
+  //
+  // Rule (business logic, not a suggestion):
+  //   Include every order whose status is NOT 'Processing' and NOT
+  //   'Cancelled'. Any other status means the products physically
+  //   left the supplier's warehouse and we owe for them.
+  //   Then subtract the buy cost of Returned orders — those goods
+  //   went back to stock, so we no longer owe for them.
+  //   Cash-cycle-closed is a Bosta invoice concept and has NOTHING
+  //   to do with what we owe the supplier; we do not filter by it.
+  //
+  //   owed = Σ buy_cost where status NOT IN (Processing, Cancelled)
+  //        − Σ buy_cost where status = Returned
+  //        − payments already made to Elashry
+  const orders = cache.orders || [];
   const buyCostOf = (o) => (o.products || []).reduce((b, p) =>
     b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0);
-  const goodsOwed = delivered.reduce((a, o) => a + buyCostOf(o), 0);
-  // Pending-confirmation estimate — same buy-price formula, over the
-  // orders whose cash cycle Bosta hasn't finalised yet.
-  const pending = deliveredAll.filter(o => o.cash_cycle_closed !== true);
-  const pendingOwed = pending.reduce((a, o) => a + buyCostOf(o), 0);
+
+  const EXCLUDED_STATUSES = new Set(['Processing', 'Cancelled']);
+  const pulledFromSupplier = orders.filter(o => !EXCLUDED_STATUSES.has(o.status));
+  const returnedOrders     = pulledFromSupplier.filter(o => o.status === 'Returned');
+
+  const pulledBuyCost   = pulledFromSupplier.reduce((a, o) => a + buyCostOf(o), 0);
+  const returnedBuyCost = returnedOrders.reduce((a, o) => a + buyCostOf(o), 0);
+  const goodsOwed = pulledBuyCost - returnedBuyCost;
+
+  // Orders that actually contribute (pulled minus returned = kept).
+  const owedOrders = pulledFromSupplier.filter(o => o.status !== 'Returned');
 
   const paid = (supplierCache.payments || [])
     .reduce((a, p) => a + parseFloat(p.amount || 0), 0);
@@ -3159,21 +3187,24 @@ function renderSupplierAccount() {
     : '<tr><td colspan="4"><div class="empty">No payments to Elashry recorded yet</div></td></tr>';
 
   // Per-order breakdown so any wrongly-priced line is easy to spot.
-  const breakdownRows = delivered.length
-    ? delivered.slice()
+  // Shows every order that contributes to Owed (pulled-from-supplier
+  // minus returned), sorted newest first, with its status so it's
+  // clear WHY each row is in the list.
+  const breakdownRows = owedOrders.length
+    ? owedOrders.slice()
         .sort((a, b) => String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || '')))
         .map(o => {
-          const buy = (o.products || []).reduce((b, p) =>
-            b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0);
+          const buy = buyCostOf(o);
           return `
             <tr>
               <td style="padding:4px">${esc(o.code || '')}</td>
               <td style="padding:4px;opacity:.75">${esc(String(o.created_at || o.date || '').slice(0, 10))}</td>
               <td style="padding:4px">${esc(o.customer_name || '')}</td>
+              <td style="padding:4px">${esc(o.status || '')}</td>
               <td style="padding:4px;text-align:right"><b>EGP ${fmt(buy)}</b></td>
             </tr>`;
         }).join('')
-    : '<tr><td colspan="4"><div class="empty">No delivered orders yet</div></td></tr>';
+    : '<tr><td colspan="5"><div class="empty">No orders owe Elashry right now</div></td></tr>';
 
   host.innerHTML = `
     <div class="card">
@@ -3191,7 +3222,7 @@ function renderSupplierAccount() {
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:8px">
         <div class="stat-card orange">
           <div class="stat-val">EGP ${fmt(goodsOwed)}</div>
-          <div class="stat-label">Total owed to Elashry<br><span style="opacity:.7;font-size:11px">${delivered.length} confirmed delivered · cash cycle closed · Σ buy price × qty</span></div>
+          <div class="stat-label">Total owed to Elashry<br><span style="opacity:.7;font-size:11px">${owedOrders.length} orders (goods still out) · Σ buy price × qty</span></div>
         </div>
         <div class="stat-card blue">
           <div class="stat-val">EGP ${fmt(paid)}</div>
@@ -3204,15 +3235,15 @@ function renderSupplierAccount() {
       </div>
 
       <div style="font-size:12px;color:var(--muted);margin:14px 0 6px">
-        Owed = Σ (buy price × qty) across every delivered order whose <b>cash cycle Bosta has closed</b>.
+        Owed = Σ (buy price × qty) for every order whose goods left the supplier's warehouse (status is NOT Processing / Cancelled), minus the buy cost of Returned orders whose goods went back to stock.
         <div style="margin-top:4px">
-          🔒 Confirmed (cash cycle closed) — ${delivered.length} orders: <b>EGP ${fmt(goodsOwed)}</b>
-          &nbsp;•&nbsp; 🕒 Pending Bosta invoice — ${pending.length} orders (estimate): <b>EGP ${fmt(pendingOwed)}</b>
+          📦 Pulled from Elashry — ${pulledFromSupplier.length} orders: <b>EGP ${fmt(pulledBuyCost)}</b>
+          &nbsp;•&nbsp; ↩️ Returned (goods back) — ${returnedOrders.length} orders: <b>− EGP ${fmt(returnedBuyCost)}</b>
         </div>
       </div>
 
       <details style="margin:10px 0 6px;border:1px solid var(--line);padding:8px 12px">
-        <summary style="cursor:pointer;font-weight:600;font-size:13px">🔍 Per-order breakdown (${delivered.length} confirmed)</summary>
+        <summary style="cursor:pointer;font-weight:600;font-size:13px">🔍 Per-order breakdown (${owedOrders.length} owing)</summary>
         <div style="max-height:340px;overflow:auto;margin-top:8px">
           <table style="width:100%;border-collapse:collapse;font-size:12px">
             <thead>
@@ -3220,6 +3251,7 @@ function renderSupplierAccount() {
                 <th style="padding:6px 4px">Order</th>
                 <th style="padding:6px 4px">Date</th>
                 <th style="padding:6px 4px">Customer</th>
+                <th style="padding:6px 4px">Status</th>
                 <th style="padding:6px 4px;text-align:right">Buy cost</th>
               </tr>
             </thead>
@@ -3354,27 +3386,45 @@ function renderBostaCash() {
   const host = document.getElementById('bosta-cash');
   if (!host) return;
   const orders = (typeof cache !== 'undefined' && cache.orders) ? cache.orders : [];
-  // Every delivered order (used for context labels, unpaid detection, and
-  // the "Pending" tile that shows the estimate for not-yet-confirmed rows).
-  const deliveredAll = orders.filter(o => o.status === 'Delivered');
-  // Only count in the KPI what has actually been CONFIRMED — cash cycle
-  // closed by Bosta, so actual_shipping is the real invoice value.
-  const delivered = deliveredAll.filter(o => o.cash_cycle_closed === true);
 
-  // ── Money I SHOULD receive from Bosta (CONFIRMED only) ─────────────
-  //  Σ(order.total − actual_shipping) over delivered orders whose
-  //  cash_cycle_closed = true. Anything Bosta still shows as open is a
-  //  running estimate and stays out of this number.
-  const shippingFeeFor = (o) => parseFloat(o.actual_shipping || 0);
-  const collected = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
-  const delShip   = delivered.reduce((a, o) => a + shippingFeeFor(o), 0);
+  // ── Money I SHOULD receive from Bosta ──────────────────────────────
+  //
+  // Rule (business logic, not a suggestion):
+  //   Every Delivered order is receivable — Bosta collected COD from
+  //   the customer and owes it to us, whether the cash cycle is
+  //   closed or not.
+  //   In Transit + Heading to Customer count as EXPECTED future
+  //   receivable — they'll become Delivered or Returned.
+  //   Per order = order.total − shipping fee (Bosta deducts its
+  //   shipping before transferring the net).
+  //   Shipping uses actual_shipping when present, falls back to
+  //   est_shipping so open cycles still deduct something plausible.
+  //
+  //   shouldReceive = Σ (total − shipping)
+  //                   over Delivered + In Transit + Heading to Customer
+  //   stillToReceive = shouldReceive − transfers Bosta has already sent
+  const RECEIVABLE_STATUSES = new Set([
+    'Delivered', 'In Transit', 'Heading to Customer',
+  ]);
+  const receivableAll = orders.filter(o => RECEIVABLE_STATUSES.has(o.status));
+  const deliveredAll  = receivableAll.filter(o => o.status === 'Delivered');
+  const expectedAll   = receivableAll.filter(o => o.status !== 'Delivered');
+
+  const shippingFeeFor = (o) => {
+    const a = parseFloat(o.actual_shipping || 0);
+    return a > 0 ? a : parseFloat(o.est_shipping || 0);
+  };
+  const collected = receivableAll.reduce((a, o) => a + parseFloat(o.total || 0), 0);
+  const delShip   = receivableAll.reduce((a, o) => a + shippingFeeFor(o), 0);
   const shouldReceive = collected - delShip;
 
-  // Open-cycle estimate — for the informational "pending" line only.
-  const openD = deliveredAll.filter(o => o.cash_cycle_closed !== true);
-  const openNet = openD.reduce((a, o) => a + parseFloat(o.total || 0) - shippingFeeFor(o), 0);
-  const closedD = delivered; // alias for readability below
-  const closedNet = shouldReceive;
+  // Informational split — how much of the total is CONFIRMED (Delivered
+  // orders' COD is Bosta's to pay) vs EXPECTED (In Transit / Heading to
+  // Customer, will land once delivery completes).
+  const confirmedNet = deliveredAll.reduce((a, o) =>
+    a + parseFloat(o.total || 0) - shippingFeeFor(o), 0);
+  const expectedNet = expectedAll.reduce((a, o) =>
+    a + parseFloat(o.total || 0) - shippingFeeFor(o), 0);
 
   // ── Received so far — sum of manually-recorded bank transfers ───────
   const receipts = (bostaCashCache.receipts || [])
@@ -3392,15 +3442,19 @@ function renderBostaCash() {
     }
   }
 
-  // Split delivered orders into paid / unpaid by whether any receipt covers them.
-  const paidOrders   = delivered.filter(o => paidBy.has(String(o.code || '').toUpperCase()));
-  const unpaidOrders = delivered
+  // Split DELIVERED orders into paid / unpaid by whether any receipt
+  // covers them. Only delivered orders can be "paid out" by Bosta;
+  // In-Transit / Heading rows can't be paid yet, so they always show
+  // as pending.
+  const paidOrders   = deliveredAll.filter(o => paidBy.has(String(o.code || '').toUpperCase()));
+  const unpaidOrders = deliveredAll
     .filter(o => !paidBy.has(String(o.code || '').toUpperCase()))
     .sort((a, b) => String(a.created_at || a.date || '').localeCompare(String(b.created_at || b.date || '')));
 
-  // Money still to receive = sum over UNPAID delivered orders of (total − shipping)
-  const stillToReceive = unpaidOrders.reduce((a, o) =>
-    a + (parseFloat(o.total || 0) - shippingFeeFor(o)), 0);
+  // Money still to receive = total should receive − what Bosta has
+  // already transferred. Matches the owner's spec: "subtract whatever
+  // Bosta has already transferred to our bank account."
+  const stillToReceive = shouldReceive - received;
 
   // Sanity metric: does the cash we've received match the paid orders' net?
   const paidNet = paidOrders.reduce((a, o) =>
@@ -3461,7 +3515,7 @@ function renderBostaCash() {
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:8px">
         <div class="stat-card orange">
           <div class="stat-val">EGP ${fmt(shouldReceive)}</div>
-          <div class="stat-label">Total I should receive<br><span style="opacity:.7;font-size:11px">${delivered.length} confirmed delivered · cash cycle closed · collected − actual shipping</span></div>
+          <div class="stat-label">Total I should receive<br><span style="opacity:.7;font-size:11px">${receivableAll.length} orders (delivered + in-flight) · collected − shipping</span></div>
         </div>
         <div class="stat-card green">
           <div class="stat-val">EGP ${fmt(received)}</div>
@@ -3469,15 +3523,15 @@ function renderBostaCash() {
         </div>
         <div class="stat-card ${stillToReceive > 0 ? 'blue' : 'green'}">
           <div class="stat-val">EGP ${fmt(Math.abs(stillToReceive))}</div>
-          <div class="stat-label">Still to receive<br><span style="opacity:.7;font-size:11px">${unpaidOrders.length} unpaid confirmed orders</span></div>
+          <div class="stat-label">Still to receive<br><span style="opacity:.7;font-size:11px">should − received</span></div>
         </div>
       </div>
 
       <div style="font-size:12px;color:var(--muted);margin:14px 0 6px">
-        Confirmed collected: EGP ${fmt(collected)} &nbsp;−&nbsp; confirmed shipping: EGP ${fmt(delShip)} &nbsp;=&nbsp; <b>EGP ${fmt(shouldReceive)}</b>
+        Collected: EGP ${fmt(collected)} &nbsp;−&nbsp; shipping: EGP ${fmt(delShip)} &nbsp;=&nbsp; <b>EGP ${fmt(shouldReceive)}</b>
         <div style="margin-top:4px">
-          🔒 Confirmed (cash cycle closed) — ${closedD.length} orders: <b>EGP ${fmt(closedNet)}</b>
-          &nbsp;•&nbsp; 🕒 Pending Bosta invoice — ${openD.length} orders (estimate): <b>EGP ${fmt(openNet)}</b>
+          ✅ Delivered — ${deliveredAll.length} orders (Bosta owes us now): <b>EGP ${fmt(confirmedNet)}</b>
+          &nbsp;•&nbsp; 🚚 In-flight — ${expectedAll.length} orders (In Transit + Heading to Customer, expected): <b>EGP ${fmt(expectedNet)}</b>
         </div>
         ${Math.abs(diff) >= 1
           ? `<div style="margin-top:4px;color:${diff > 0 ? '#d97706' : '#dc2626'}">
@@ -3486,12 +3540,13 @@ function renderBostaCash() {
       </div>
 
       <details style="margin:10px 0 6px;border:1px solid var(--line);padding:8px 12px">
-        <summary style="cursor:pointer;font-weight:600;font-size:13px">🔍 Per-order breakdown (${delivered.length} confirmed)</summary>
+        <summary style="cursor:pointer;font-weight:600;font-size:13px">🔍 Per-order breakdown (${receivableAll.length} receivable)</summary>
         <div style="max-height:340px;overflow:auto;margin-top:8px">
           <table style="width:100%;border-collapse:collapse;font-size:12px">
             <thead>
               <tr style="text-align:left;border-bottom:1px solid var(--line)">
                 <th style="padding:6px 4px">Order</th>
+                <th style="padding:6px 4px">Status</th>
                 <th style="padding:6px 4px">Cycle</th>
                 <th style="padding:6px 4px;text-align:right">Total</th>
                 <th style="padding:6px 4px;text-align:right">Est. ship</th>
@@ -3501,12 +3556,13 @@ function renderBostaCash() {
               </tr>
             </thead>
             <tbody>
-              ${delivered.slice().sort((a, b) => String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || ''))).map(o => {
+              ${receivableAll.slice().sort((a, b) => String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || ''))).map(o => {
                 const used = shippingFeeFor(o);
                 const net  = parseFloat(o.total || 0) - used;
                 const cyc  = o.cash_cycle_closed === true ? '🔒 closed' : '🕒 open';
                 return `<tr>
                   <td style="padding:4px">${esc(o.code || '')}</td>
+                  <td style="padding:4px">${esc(o.status || '')}</td>
                   <td style="padding:4px">${cyc}</td>
                   <td style="padding:4px;text-align:right">${fmt(o.total)}</td>
                   <td style="padding:4px;text-align:right">${fmt(o.est_shipping)}</td>
