@@ -2511,29 +2511,16 @@ function renderBostaCash() {
   const delivered = orders.filter(o => o.status === 'Delivered');
 
   // ── Money I SHOULD receive from Bosta ───────────────────────────────
-  // Per spec: total collected of DELIVERED orders − their shipping.
-  //
-  // Which "shipping" to use:
-  //   • cash_cycle_closed=true  → actual_shipping (real Bosta wallet fee).
-  //   • cash_cycle_closed=false → est_shipping    (what the customer paid at
-  //                               checkout — matches Bosta's rate table).
-  //     The stored actual_shipping on an open cycle is a formula estimate
-  //     that rounds up + VATs, so it over-deducts and under-counts what
-  //     Bosta owes us. est_shipping (the amount actually collected as
-  //     shipping) is the right proxy until Bosta finalises the invoice.
-  //   • If est_shipping is missing/0 on an open cycle, fall back to
-  //     actual_shipping so we never leave shipping unaccounted for.
-  const shippingFeeFor = (o) => {
-    const est    = parseFloat(o.est_shipping    || 0);
-    const actual = parseFloat(o.actual_shipping || 0);
-    if (o.cash_cycle_closed === true) return actual;
-    return est > 0 ? est : actual;
-  };
+  // Strict spec: total collected of ALL DELIVERED orders
+  //              − actual_shipping of ALL DELIVERED orders.
+  // No fallbacks, no est_shipping. Cash-cycle state does not matter here.
+  const shippingFeeFor = (o) => parseFloat(o.actual_shipping || 0);
   const collected = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
   const delShip   = delivered.reduce((a, o) => a + shippingFeeFor(o), 0);
   const shouldReceive = collected - delShip;
 
-  // Split so we can show the reader closed vs open cycle receivable.
+  // Closed vs open split — informational only. Uses the same
+  // actual_shipping value so both halves sum back to `shouldReceive`.
   const closedD  = delivered.filter(o => o.cash_cycle_closed === true);
   const openD    = delivered.filter(o => o.cash_cycle_closed !== true);
   const closedNet = closedD.reduce((a, o) => a + parseFloat(o.total || 0) - shippingFeeFor(o), 0);
