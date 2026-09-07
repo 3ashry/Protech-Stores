@@ -676,15 +676,23 @@ export default async function handler(req, res) {
         // The row drops off the moment the ops manager taps
         // "تم الاستلام في المخزن" (which flips warehouse_confirmed=true).
         //
-        // Two-step OR is spelled with a nested or=(…) instead of in.(…)
-        // because PostgREST's in.() requires DOUBLE-QUOTED values around
-        // any string containing spaces or reserved chars, and forgetting
-        // the quotes silently matches nothing — which is exactly the bug
-        // that hid every 'On its way to me' row from the returning tab.
+        // PostgREST notes:
+        //  • Using in.() with values that contain spaces silently matches
+        //    nothing unless every value is double-quoted, so we go through
+        //    a nested or=() for the status list instead.
+        //  • Two or=() at the top level are not reliably AND'd in every
+        //    PostgREST version — the second one can be dropped. So we
+        //    express the warehouse_confirmed condition as a plain filter
+        //    warehouse_confirmed=not.is.true, which is null-safe:
+        //      • warehouse_confirmed=true  → row skipped
+        //      • warehouse_confirmed=false → row kept
+        //      • warehouse_confirmed IS NULL → row kept
+        //    That leaves exactly one or=() and one plain filter, which is
+        //    the least-magic query PostgREST can accept.
         const rows = await sbGet(
           'orders?select=*'
           + '&or=(status.eq.On%20its%20way%20to%20me,status.eq.Returned)'
-          + '&or=(warehouse_confirmed.is.false,warehouse_confirmed.is.null)'
+          + '&warehouse_confirmed=not.is.true'
           + '&order=updated_at.desc.nullslast,created_at.desc&limit=500'
         );
         return res.status(200).json({ ok: true, orders: await expandAll(rows.map(strip)) });
