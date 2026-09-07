@@ -1510,6 +1510,148 @@ function renderFinancials() {
   if (typeof renderBostaCash === 'function') renderBostaCash();
   if (typeof renderSupplierAccount === 'function') renderSupplierAccount();
   if (typeof renderMediaBuyer === 'function') renderMediaBuyer();
+  if (typeof renderWeeklySalesChart === 'function') renderWeeklySalesChart();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  WEEKLY SALES CHART  — delivered orders, net of actual shipping.
+//  X axis: week (Mon → Sun) that the order was DELIVERED in.
+//  Y axis: Σ (order.total − actual_shipping) for that week.
+//  A dotted line overlays the cumulative running total for context.
+//  Falls back to est_shipping / created_at when the "real" fields
+//  aren't populated yet so historical rows still render.
+// ═══════════════════════════════════════════════════════════════════
+let _weeklySalesChart = null;
+function renderWeeklySalesChart() {
+  const canvas = document.getElementById('weekly-sales-chart');
+  const note = document.getElementById('weekly-sales-note');
+  if (!canvas) return;
+  if (typeof Chart === 'undefined') {
+    if (note) note.textContent = 'Chart library not loaded yet — will render on next refresh.';
+    return;
+  }
+  const orders = (cache.orders || []).filter(o => o.status === 'Delivered');
+  if (!orders.length) {
+    if (_weeklySalesChart) { _weeklySalesChart.destroy(); _weeklySalesChart = null; }
+    if (note) note.textContent = 'No delivered orders yet.';
+    return;
+  }
+
+  // Monday-of-the-week (00:00 local) for a given Date.
+  const mondayOf = (d) => {
+    const x = new Date(d);
+    const dow = x.getDay();                     // 0 Sun … 6 Sat
+    const shift = (dow === 0) ? -6 : (1 - dow); // Sun → back 6; else → back to Mon
+    x.setDate(x.getDate() + shift);
+    x.setHours(0, 0, 0, 0);
+    return x;
+  };
+  const shipOf = (o) => {
+    const a = parseFloat(o.actual_shipping || 0);
+    return a > 0 ? a : parseFloat(o.est_shipping || 0);
+  };
+
+  // Bucket orders by the week (Mon start) of their delivered_at,
+  // falling back to created_at for historical rows.
+  const buckets = new Map(); // epochMs → { net, count }
+  let earliest = null, latest = null;
+  for (const o of orders) {
+    const raw = o.delivered_at || o.created_at || o.date;
+    if (!raw) continue;
+    // Support DD/MM/YYYY as well as ISO — same tolerant parser we use elsewhere.
+    let d;
+    let m = String(raw).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (m) d = new Date(+m[3], +m[2] - 1, +m[1]);
+    else   d = new Date(raw);
+    if (isNaN(d.getTime())) continue;
+    const wk = mondayOf(d).getTime();
+    const cur = buckets.get(wk) || { net: 0, count: 0 };
+    cur.net += (parseFloat(o.total || 0) - shipOf(o));
+    cur.count += 1;
+    buckets.set(wk, cur);
+    if (earliest === null || wk < earliest) earliest = wk;
+    if (latest === null || wk > latest) latest = wk;
+  }
+
+  // Fill missing weeks with zero so the bars are contiguous.
+  if (earliest === null) {
+    if (_weeklySalesChart) { _weeklySalesChart.destroy(); _weeklySalesChart = null; }
+    if (note) note.textContent = 'No delivered orders with a parseable date.';
+    return;
+  }
+  const weekMs = 7 * 24 * 60 * 60 * 1000;
+  const thisWeek = mondayOf(new Date()).getTime();
+  const endWk = Math.max(latest, thisWeek);
+  const keys = [];
+  for (let w = earliest; w <= endWk; w += weekMs) keys.push(w);
+
+  const MO = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const labelFor = (ms) => {
+    const d = new Date(ms);
+    return `${String(d.getDate()).padStart(2, '0')} ${MO[d.getMonth()]}`;
+  };
+  const labels = keys.map(labelFor);
+  const weekly = keys.map(k => Math.round((buckets.get(k)?.net || 0)));
+  const counts = keys.map(k => (buckets.get(k)?.count || 0));
+  const cumulative = [];
+  let running = 0;
+  for (const v of weekly) { running += v; cumulative.push(Math.round(running)); }
+  const barColors = weekly.map(v => v >= 0 ? 'rgba(34,197,94,0.75)' : 'rgba(220,38,38,0.75)');
+
+  if (_weeklySalesChart) {
+    _weeklySalesChart.data.labels = labels;
+    _weeklySalesChart.data.datasets[0].data = weekly;
+    _weeklySalesChart.data.datasets[0].backgroundColor = barColors;
+    _weeklySalesChart.data.datasets[1].data = cumulative;
+    _weeklySalesChart.update();
+  } else {
+    _weeklySalesChart = new Chart(canvas.getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          { type: 'bar', label: 'Weekly sales (EGP)', data: weekly,
+            backgroundColor: barColors, borderRadius: 4, order: 2 },
+          { type: 'line', label: 'Cumulative (EGP)', data: cumulative,
+            borderColor: '#ec3013', backgroundColor: 'rgba(236,48,19,0.10)',
+            borderWidth: 2, tension: 0.28, pointRadius: 3,
+            pointBackgroundColor: '#ec3013', fill: true, order: 1 },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { position: 'bottom' },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                const v = Number(ctx.parsed.y || 0).toLocaleString('en-US');
+                if (ctx.dataset.label && ctx.dataset.label.startsWith('Weekly')) {
+                  const c = counts[ctx.dataIndex] || 0;
+                  return `${ctx.dataset.label}: EGP ${v}  (${c} order${c === 1 ? '' : 's'})`;
+                }
+                return `${ctx.dataset.label}: EGP ${v}`;
+              },
+            },
+          },
+        },
+        scales: {
+          y: { grid: { color: 'rgba(0,0,0,0.06)' },
+               ticks: { callback: (v) => v.toLocaleString('en-US') + ' EGP' } },
+          x: { grid: { display: false } },
+        },
+      },
+    });
+  }
+
+  if (note) {
+    const totalOrders = counts.reduce((a, n) => a + n, 0);
+    const total = cumulative[cumulative.length - 1] || 0;
+    note.innerHTML =
+      `<b>${keys.length}</b> weeks · <b>${totalOrders}</b> delivered orders · Cumulative net <b style="color:${total >= 0 ? '#16a34a' : '#dc2626'}">EGP ${Number(total).toLocaleString('en-US')}</b>` +
+      `<br>Each bar = Σ (order.total − actual_shipping) for orders <b>delivered</b> that Mon-Sun week (falls back to est_shipping / created_at when the real value isn't stored yet).`;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════
