@@ -204,6 +204,12 @@
       <button class="btn btn-ghost btn-sm" onclick="downloadAllFinancesExcel()" style="margin-inline-start:8px">📥 All finances Excel</button>
     </div>
 
+    <!-- Block 0 (top): Buy cost of in-flight orders (not delivered, not returned, not processing) -->
+    <div class="card">
+      <div class="card-header"><span class="card-title">📦 Buy cost of in-flight orders (not delivered / returned / processing)</span></div>
+      <div class="card-body" id="fin-inflight-buy"></div>
+    </div>
+
     <!-- Block 1: Money from Bosta — delivered-only, matched to bank transfers -->
     <div id="bosta-cash"></div>
 
