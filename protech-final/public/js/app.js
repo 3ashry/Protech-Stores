@@ -1555,8 +1555,15 @@ function renderMediaBuyer() {
     .filter(o => inMonth(dateOfOrder(o)))
     .slice()
     .sort((a, b) => String(a.created_at || a.date || '').localeCompare(String(b.created_at || b.date || '')));
+  // Sales base for the 1% share = total − actual_shipping (real Bosta
+  // fee once the cash cycle closes; falls back to est_shipping if the
+  // actual isn't populated yet so the number is never zero-inflated).
+  const shipOf = (o) => {
+    const a = parseFloat(o.actual_shipping || 0);
+    return a > 0 ? a : parseFloat(o.est_shipping || 0);
+  };
   const monthSales = monthDelivered.reduce((a, o) =>
-    a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
+    a + (parseFloat(o.total || 0) - shipOf(o)), 0);
 
   const adsShare    = paidAdsMonth * 0.20;
   const salesShare  = monthSales   * 0.01;
@@ -1643,7 +1650,7 @@ function renderMediaBuyer() {
           <td style="padding:4px">${esc(o.code || '')}</td>
           <td style="padding:4px;opacity:.75">${esc(dateOfOrder(o))}</td>
           <td style="padding:4px">${esc(o.customer_name || '')}</td>
-          <td style="padding:4px;text-align:right">EGP ${fmt(parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0))}</td>
+          <td style="padding:4px;text-align:right">EGP ${fmt(parseFloat(o.total || 0) - shipOf(o))}</td>
         </tr>`).join('')
     : '<tr><td colspan="4" style="text-align:center;opacity:.6;padding:12px">لا توجد طلبات مسلّمة هذا الشهر</td></tr>';
 
@@ -1654,7 +1661,7 @@ function renderMediaBuyer() {
     </div>
     <div class="fin-row"><span>Paid ads spend (this month)</span><span class="fin-val">EGP ${fmt(paidAdsMonth)}</span></div>
     <div class="fin-row"><span>20% of paid ads</span><span class="fin-val">EGP ${fmt(adsShare)}</span></div>
-    <div class="fin-row"><span>Delivered product sales (this month, excl. shipping)</span><span class="fin-val">EGP ${fmt(monthSales)}</span></div>
+    <div class="fin-row"><span>Delivered sales (this month, net of actual shipping)</span><span class="fin-val">EGP ${fmt(monthSales)}</span></div>
     <div class="fin-row"><span>1% of delivered sales</span><span class="fin-val">EGP ${fmt(salesShare)}</span></div>
     <div class="fin-row"><span>Gross salary for this month</span><span class="fin-val">EGP ${fmt(grossOwed)}</span></div>
     ${paidThisMonth > 0 ? `<div class="fin-row"><span>Already paid this month</span><span class="fin-val deduct">− EGP ${fmt(paidThisMonth)}</span></div>` : ''}
