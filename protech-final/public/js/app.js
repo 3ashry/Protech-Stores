@@ -2283,6 +2283,171 @@ function downloadInventoryExcel() {
   showToast('Inventory Excel downloaded ✓');
 }
 
+// ═══════════════════════════════════════════════════════════════════
+//  📄 ORDERS — FULL REPORT (PDF)
+//  Builds a printable page with one card per order, showing every
+//  detail the admin cares about: customer, phone, city, address,
+//  status + cash-cycle badge, dates (created / delivered), tracking,
+//  notes, line items with sell + buy price + qty, total, actual /
+//  estimated shipping, and a per-order net. Filters by the current
+//  Orders-page search + status if any is active, so a filtered view
+//  produces a filtered report.
+//  Uses the same window.print() approach as the Financials PDF, so
+//  no external library is needed — the browser handles the file.
+// ═══════════════════════════════════════════════════════════════════
+function downloadOrdersFullReportPDF() {
+  const products = cache.products || [];
+  // Respect the Orders-screen search box + status filter if any.
+  const q = (document.getElementById('orders-search')?.value || '').trim().toLowerCase();
+  const statusFilterEl = document.querySelector('#screen-orders .status-filter, #orders-status-filter');
+  const statusFilter = statusFilterEl?.value || '';
+  const matchQuery = (o) => {
+    if (!q) return true;
+    return [o.code, o.customer_name, o.phone, o.city, o.ship_code]
+      .some(v => String(v || '').toLowerCase().includes(q));
+  };
+  const rows = (cache.orders || [])
+    .filter(o => statusFilter ? o.status === statusFilter : true)
+    .filter(matchQuery)
+    .slice()
+    .sort((a, b) => String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || '')));
+  if (!rows.length) { showToast('No orders match the current filter'); return; }
+
+  const shipOf = (o) => {
+    const a = parseFloat(o.actual_shipping || 0);
+    return a > 0 ? a : parseFloat(o.est_shipping || 0);
+  };
+  const STATUS_COLOR = {
+    'Delivered': '#16a34a', 'Returned': '#7c3aed', 'Cancelled': '#dc2626',
+    'Processing': '#0284c7', 'In Transit': '#d97706',
+    'Heading to Customer': '#ec3013', 'On its way to me': '#7c3aed',
+    'Awaiting Action': '#dc2626',
+  };
+
+  // Header block: title + generation timestamp + result count / filters used.
+  const header = `
+    <div class="ptr-hdr">
+      <div class="ptr-brand">PROTECH · Orders — Full Report</div>
+      <div class="ptr-meta">
+        Generated ${new Date().toLocaleString('en-GB')} · ${rows.length} order${rows.length === 1 ? '' : 's'}
+        ${q ? ` · filter: "${esc(q)}"` : ''}
+        ${statusFilter ? ` · status: ${esc(statusFilter)}` : ''}
+      </div>
+    </div>`;
+
+  const cards = rows.map(o => {
+    const items = Array.isArray(o.products) ? o.products : [];
+    const buyCost = items.reduce((a, p) => a + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0);
+    const totalCollected = parseFloat(o.total || 0);
+    const ship = shipOf(o);
+    const net = o.status === 'Delivered' ? (totalCollected - ship - buyCost)
+              : o.status === 'Returned'  ? -ship
+              : 0;
+    const created = String(o.created_at || o.date || '').slice(0, 16).replace('T', ' ');
+    const delivered = o.delivered_at ? String(o.delivered_at).slice(0, 16).replace('T', ' ') : '';
+    const cashCycle = (o.status === 'Delivered' || o.status === 'Returned')
+      ? (o.cash_cycle_closed ? '🔒 Closed (final)' : '🕒 Open (estimated)')
+      : '—';
+    const productRows = items.length
+      ? items.map(p => {
+          const bp = lineBuyPrice(p, products);
+          const qty = parseInt(p.qty || 1) || 1;
+          const sell = parseFloat(p.sell_price || p.price || 0);
+          return `<tr>
+            <td>${esc(p.code || '')}</td>
+            <td>${esc(p.name || (products.find(x => x.code === p.code)?.name) || '')}</td>
+            <td style="text-align:center">${qty}</td>
+            <td style="text-align:right">EGP ${fmt(sell)}</td>
+            <td style="text-align:right">EGP ${fmt(bp)}</td>
+            <td style="text-align:right">EGP ${fmt(sell * qty)}</td>
+          </tr>`;
+        }).join('')
+      : '<tr><td colspan="6" style="text-align:center;opacity:.5">No products on this order</td></tr>';
+    const badgeColor = STATUS_COLOR[o.status] || '#555';
+    return `
+      <section class="ptr-card">
+        <div class="ptr-card-head">
+          <div class="ptr-code">${esc(o.code || '')}</div>
+          <div class="ptr-status" style="background:${badgeColor}">${esc(o.status || '')}</div>
+        </div>
+        <div class="ptr-meta-grid">
+          <div><b>Customer</b><br>${esc(o.customer_name || '')}</div>
+          <div><b>Phone</b><br>${esc(o.phone || '')}</div>
+          <div><b>City</b><br>${esc(o.city || '')}</div>
+          <div><b>Tracking</b><br>${esc(o.ship_code || '—')}</div>
+          <div><b>Created</b><br>${esc(created || '—')}</div>
+          <div><b>Delivered at</b><br>${esc(delivered || '—')}</div>
+          <div><b>Cash cycle</b><br>${cashCycle}</div>
+          <div><b>Allow open</b><br>${o.allow_open ? 'Yes' : 'No'}</div>
+        </div>
+        ${o.address ? `<div class="ptr-addr"><b>Address:</b> ${esc(o.address)}</div>` : ''}
+        ${o.notes ? `<div class="ptr-notes"><b>Notes:</b> ${esc(o.notes)}</div>` : ''}
+        <table class="ptr-items">
+          <thead>
+            <tr>
+              <th>Code</th><th>Product</th><th>Qty</th>
+              <th style="text-align:right">Sell</th>
+              <th style="text-align:right">Buy</th>
+              <th style="text-align:right">Line total</th>
+            </tr>
+          </thead>
+          <tbody>${productRows}</tbody>
+        </table>
+        <div class="ptr-totals">
+          <div><b>Order total:</b> EGP ${fmt(totalCollected)}</div>
+          <div><b>Shipping (${parseFloat(o.actual_shipping || 0) > 0 ? 'actual' : 'estimated'}):</b> EGP ${fmt(ship)}</div>
+          <div><b>Buy cost:</b> EGP ${fmt(buyCost)}</div>
+          ${o.status === 'Delivered' || o.status === 'Returned'
+            ? `<div style="color:${net >= 0 ? '#16a34a' : '#dc2626'}"><b>Net ${o.status === 'Delivered' ? 'margin' : '(return cost)'}:</b> EGP ${fmt(net)}</div>`
+            : ''}
+        </div>
+      </section>`;
+  }).join('');
+
+  // Build the print sandbox.
+  const hostId = 'pt-orders-report-host';
+  document.getElementById(hostId)?.remove();
+  const host = document.createElement('div');
+  host.id = hostId;
+  host.innerHTML = `${header}${cards}`;
+  document.body.appendChild(host);
+
+  const styleId = 'pt-orders-report-css';
+  document.getElementById(styleId)?.remove();
+  const style = document.createElement('style');
+  style.id = styleId;
+  style.textContent = `
+    #${hostId} { display: none; }
+    @media print {
+      @page { size: A4; margin: 12mm; }
+      body * { visibility: hidden !important; }
+      #${hostId}, #${hostId} * { visibility: visible !important; }
+      #${hostId} { display: block !important; position: absolute; left: 0; top: 0; width: 100%; padding: 0; margin: 0; font: 12px/1.4 -apple-system, "Segoe UI", Cairo, Arial, sans-serif; color: #111; }
+      .ptr-hdr { border-bottom: 2px solid #111; margin-bottom: 12px; padding-bottom: 6px; }
+      .ptr-brand { font-size: 15px; font-weight: 800; }
+      .ptr-meta { font-size: 11px; color: #444; margin-top: 2px; }
+      .ptr-card { border: 1px solid #bbb; padding: 10px 12px; margin-bottom: 10px; break-inside: avoid; page-break-inside: avoid; }
+      .ptr-card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+      .ptr-code { font-size: 14px; font-weight: 800; }
+      .ptr-status { color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; }
+      .ptr-meta-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 12px; font-size: 11px; margin-bottom: 6px; }
+      .ptr-meta-grid b { font-size: 10px; color: #666; font-weight: 600; }
+      .ptr-addr, .ptr-notes { font-size: 11px; margin: 4px 0; }
+      .ptr-items { width: 100%; border-collapse: collapse; font-size: 11px; margin: 8px 0 6px; }
+      .ptr-items th, .ptr-items td { border-bottom: 1px solid #ddd; padding: 3px 6px; }
+      .ptr-items th { background: #f4f4f4; text-align: left; font-size: 10px; }
+      .ptr-totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 4px 12px; font-size: 11px; padding-top: 4px; border-top: 1px solid #eee; }
+    }`;
+  document.head.appendChild(style);
+
+  const cleanup = () => {
+    document.getElementById(hostId)?.remove();
+    document.getElementById(styleId)?.remove();
+  };
+  window.addEventListener('afterprint', cleanup, { once: true });
+  setTimeout(() => window.print(), 250);
+}
+
 function downloadOrdersExcel() {
   const now = new Date();
   const monthName = now.toLocaleString('en', { month: 'long', year: 'numeric' });
