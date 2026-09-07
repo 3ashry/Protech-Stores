@@ -1570,12 +1570,44 @@ function renderMediaBuyer() {
   const mbOwed = Math.round(Math.max(0, grossOwed - paidThisMonth) * 100) / 100;
 
   // ── Per-month history from the Media Buyer expenses ledger ─────────
-  //   Groups every Media Buyer expense by YYYY-MM, most recent first.
+  // Groups by the month the salary is FOR, not the month it was paid.
+  // A payment made 2026-08-02 with description "Media buyer salary for
+  // July 2026" belongs under July, not August. Parse the description
+  // for an English or Arabic month name (± year); if none found, fall
+  // back to the expense date's month.
+  const MONTHS_EN = { jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,
+    jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12 };
+  const MONTHS_AR = { 'يناير':1,'فبراير':2,'مارس':3,'أبريل':4,'ابريل':4,'مايو':5,'يونيو':6,'يوليو':7,
+    'أغسطس':8,'اغسطس':8,'سبتمبر':9,'أكتوبر':10,'اكتوبر':10,'نوفمبر':11,'ديسمبر':12 };
+  const monthKeyForPayment = (e) => {
+    const desc = String(e.description || '').toLowerCase();
+    const fallbackDay = dateOfExpense(e);
+    const fallbackYear = /^(\d{4})/.test(fallbackDay) ? parseInt(fallbackDay.slice(0, 4)) : new Date().getFullYear();
+    // English match: "for <month> [year]" or just "<month> [year]".
+    const enRe = new RegExp('(?:\\bfor\\s+)?\\b(' + Object.keys(MONTHS_EN).join('|') + ')\\b(?:\\s+(\\d{4}))?', 'i');
+    const enM = desc.match(enRe);
+    if (enM) {
+      const mm = MONTHS_EN[enM[1].toLowerCase()];
+      const yy = enM[2] ? parseInt(enM[2]) : fallbackYear;
+      return `${yy}-${String(mm).padStart(2, '0')}`;
+    }
+    // Arabic match: any month name, optional 4-digit year nearby.
+    const rawDesc = String(e.description || '');
+    for (const [name, mm] of Object.entries(MONTHS_AR)) {
+      if (rawDesc.includes(name)) {
+        const yr = rawDesc.match(/(\d{4})/);
+        const yy = yr ? parseInt(yr[1]) : fallbackYear;
+        return `${yy}-${String(mm).padStart(2, '0')}`;
+      }
+    }
+    // Fallback: group by the payment date itself.
+    return /^\d{4}-\d{2}/.test(fallbackDay) ? fallbackDay.slice(0, 7) : null;
+  };
+
   const byMonth = new Map();
   for (const e of mbPayments) {
-    const day = dateOfExpense(e);
-    if (!/^\d{4}-\d{2}/.test(day)) continue;
-    const key = day.slice(0, 7);
+    const key = monthKeyForPayment(e);
+    if (!key) continue;
     const cur = byMonth.get(key) || { total: 0, count: 0, entries: [] };
     cur.total += parseFloat(e.amount || 0) || 0;
     cur.count += 1;
