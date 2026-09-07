@@ -1507,11 +1507,90 @@ function renderFinancials() {
       <td><button class="btn btn-danger btn-xs" onclick="delExpense('${e.id}')">✕</button></td>
     </tr>`).join('') : '<tr><td colspan="5"><div class="empty">No expenses recorded</div></td></tr>';
 
+  if (typeof renderInflightBuyCost === 'function') renderInflightBuyCost();
   if (typeof renderBostaCash === 'function') renderBostaCash();
   if (typeof renderSupplierAccount === 'function') renderSupplierAccount();
   if (typeof renderMediaBuyer === 'function') renderMediaBuyer();
   if (typeof renderWeeklySalesChart === 'function') renderWeeklySalesChart();
   if (typeof renderNetProfitBlock === 'function') renderNetProfitBlock();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  IN-FLIGHT BUY COST — money tied up in goods currently out with
+//  Bosta. Filter: status is anything OTHER than
+//    'Delivered' | 'Returned' | 'Processing' | 'Cancelled'.
+//  So this covers In Transit / Heading to Customer / On its way to me
+//  / Awaiting Action / any other in-motion Bosta state we track.
+//  The number = Σ (buy_price × qty) across those orders' product lines,
+//  same formula the Elashry block uses. Shows a top-line tile plus a
+//  drawer with per-status breakdown and a per-order list.
+// ═══════════════════════════════════════════════════════════════════
+function renderInflightBuyCost() {
+  const el = document.getElementById('fin-inflight-buy');
+  if (!el) return;
+  const orders = cache.orders || [];
+  const products = cache.products || [];
+  const EXCLUDED = new Set(['Delivered', 'Returned', 'Processing', 'Cancelled']);
+  const inflight = orders.filter(o => !EXCLUDED.has(o.status));
+  const buyCostOf = (o) => (o.products || []).reduce((b, p) =>
+    b + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0);
+  const totalBuy = inflight.reduce((a, o) => a + buyCostOf(o), 0);
+
+  // Group by status for a compact breakdown row.
+  const byStatus = new Map();
+  for (const o of inflight) {
+    const s = o.status || '(unknown)';
+    const cur = byStatus.get(s) || { count: 0, buy: 0 };
+    cur.count += 1;
+    cur.buy += buyCostOf(o);
+    byStatus.set(s, cur);
+  }
+  const statusRows = Array.from(byStatus.entries())
+    .sort((a, b) => b[1].buy - a[1].buy)
+    .map(([s, v]) => `
+      <div class="fin-row" style="font-size:12px">
+        <span>${esc(s)} · ${v.count} orders</span>
+        <span class="fin-val">EGP ${fmt(v.buy)}</span>
+      </div>`).join('');
+
+  const rowsHtml = inflight.length
+    ? inflight.slice()
+        .sort((a, b) => String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || '')))
+        .map(o => `
+          <tr>
+            <td style="padding:4px"><span class="badge b-orange">${esc(o.code || '')}</span></td>
+            <td style="padding:4px;opacity:.75">${esc(String(o.created_at || o.date || '').slice(0, 10))}</td>
+            <td style="padding:4px">${esc(o.customer_name || '')}</td>
+            <td style="padding:4px">${esc(o.status || '')}</td>
+            <td style="padding:4px;text-align:right"><b>EGP ${fmt(buyCostOf(o))}</b></td>
+          </tr>`).join('')
+    : '<tr><td colspan="5" style="text-align:center;padding:12px;opacity:.6">No in-flight orders</td></tr>';
+
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:8px">
+      <div class="stat-card orange">
+        <div class="stat-val">EGP ${fmt(totalBuy)}</div>
+        <div class="stat-label">Total buy cost — in flight<br><span style="opacity:.7;font-size:11px">${inflight.length} orders · not delivered / returned / processing / cancelled</span></div>
+      </div>
+    </div>
+    ${statusRows ? `<div style="margin:14px 0 4px;font-size:12px;color:var(--muted)">Breakdown by status:</div>${statusRows}` : ''}
+    <details style="margin-top:12px;border:1px solid var(--line);padding:8px 12px">
+      <summary style="cursor:pointer;font-weight:600;font-size:13px">🔍 Per-order list (${inflight.length})</summary>
+      <div style="max-height:340px;overflow:auto;margin-top:8px">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead>
+            <tr style="text-align:left;border-bottom:1px solid var(--line)">
+              <th style="padding:6px 4px">Order</th>
+              <th style="padding:6px 4px">Date</th>
+              <th style="padding:6px 4px">Customer</th>
+              <th style="padding:6px 4px">Status</th>
+              <th style="padding:6px 4px;text-align:right">Buy cost</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>
+    </details>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════
