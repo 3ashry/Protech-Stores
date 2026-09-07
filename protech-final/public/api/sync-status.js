@@ -696,7 +696,9 @@ export default async function handler(req, res) {
         const q1 = 'orders?select=*'
           + '&or=(status.eq.On%20its%20way%20to%20me,status.eq.Returned)'
           + '&warehouse_confirmed=not.is.true'
-          + '&order=updated_at.desc.nullslast,created_at.desc&limit=500';
+          // orders table has no updated_at column — ordering by it made
+          // PostgREST reject the whole query and the picker got zero rows.
+          + '&order=created_at.desc&limit=500';
         let rows = await sbGet(q1);
 
         // Diagnostic breadcrumbs so we can see why the returning tab may be
