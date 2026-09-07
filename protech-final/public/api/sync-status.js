@@ -685,11 +685,39 @@ export default async function handler(req, res) {
       }
       if (op === 'receive-back') {
         // Ops manager confirms the returning parcel is physically back in
-        // the warehouse — same effect as the admin dashboard's "Confirm
-        // Received in Warehouse" button. Bosta may still show it as
-        // 'On its way to me' but from our side it's fully closed.
+        // the warehouse. This is now the ONLY path that flips
+        // warehouse_confirmed=true — the admin dashboard's "Confirm
+        // Received in Warehouse" button was removed, so this handler must
+        // do everything that used to happen there:
+        //   1) Restore each line's qty back to the product row.
+        //   2) Set status='Returned' + warehouse_confirmed=true on the order.
         const orderId = (req.query?.orderId || '').toString();
         if (!/^[A-Za-z0-9_-]+$/.test(orderId)) return res.status(400).json({ error: 'Bad orderId' });
+
+        // Fetch the order so we know which products / quantities to restore.
+        const ordRow = await sbGet(`orders?select=id,products,warehouse_confirmed&id=eq.${encodeURIComponent(orderId)}&limit=1`);
+        const order = ordRow && ordRow[0];
+        if (!order) return res.status(404).json({ error: 'Order not found' });
+
+        // Idempotent guard: if it's already confirmed, don't restock again.
+        if (!order.warehouse_confirmed) {
+          for (const p of (order.products || [])) {
+            const code = (p?.code || '').toString().trim();
+            const addQty = parseInt(p?.qty || 1) || 1;
+            if (!code || addQty <= 0) continue;
+            // Look up the product row by code so we can update its qty.
+            const prRows = await sbGet(`products?select=id,qty&code=eq.${encodeURIComponent(code)}&limit=1`);
+            const pr = prRows && prRows[0];
+            if (!pr) continue;
+            const newQty = (parseInt(pr.qty || 0) || 0) + addQty;
+            await fetch(`${SUPABASE_URL}/rest/v1/products?id=eq.${encodeURIComponent(pr.id)}`, {
+              method: 'PATCH',
+              headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+              body: JSON.stringify({ qty: newQty }),
+            });
+          }
+        }
+
         const r = await fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
           method: 'PATCH',
           headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
