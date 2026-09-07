@@ -1511,6 +1511,89 @@ function renderFinancials() {
   if (typeof renderSupplierAccount === 'function') renderSupplierAccount();
   if (typeof renderMediaBuyer === 'function') renderMediaBuyer();
   if (typeof renderWeeklySalesChart === 'function') renderWeeklySalesChart();
+  if (typeof renderReturnsBlock === 'function') renderReturnsBlock();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  RETURNS COST  — every order whose status is 'Returned', with the
+//  actual shipping Bosta charged for the return leg. Sum is the total
+//  money Bosta subtracted from the wallet for returns; the table
+//  below the tile is the per-order breakdown.
+//  Missing actual_shipping falls back to est_shipping so a row that
+//  just flipped to Returned but hasn't had its cash cycle closed yet
+//  still shows a plausible figure.
+// ═══════════════════════════════════════════════════════════════════
+function renderReturnsBlock() {
+  const el = document.getElementById('fin-returns');
+  if (!el) return;
+  const returns = (cache.orders || []).filter(o => o.status === 'Returned');
+  const shipOf = (o) => {
+    const a = parseFloat(o.actual_shipping || 0);
+    return a > 0 ? a : parseFloat(o.est_shipping || 0);
+  };
+
+  const rows = returns.slice().sort((a, b) =>
+    String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || ''))
+  );
+  const totalShip = rows.reduce((a, o) => a + shipOf(o), 0);
+  const closedCount = rows.filter(o => o.cash_cycle_closed === true).length;
+  const openCount = rows.length - closedCount;
+
+  const tbodyRows = rows.length
+    ? rows.map(o => {
+        const cyc = o.cash_cycle_closed === true ? '🔒 closed' : '🕒 open';
+        const warehouseBadge = o.warehouse_confirmed
+          ? '<span style="color:#16a34a">✅ in warehouse</span>'
+          : '<span style="color:#c2410c">⏳ not yet received</span>';
+        return `
+          <tr>
+            <td><span class="badge b-orange">${esc(o.code || '')}</span></td>
+            <td style="opacity:.75">${esc(String(o.created_at || o.date || '').slice(0, 10))}</td>
+            <td>${esc(o.customer_name || '')}</td>
+            <td>${esc(o.ship_code || '')}</td>
+            <td>${cyc}</td>
+            <td>${warehouseBadge}</td>
+            <td style="text-align:right"><b>EGP ${fmt(shipOf(o))}</b></td>
+          </tr>`;
+      }).join('')
+    : '<tr><td colspan="7"><div class="empty">No returned orders yet</div></td></tr>';
+
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:14px">
+      <div class="stat-card red">
+        <div class="stat-val">EGP ${fmt(totalShip)}</div>
+        <div class="stat-label">Total actual shipping — returns<br><span style="opacity:.7;font-size:11px">${rows.length} returned orders · Σ actual_shipping</span></div>
+      </div>
+      <div class="stat-card orange">
+        <div class="stat-val">${closedCount}</div>
+        <div class="stat-label">🔒 Cash cycle closed<br><span style="opacity:.7;font-size:11px">definitive Bosta invoice</span></div>
+      </div>
+      <div class="stat-card blue">
+        <div class="stat-val">${openCount}</div>
+        <div class="stat-label">🕒 Cash cycle still open<br><span style="opacity:.7;font-size:11px">shipping is estimated</span></div>
+      </div>
+    </div>
+
+    <div style="font-size:12px;color:var(--muted);margin:0 0 10px">
+      Each returned order contributes its <code>actual_shipping</code> (Bosta's real fee for the return leg). Falls back to <code>est_shipping</code> if the cash cycle isn't closed yet.
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Order</th>
+            <th>Date</th>
+            <th>Customer</th>
+            <th>Ship code</th>
+            <th>Cycle</th>
+            <th>Warehouse</th>
+            <th style="text-align:right">Actual shipping</th>
+          </tr>
+        </thead>
+        <tbody>${tbodyRows}</tbody>
+      </table>
+    </div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════
