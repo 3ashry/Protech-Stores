@@ -2903,13 +2903,6 @@ function renderBostaCash() {
         </table>
       </div>
 
-      <h4 style="margin:18px 0 6px;font-size:13px;color:var(--muted)">⏳ Delivered orders NOT yet paid by Bosta (${unpaidOrders.length})</h4>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Order</th><th>Date</th><th>Customer</th><th>Total</th><th>Shipping</th><th>Net to receive</th></tr></thead>
-          <tbody>${unpaidRows}</tbody>
-        </table>
-      </div>
     </div>`;
 }
 
