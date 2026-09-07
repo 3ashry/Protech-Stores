@@ -1486,101 +1486,103 @@ function renderReturns() {
 
 // ── FINANCIALS ──
 function renderFinancials() {
-  const orders = cache.orders;
+  // The financials screen now has exactly two blocks:
+  //   1. Money From Bosta — rendered by renderBostaCash() into #bosta-cash
+  //   2. Expenses         — populated below into #exp-tbody
+  // Other blocks (Elashry, Media Buyer, Packaging, Revenue, Net Profit,
+  // Confirmed Profit, charts) were intentionally stripped and will be
+  // rebuilt block-by-block per the new spec.
+  const generalExpenses = cache.expenses.filter(e => e.category !== 'Elashry');
+  const tbody = document.getElementById('exp-tbody');
+  if (tbody) tbody.innerHTML = generalExpenses.length ? generalExpenses.map(e => `
+    <tr>
+      <td><span class="badge b-orange">${esc(e.category)}</span></td>
+      <td>${esc(e.description) || '—'}</td>
+      <td>EGP ${fmt(e.amount)}</td>
+      <td>${esc(e.date)}</td>
+      <td><button class="btn btn-danger btn-xs" onclick="delExpense('${e.id}')">✕</button></td>
+    </tr>`).join('') : '<tr><td colspan="5"><div class="empty">No expenses recorded</div></td></tr>';
+
+  if (typeof renderBostaCash === 'function') renderBostaCash();
+  if (typeof renderSupplierAccount === 'function') renderSupplierAccount();
+  if (typeof renderMediaBuyer === 'function') renderMediaBuyer();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  MEDIA BUYER SALARY — rolling since last payment
+//  Formula (unchanged from earlier version):
+//    Owed = 20% × paid-ads spend since last Media-Buyer payment
+//         +  1% × delivered product sales (excl. shipping) since last
+//                 Media-Buyer payment
+//  "Since last payment" = strictly greater than the most recent expense
+//  in the "Media Buyer" category. First payment ever → whole history.
+// ═══════════════════════════════════════════════════════════════════
+function renderMediaBuyer() {
+  const el = document.getElementById('fin-mediabuyer');
+  if (!el) return;
+  const orders = cache.orders || [];
+  const expenses = cache.expenses || [];
   const delivered = orders.filter(o => o.status === 'Delivered');
-  const returned = orders.filter(o => o.status === 'Returned');
-  const totalCollected = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
-  const totalActualShip = delivered.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
-  const netFromBosta = totalCollected - totalActualShip;
-  const retShipCost = returned.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
-  const orderGoods = orders.filter(owesElashry).reduce((a, o) => a + (o.products || []).reduce((b, p) =>
-    b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
-  // Things bought from Elashry for Protech (logged as "Elashry" expenses) are part of the
-  // Elashry cost, not generic expenses — fold them into buying cost and out of extra expenses.
-  const elashryExp = cache.expenses.filter(e => e.category === 'Elashry').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-  const buyingCost = orderGoods + elashryExp;
-  const totalExp = cache.expenses.filter(e => e.category !== 'Elashry').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-  const netProfit = netFromBosta - retShipCost - buyingCost - totalExp;
 
-  // Projected scenario: assume every In-Transit order is delivered & paid in full, and all
-  // Returned goods are restocked (so their cost is excluded). The true per-order "am I
-  // winning?" once the pipeline clears.
-  const projOrders = orders.filter(o => o.status === 'In Transit' || o.status === 'Heading to Customer' || o.status === 'Delivered');
-  const projRevenue = projOrders.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0)), 0);
-  const projCOGS = projOrders.reduce((a, o) => a + (o.products || []).reduce((b, p) => b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
-  const allExpenses = cache.expenses.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-  const projProfit = projRevenue - projCOGS - allExpenses - retShipCost;
-
-  // Delivered product sales (excl. shipping) — used by the media buyer fee.
-  const productSalesDelivered = delivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
-
-  // Media buyer cycle: fixed window (start of cycle → end of cycle).
-  // Edit MB_CYCLE_START_ISO / MB_CYCLE_END_ISO to switch to the next
-  // monthly cycle (e.g. 2026-09-02 → 2026-09-30 next month).
-  const MB_CYCLE_START_ISO = '2026-08-01T00:00:00';
-  const MB_CYCLE_END_ISO   = '2026-08-31T23:59:59';
-  const mbPayments = cache.expenses.filter(e => e.category === 'Media Buyer');
+  const mbPayments = expenses.filter(e => e.category === 'Media Buyer');
   const lastPaymentAt = mbPayments.reduce((max, e) => {
     const t = String(e.created_at || e.date || '');
     return t > max ? t : max;
   }, '');
+  const cycleStartISO = lastPaymentAt || '1970-01-01T00:00:00';
   const inCycle = (t) => {
     const s = String(t || '');
-    if (!s) return false;
-    if (s < MB_CYCLE_START_ISO) return false;
-    if (s > MB_CYCLE_END_ISO) return false;
-    return true;
+    return !!s && s > cycleStartISO;
   };
 
-  // Paid-ads expenses inside the cycle window.
-  const paidAdsCycle = cache.expenses
+  const paidAdsCycle = expenses
     .filter(e => e.category === 'Paid Ads' && inCycle(e.created_at || e.date))
     .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
 
-  // ONLY orders whose status is 'Delivered' AND which were placed inside the
-  // cycle window — the media buyer is rewarded for deliveries in this cycle,
-  // not for orders that only reached in-transit / cancelled / awaiting action.
-  const cycleDelivered = delivered.filter(o => inCycle(o.created_at || o.date));
-  const cycleSales = cycleDelivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
+  const cycleDelivered = delivered
+    .filter(o => inCycle(o.created_at || o.date))
+    .slice()
+    .sort((a, b) => String(a.created_at || a.date || '').localeCompare(String(b.created_at || b.date || '')));
+  const cycleSales = cycleDelivered.reduce((a, o) =>
+    a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
 
-  const adsShare = paidAdsCycle * 0.20;
-  const salesShare = cycleSales * 0.01;
-  const mediaBuyerFee = adsShare + salesShare;
-  const mbOwed = Math.round(Math.max(0, mediaBuyerFee) * 100) / 100;
+  const adsShare   = paidAdsCycle * 0.20;
+  const salesShare = cycleSales   * 0.01;
+  const mbOwed     = Math.round(Math.max(0, adsShare + salesShare) * 100) / 100;
 
-  // Header label so the admin knows the exact cycle boundary.
-  const cutoffDay = MB_CYCLE_END_ISO.slice(0, 10);
-  const startDay  = MB_CYCLE_START_ISO.slice(0, 10);
-  const lastPaidTxt = `الدورة: من ${startDay} إلى ${cutoffDay}`;
+  const startDay = lastPaymentAt ? lastPaymentAt.slice(0, 10) : 'the beginning';
+  const nowDay   = new Date().toISOString().slice(0, 10);
+  const cycleLabel = lastPaymentAt
+    ? `منذ آخر دفعة: ${startDay} → ${nowDay}`
+    : `منذ البداية → ${nowDay} (لا توجد دفعة سابقة)`;
 
-  const mbEl = document.getElementById('fin-mediabuyer');
-  if (mbEl) {
-    const ordersRows = cycleDelivered.length
-      ? cycleDelivered.map(o => `
-          <tr>
-            <td>${esc(o.code || '')}</td>
-            <td style="opacity:.75">${esc(String(o.created_at || o.date || '').slice(0, 10))}</td>
-            <td>${esc(o.customer_name || '')}</td>
-            <td style="text-align:right">EGP ${fmt(parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0))}</td>
-          </tr>`).join('')
-      : `<tr><td colspan="4" style="text-align:center;opacity:.6;padding:12px">No delivered orders in this cycle yet</td></tr>`;
-    mbEl.innerHTML = `
-    <div class="fin-row" style="opacity:.75;font-size:12px"><span>${lastPaidTxt}</span><span>${cycleDelivered.length} <b>delivered</b> orders in this cycle</span></div>
-    <div class="fin-row"><span>Paid ads spend (this cycle)</span><span class="fin-val">EGP ${fmt(paidAdsCycle)}</span></div>
+  const ordersRows = cycleDelivered.length
+    ? cycleDelivered.map(o => `
+        <tr>
+          <td style="padding:4px">${esc(o.code || '')}</td>
+          <td style="padding:4px;opacity:.75">${esc(String(o.created_at || o.date || '').slice(0, 10))}</td>
+          <td style="padding:4px">${esc(o.customer_name || '')}</td>
+          <td style="padding:4px;text-align:right">EGP ${fmt(parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0))}</td>
+        </tr>`).join('')
+    : '<tr><td colspan="4" style="text-align:center;opacity:.6;padding:12px">No delivered orders since last payment</td></tr>';
+
+  el.innerHTML = `
+    <div class="fin-row" style="opacity:.75;font-size:12px"><span>${cycleLabel}</span><span>${cycleDelivered.length} delivered orders in this cycle</span></div>
+    <div class="fin-row"><span>Paid ads spend (since last payment)</span><span class="fin-val">EGP ${fmt(paidAdsCycle)}</span></div>
     <div class="fin-row"><span>20% of paid ads</span><span class="fin-val">EGP ${fmt(adsShare)}</span></div>
-    <div class="fin-row"><span><b>Delivered</b> product sales (this cycle, excl. shipping, ${startDay} → ${cutoffDay})</span><span class="fin-val">EGP ${fmt(cycleSales)}</span></div>
+    <div class="fin-row"><span>Delivered product sales (excl. shipping)</span><span class="fin-val">EGP ${fmt(cycleSales)}</span></div>
     <div class="fin-row"><span>1% of delivered sales</span><span class="fin-val">EGP ${fmt(salesShare)}</span></div>
-    <div class="fin-row subtotal"><span>Owed for cycle ${startDay} → ${cutoffDay}</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(mbOwed)}</span></div>
-    <details style="margin-top:12px;border:1px solid var(--line);border-radius:8px;padding:8px 12px">
+    <div class="fin-row subtotal"><span>Owed now (${startDay} → ${nowDay})</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(mbOwed)}</span></div>
+    <details style="margin-top:12px;border:1px solid var(--line);padding:8px 12px">
       <summary style="cursor:pointer;font-weight:600">📋 Delivered orders in this cycle (${cycleDelivered.length})</summary>
       <div style="max-height:280px;overflow:auto;margin-top:8px">
         <table style="width:100%;border-collapse:collapse;font-size:13px">
           <thead>
-            <tr style="text-align:right;border-bottom:1px solid var(--line)">
-              <th style="text-align:left;padding:6px 4px">Code</th>
-              <th style="text-align:left;padding:6px 4px">Date</th>
-              <th style="text-align:left;padding:6px 4px">Customer</th>
-              <th style="text-align:right;padding:6px 4px">Product sales</th>
+            <tr style="text-align:left;border-bottom:1px solid var(--line)">
+              <th style="padding:6px 4px">Code</th>
+              <th style="padding:6px 4px">Date</th>
+              <th style="padding:6px 4px">Customer</th>
+              <th style="padding:6px 4px;text-align:right">Product sales</th>
             </tr>
           </thead>
           <tbody>${ordersRows}</tbody>
@@ -1590,123 +1592,111 @@ function renderFinancials() {
     <div style="margin-top:12px">
       <button class="btn btn-primary btn-sm" ${mbOwed > 0 ? '' : 'disabled'} onclick="payMediaBuyer(${mbOwed})">✅ Mark as paid (record EGP ${fmt(mbOwed)} to expenses)</button>
     </div>`;
-  }
+}
 
-  // General expenses list — exclude "Elashry" (shown in the Elashry supplier box instead).
-  const generalExpenses = cache.expenses.filter(e => e.category !== 'Elashry');
-  document.getElementById('exp-tbody').innerHTML = generalExpenses.length ? generalExpenses.map(e => `
-    <tr>
-      <td><span class="badge b-orange">${esc(e.category)}</span></td>
-      <td>${esc(e.description) || '—'}</td>
-      <td>EGP ${fmt(e.amount)}</td>
-      <td>${esc(e.date)}</td>
-      <td><button class="btn btn-danger btn-xs" onclick="delExpense('${e.id}')">✕</button></td>
-    </tr>`).join('') : '<tr><td colspan="5"><div class="empty">No expenses recorded</div></td></tr>';
+// ═══════════════════════════════════════════════════════════════════
+//  Am I WINNING or LOSING?  — delivered-order gross margin
+//  Independent of what Bosta has actually paid out. Pure "for the
+//  orders that shipped and delivered, did the sell price cover the
+//  shipping and the buy cost?"
+//
+//   Revenue = Σ (order.total − actual_shipping) for DELIVERED orders
+//   COGS    = Σ (buy_price × qty)               for DELIVERED orders
+//   Margin  = Revenue − COGS      ← the number that tells you if
+//                                    you're winning or losing money.
+// ═══════════════════════════════════════════════════════════════════
+function renderDeliveredMargin() {
+  const host = document.getElementById('fin-margin');
+  if (!host) return;
+  const orders = cache.orders || [];
+  const products = cache.products || [];
+  const delivered = orders.filter(o => o.status === 'Delivered');
 
-  // Pure Bosta-minus-Elashry balance — the single number the owner cares
-  // about: "what I should receive from Bosta MINUS what I should pay to
-  // Elashry". Ignores ads / media buyer / other expenses. If positive, that's
-  // the cash you actually keep from those orders' supplier cycle.
-  const bostaMinusElashry = netFromBosta - buyingCost - retShipCost;
+  const rows = delivered.map(o => {
+    const total  = parseFloat(o.total || 0);
+    const ship   = parseFloat(o.actual_shipping || 0);
+    const buy    = (o.products || []).reduce((b, p) =>
+      b + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0);
+    const rev    = total - ship;             // money Bosta owes me
+    const margin = rev - buy;                // winning (+) / losing (−)
+    return { o, total, ship, buy, rev, margin };
+  });
 
-  // ── Delivered-only profit ─────────────────────────────────────────────
-  // Answers: "did the orders that actually delivered make money, BEFORE any
-  // other costs (ads, media buyer, expenses, returns)?"  Only looks at
-  // Delivered orders: money received from Bosta for them vs. their Elashry
-  // buy cost.  Nothing else added, nothing else subtracted.
-  const deliveredElashryOwed = delivered.reduce((a, o) =>
-    a + (o.products || []).reduce((b, p) =>
-      b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
-  const deliveredGrossProfit = netFromBosta - deliveredElashryOwed;
+  const revenue = rows.reduce((a, r) => a + r.rev, 0);
+  const cogs    = rows.reduce((a, r) => a + r.buy, 0);
+  const margin  = revenue - cogs;
+  const winning = margin >= 0;
 
-  // Revenue Summary — realised money in/out on Delivered + Returned orders.
-  const rev = document.getElementById('fin-revenue');
-  if (rev) rev.innerHTML = `
-    <div class="fin-row"><span>Total collected (orders + shipping)</span><span class="fin-val">EGP ${fmt(totalCollected)}</span></div>
-    <div class="fin-row"><span>Total actual shipping cost</span><span class="fin-val deduct">− EGP ${fmt(totalActualShip)}</span></div>
-    <div class="fin-row subtotal"><span>Net amount from Bosta</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(netFromBosta)}</span></div>
-    <div style="height:10px"></div>
-    <div class="fin-row"><span>Return shipping cost</span><span class="fin-val deduct">− EGP ${fmt(retShipCost)}</span></div>
-    <div class="fin-row"><span>Total Elashry cost (goods + purchases)</span><span class="fin-val deduct">− EGP ${fmt(buyingCost)}</span></div>
-    <div style="height:12px"></div>
-    <div class="fin-row ${bostaMinusElashry >= 0 ? 'profit' : 'loss'}" style="border-top:2px solid var(--line);padding-top:12px;font-size:1.05rem">
-      <span>${bostaMinusElashry >= 0 ? '🟢 Net (Bosta − Elashry)' : '🔴 Net (Bosta − Elashry)'}</span>
-      <span>EGP ${fmt(Math.abs(bostaMinusElashry))}</span>
-    </div>
-    <div style="height:18px"></div>
-    <div style="border:1px dashed var(--line);border-radius:10px;padding:12px;background:rgba(255,255,255,.02)">
-      <div class="fin-row" style="font-weight:800;color:var(--orange);margin-bottom:6px">
-        <span>📦 Delivered orders only — before any other costs</span>
-        <span style="opacity:.7;font-weight:500;font-size:12px">${delivered.length} orders</span>
+  // Losing-order surface — the ones that dragged us below zero.
+  const losers = rows.filter(r => r.margin < 0).sort((a, b) => a.margin - b.margin);
+  const loserSum = losers.reduce((a, r) => a + r.margin, 0);
+  const marginPct = revenue > 0 ? (margin / revenue) * 100 : 0;
+
+  const loserRows = losers.length
+    ? losers.slice(0, 20).map(r => `
+        <tr>
+          <td style="padding:4px">${esc(r.o.code || '')}</td>
+          <td style="padding:4px;opacity:.75">${esc(String(r.o.created_at || r.o.date || '').slice(0, 10))}</td>
+          <td style="padding:4px">${esc(r.o.customer_name || '')}</td>
+          <td style="padding:4px;text-align:right">EGP ${fmt(r.total)}</td>
+          <td style="padding:4px;text-align:right">EGP ${fmt(r.ship)}</td>
+          <td style="padding:4px;text-align:right">EGP ${fmt(r.buy)}</td>
+          <td style="padding:4px;text-align:right;color:#dc2626"><b>EGP ${fmt(r.margin)}</b></td>
+        </tr>`).join('')
+    : '<tr><td colspan="7"><div class="empty">🎉 No losing orders</div></td></tr>';
+
+  host.innerHTML = `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+        <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:8px">
+          ${winning ? '🟢' : '🔴'} Am I winning or losing? &nbsp;<span style="opacity:.6;font-weight:500;font-size:12px">(delivered orders only)</span>
+        </h3>
       </div>
-      <div class="fin-row"><span>Received from Bosta (delivered, net of shipping)</span><span class="fin-val">EGP ${fmt(netFromBosta)}</span></div>
-      <div class="fin-row"><span>Owed to Elashry (buy cost of delivered goods)</span><span class="fin-val deduct">− EGP ${fmt(deliveredElashryOwed)}</span></div>
-      <div class="fin-row ${deliveredGrossProfit >= 0 ? 'profit' : 'loss'}" style="border-top:1px solid var(--line);padding-top:8px;margin-top:4px">
-        <span>${deliveredGrossProfit >= 0 ? '🟢 Gross profit on delivered orders' : '🔴 Gross loss on delivered orders'}</span>
-        <span>EGP ${fmt(Math.abs(deliveredGrossProfit))}</span>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:8px">
+        <div class="stat-card green">
+          <div class="stat-val">EGP ${fmt(revenue)}</div>
+          <div class="stat-label">Revenue<br><span style="opacity:.7;font-size:11px">${delivered.length} delivered · total − actual shipping</span></div>
+        </div>
+        <div class="stat-card orange">
+          <div class="stat-val">EGP ${fmt(cogs)}</div>
+          <div class="stat-label">Cost of goods (Elashry)<br><span style="opacity:.7;font-size:11px">Σ buy price × qty</span></div>
+        </div>
+        <div class="stat-card ${winning ? 'green' : 'red'}">
+          <div class="stat-val">${winning ? '+' : '−'} EGP ${fmt(Math.abs(margin))}</div>
+          <div class="stat-label">${winning ? '🟢 Winning' : '🔴 Losing'} &nbsp;<span style="opacity:.7;font-size:11px">${marginPct.toFixed(1)}% margin</span></div>
+        </div>
       </div>
+
+      <div style="font-size:12px;color:var(--muted);margin:14px 0 6px">
+        This is your gross margin on delivered orders — independent of whether
+        Bosta has actually paid the money into your bank yet. If it's positive,
+        every delivered order taken together earned money; if negative, product
+        pricing isn't covering shipping + buy cost.
+      </div>
+
+      <details style="margin:10px 0 6px;border:1px solid var(--line);padding:8px 12px">
+        <summary style="cursor:pointer;font-weight:600;font-size:13px">
+          ⚠️ Losing-margin delivered orders (${losers.length}${losers.length ? ` · EGP ${fmt(loserSum)} lost` : ''})
+        </summary>
+        <div style="max-height:340px;overflow:auto;margin-top:8px">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead>
+              <tr style="text-align:left;border-bottom:1px solid var(--line)">
+                <th style="padding:6px 4px">Order</th>
+                <th style="padding:6px 4px">Date</th>
+                <th style="padding:6px 4px">Customer</th>
+                <th style="padding:6px 4px;text-align:right">Total</th>
+                <th style="padding:6px 4px;text-align:right">Actual ship</th>
+                <th style="padding:6px 4px;text-align:right">Buy cost</th>
+                <th style="padding:6px 4px;text-align:right">Margin</th>
+              </tr>
+            </thead>
+            <tbody>${loserRows}</tbody>
+          </table>
+        </div>
+      </details>
     </div>`;
-
-  // ── Confirmed Profit — cash-cycle closed only ──────────────────────
-  // Answers: "for orders where Bosta has already invoiced (cash cycle
-  // closed), what's my actual profit before ads/expenses?"
-  //   Collected (delivered COD, 0 for returned)
-  //   − Buying cost (Elashry buy price × qty)
-  //   − Actual shipping (real Bosta invoice, both outbound and return legs)
-  // Uses ONLY orders whose cash_cycle_closed = true, so every number is
-  // definitive (no formula estimates leaking in).
-  const closedFinal = orders.filter(o =>
-    (o.status === 'Delivered' || o.status === 'Returned') && o.cash_cycle_closed === true
-  );
-  const closedDelivered = closedFinal.filter(o => o.status === 'Delivered');
-  const closedReturned = closedFinal.filter(o => o.status === 'Returned');
-  const cfCollected = closedDelivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
-  const cfBuying = closedFinal.reduce((a, o) =>
-    a + (o.products || []).reduce((b, p) =>
-      b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
-  const cfShipping = closedFinal.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
-  const cfProfit = cfCollected - cfBuying - cfShipping;
-  const confEl = document.getElementById('fin-confirmed');
-  if (confEl) confEl.innerHTML = `
-    <div class="fin-row" style="opacity:.75;font-size:12px">
-      <span>${closedFinal.length} orders (${closedDelivered.length} delivered · ${closedReturned.length} returned)</span>
-      <span>Cash-cycle closed — Bosta invoiced ✓</span>
-    </div>
-    <div class="fin-row"><span>Collected from customers (delivered only)</span><span class="fin-val">EGP ${fmt(cfCollected)}</span></div>
-    <div class="fin-row"><span>Total buying cost (Elashry)</span><span class="fin-val deduct">− EGP ${fmt(cfBuying)}</span></div>
-    <div class="fin-row"><span>Total actual shipping (Bosta invoice)</span><span class="fin-val deduct">− EGP ${fmt(cfShipping)}</span></div>
-    <div class="fin-row ${cfProfit >= 0 ? 'profit' : 'loss'}" style="border-top:2px solid var(--line);padding-top:12px;font-size:1.05rem">
-      <span>${cfProfit >= 0 ? '🟢 Confirmed profit (before expenses)' : '🔴 Confirmed loss (before expenses)'}</span>
-      <span>EGP ${fmt(Math.abs(cfProfit))}</span>
-    </div>
-    <div style="margin-top:10px;font-size:11px;opacity:.7;line-height:1.5">
-      Only orders where Bosta has finalised the invoice count here.
-      Ads, media buyer, and other expenses are excluded — this is the
-      raw margin on shipments that have already settled.
-    </div>`;
-
-  // Net Profit Summary — realised profit now, plus the projected profit once the pipeline clears.
-  const net = document.getElementById('fin-net');
-  if (net) net.innerHTML = `
-    <div class="fin-row"><span>Net from Bosta</span><span class="fin-val">EGP ${fmt(netFromBosta)}</span></div>
-    <div class="fin-row"><span>Total Elashry cost (goods + purchases)</span><span class="fin-val deduct">− EGP ${fmt(buyingCost)}</span></div>
-    <div class="fin-row"><span>Total extra expenses</span><span class="fin-val deduct">− EGP ${fmt(totalExp)}</span></div>
-    <div class="fin-row"><span>Return shipping costs</span><span class="fin-val deduct">− EGP ${fmt(retShipCost)}</span></div>
-    <div class="fin-row ${netProfit >= 0 ? 'profit' : 'loss'}"><span>${netProfit >= 0 ? '🟢 Net Profit' : '🔴 Net Loss'}</span><span>EGP ${fmt(Math.abs(netProfit))}</span></div>
-    <div style="height:16px"></div>
-    <div class="fin-row"><span style="font-weight:800;color:var(--orange)">Projected — if all In-Transit deliver & returns restocked</span></div>
-    <div class="fin-row"><span>Projected revenue (delivered + in-transit, net of shipping)</span><span class="fin-val">EGP ${fmt(projRevenue)}</span></div>
-    <div class="fin-row"><span>Cost of those goods (returns excluded)</span><span class="fin-val deduct">− EGP ${fmt(projCOGS)}</span></div>
-    <div class="fin-row"><span>All expenses (ads, Elashry purchases, Bosta fees…)</span><span class="fin-val deduct">− EGP ${fmt(allExpenses)}</span></div>
-    <div class="fin-row"><span>Return shipping</span><span class="fin-val deduct">− EGP ${fmt(retShipCost)}</span></div>
-    <div class="fin-row ${projProfit >= 0 ? 'profit' : 'loss'}"><span>${projProfit >= 0 ? '🟢 Projected Profit' : '🔴 Projected Loss'}</span><span>EGP ${fmt(Math.abs(projProfit))}</span></div>`;
-
-  // The two money sections (Bosta receivable + Elashry owed) render into their own containers.
-  if (typeof renderBostaCash === 'function') renderBostaCash();
-  if (typeof renderSupplierAccount === 'function') renderSupplierAccount();
-
-  // Weekly projected-profit chart (since June).
-  if (typeof renderWeeklyProfitChart === 'function') renderWeeklyProfitChart();
 }
 
 // ── EXPENSES ──
@@ -2037,20 +2027,19 @@ function financeData() {
   const notReturnedCost = returned.filter(o => !o.warehouse_confirmed)
     .reduce((a, o) => a + (o.products || []).reduce((b, p) => b + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0), 0);
 
-  // Media buyer — MUST mirror the cycle logic used in renderFinancials so
-  // the Excel export shows the same numbers as the dashboard card. Keep
-  // these two dates in lockstep with the constants in renderFinancials.
-  const MB_CYCLE_START_ISO = '2026-08-01T00:00:00';
-  const MB_CYCLE_END_ISO   = '2026-08-31T23:59:59';
+  // Media buyer — MUST mirror the cycle logic used in renderFinancials.
+  // Cycle = time since the last Media Buyer payment (rolling window).
   const productSalesDelivered = delivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
   const paidAdsAll = expenses.filter(e => e.category === 'Paid Ads').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
   const mbPayments = expenses.filter(e => e.category === 'Media Buyer');
+  const lastPaymentAt = mbPayments.reduce((max, e) => {
+    const t = String(e.created_at || e.date || '');
+    return t > max ? t : max;
+  }, '');
+  const cycleStartISO = lastPaymentAt || '1970-01-01T00:00:00';
   const inCycle = (t) => {
     const s = String(t || '');
-    if (!s) return false;
-    if (s < MB_CYCLE_START_ISO) return false;
-    if (s > MB_CYCLE_END_ISO) return false;
-    return true;
+    return !!s && s > cycleStartISO;
   };
   const cycleDelivered = delivered
     .filter(o => inCycle(o.created_at || o.date))
@@ -2065,8 +2054,8 @@ function financeData() {
   const mbFee = adsShare + salesShare;
   const mbPaid = mbPayments.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
   const mbOwed = Math.max(0, mbFee);
-  const cycleFrom = MB_CYCLE_START_ISO.slice(0, 10);
-  const cycleTo   = MB_CYCLE_END_ISO.slice(0, 10);
+  const cycleFrom = lastPaymentAt ? lastPaymentAt.slice(0, 10) : '—';
+  const cycleTo   = new Date().toISOString().slice(0, 10);
 
   const generalExpenses = expenses.filter(e => e.category !== 'Elashry');
   return { collected, delShip, retShip, shouldReceive, receipts, received, bostaRemaining,
@@ -2524,29 +2513,21 @@ function renderSupplierAccount() {
   const host = document.getElementById('supplier-account');
   if (!host) return;
 
-  const goodsOwed = computeSupplierOwed(); // goods for delivered + returned-not-restocked only
-  // Extra things bought from Elashry (e.g. for videos) = expenses with category "Elashry".
-  const elashryPurchases = (cache.expenses || []).filter(e => e.category === 'Elashry');
-  const purchasesTotal = elashryPurchases.reduce((a, c) => a + parseFloat(c.amount || 0), 0);
-  const owed = goodsOwed + purchasesTotal;
-  const paid = supplierCache.payments.reduce((a, p) => a + parseFloat(p.amount || 0), 0);
-  const remaining = owed - paid;
-  const settled = remaining <= 0;
-  const purchaseRows = elashryPurchases.length
-    ? elashryPurchases.map(c => `
-        <tr>
-          <td>${esc(c.date) || '—'}</td>
-          <td><strong>EGP ${fmt(c.amount)}</strong></td>
-          <td>${esc(c.description) || '—'}</td>
-          <td><button class="btn btn-danger btn-xs" onclick="delExpense('${c.id}')">✕</button></td>
-        </tr>`).join('')
-    : '<tr><td colspan="4"><div class="empty">No purchases from Elashry yet</div></td></tr>';
-  // Buy cost of goods from Returned orders not yet returned to the warehouse.
-  const notReturnedCost = (cache.orders || [])
-    .filter(o => o.status === 'Returned' && !o.warehouse_confirmed)
-    .reduce((a, o) => a + (o.products || []).reduce((b, p) => b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
+  // ── Owed to Elashry — DELIVERED orders only ─────────────────────────
+  // Strict spec: sum of buy_price × qty across every delivered order's
+  // product lines. No returned-not-restocked branch, no ad-hoc Elashry
+  // purchases folded in — those live in the Expenses section now.
+  const delivered = (cache.orders || []).filter(o => o.status === 'Delivered');
+  const goodsOwed = delivered.reduce((a, o) =>
+    a + (o.products || []).reduce((b, p) =>
+      b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0), 0);
 
-  const payRows = supplierCache.payments.length
+  const paid = (supplierCache.payments || [])
+    .reduce((a, p) => a + parseFloat(p.amount || 0), 0);
+  const remaining = goodsOwed - paid;
+  const settled = remaining <= 0;
+
+  const payRows = (supplierCache.payments || []).length
     ? supplierCache.payments.map(p => `
         <tr>
           <td>${esc(p.date) || '—'}</td>
@@ -2556,6 +2537,23 @@ function renderSupplierAccount() {
         </tr>`).join('')
     : '<tr><td colspan="4"><div class="empty">No payments to Elashry recorded yet</div></td></tr>';
 
+  // Per-order breakdown so any wrongly-priced line is easy to spot.
+  const breakdownRows = delivered.length
+    ? delivered.slice()
+        .sort((a, b) => String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || '')))
+        .map(o => {
+          const buy = (o.products || []).reduce((b, p) =>
+            b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0);
+          return `
+            <tr>
+              <td style="padding:4px">${esc(o.code || '')}</td>
+              <td style="padding:4px;opacity:.75">${esc(String(o.created_at || o.date || '').slice(0, 10))}</td>
+              <td style="padding:4px">${esc(o.customer_name || '')}</td>
+              <td style="padding:4px;text-align:right"><b>EGP ${fmt(buy)}</b></td>
+            </tr>`;
+        }).join('')
+    : '<tr><td colspan="4"><div class="empty">No delivered orders yet</div></td></tr>';
+
   host.innerHTML = `
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">
@@ -2564,34 +2562,48 @@ function renderSupplierAccount() {
           ${supplierCache.loading ? '<span style="font-size:12px;color:var(--muted)">loading…</span>' : ''}
         </h3>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-ghost btn-sm" onclick="downloadElashryExcel()">📥 Excel</button>
-          <button class="btn btn-ghost btn-sm" onclick="openExpense('Elashry')">+ Record Purchase</button>
+          <button class="btn btn-ghost btn-sm" onclick="downloadSupplierBreakdownExcel()">📥 Excel</button>
           <button class="btn btn-primary btn-sm" onclick="openSupplierPayment()">+ Record Payment</button>
         </div>
       </div>
 
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:8px">
-        <div class="stat-card orange"><div class="stat-val">EGP ${fmt(owed)}</div><div class="stat-label">How much I owe Elashry (goods + purchases)</div></div>
-        <div class="stat-card blue"><div class="stat-val">EGP ${fmt(paid)}</div><div class="stat-label">Total Paid to Elashry</div></div>
-        <div class="stat-card ${settled ? 'green' : 'red'}"><div class="stat-val">EGP ${fmt(Math.abs(remaining))}</div><div class="stat-label">${settled ? (remaining < 0 ? 'Overpaid / Credit' : 'Fully Settled') : 'Remaining to Pay'}</div></div>
-      </div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
-        Owed = buy price × qty for <strong>Delivered</strong> orders + <strong>Returned</strong> orders not yet returned to the warehouse (returned-and-restocked don't count) <strong>+ purchases from Elashry</strong> below. &nbsp;Goods: EGP ${fmt(goodsOwed)} &nbsp;+&nbsp; Purchases: EGP ${fmt(purchasesTotal)}
-      </div>
-      <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:12px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-        <span style="font-weight:700;font-size:13px">↩️ Goods not returned to warehouse yet (buy cost)</span>
-        <span style="font-weight:900;font-size:16px;color:#c2410c">EGP ${fmt(notReturnedCost)}</span>
-      </div>
-
-      <h4 style="margin:6px 0;font-size:13px;color:var(--muted)">Purchases from Elashry (for videos etc. — added to what you owe)</h4>
-      <div class="table-wrap" style="margin-bottom:16px">
-        <table>
-          <thead><tr><th>Date</th><th>Amount</th><th>What</th><th></th></tr></thead>
-          <tbody>${purchaseRows}</tbody>
-        </table>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:8px">
+        <div class="stat-card orange">
+          <div class="stat-val">EGP ${fmt(goodsOwed)}</div>
+          <div class="stat-label">Total owed to Elashry<br><span style="opacity:.7;font-size:11px">${delivered.length} delivered orders · Σ buy price × qty</span></div>
+        </div>
+        <div class="stat-card blue">
+          <div class="stat-val">EGP ${fmt(paid)}</div>
+          <div class="stat-label">Total paid to Elashry<br><span style="opacity:.7;font-size:11px">${(supplierCache.payments || []).length} payments</span></div>
+        </div>
+        <div class="stat-card ${settled ? 'green' : 'red'}">
+          <div class="stat-val">EGP ${fmt(Math.abs(remaining))}</div>
+          <div class="stat-label">${settled ? (remaining < 0 ? 'Overpaid / Credit' : 'Fully Settled ✓') : 'Remaining to pay'}</div>
+        </div>
       </div>
 
-      <h4 style="margin:6px 0;font-size:13px;color:var(--muted)">Payments to Elashry</h4>
+      <div style="font-size:12px;color:var(--muted);margin:14px 0 6px">
+        Owed = Σ (buy price × qty) across every <b>delivered</b> order's product lines.
+      </div>
+
+      <details style="margin:10px 0 6px;border:1px solid var(--line);padding:8px 12px">
+        <summary style="cursor:pointer;font-weight:600;font-size:13px">🔍 Per-order breakdown (${delivered.length} delivered)</summary>
+        <div style="max-height:340px;overflow:auto;margin-top:8px">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead>
+              <tr style="text-align:left;border-bottom:1px solid var(--line)">
+                <th style="padding:6px 4px">Order</th>
+                <th style="padding:6px 4px">Date</th>
+                <th style="padding:6px 4px">Customer</th>
+                <th style="padding:6px 4px;text-align:right">Buy cost</th>
+              </tr>
+            </thead>
+            <tbody>${breakdownRows}</tbody>
+          </table>
+        </div>
+      </details>
+
+      <h4 style="margin:18px 0 6px;font-size:13px;color:var(--muted)">💵 Payments to Elashry</h4>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Date</th><th>Amount</th><th>Note</th><th></th></tr></thead>
@@ -2677,27 +2689,13 @@ async function delSupplierPayment(id) {
 }
 
 
-// Inject the supplier section into the Financials screen + auto-render with it
-function injectSupplierUI() {
-  if (document.getElementById('supplier-account')) return;
-  const fin = document.getElementById('screen-financials');
-  if (!fin) return;
-  const div = document.createElement('div');
-  div.id = 'supplier-account';
-  const netCard = document.getElementById('fin-net-card');
-  if (netCard) fin.insertBefore(div, netCard); else fin.appendChild(div);
-}
+// The supplier card lives inside a static <div id="supplier-account"> in
+// index.html now, so no DOM injection is needed. This init just kicks off
+// the payment ledger load on boot so the card renders with fresh data.
+function injectSupplierUI() { /* not needed — div is in index.html */ }
 
 (function initSupplier() {
-  const run = () => {
-    injectSupplierUI();
-    if (typeof renderFinancials === 'function' && !renderFinancials.__supplierPatched) {
-      const orig = renderFinancials;
-      renderFinancials = function () { orig.apply(this, arguments); renderSupplierAccount(); };
-      renderFinancials.__supplierPatched = true;
-    }
-    loadSupplierPayments();
-  };
+  const run = () => { loadSupplierPayments(); };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
   else run();
 })();
@@ -2717,55 +2715,195 @@ async function loadBostaReceipts() {
   renderBostaCash();
 }
 
+// Normalise a stored order_codes value into an array of upper-cased codes.
+// Accepts JSONB array, comma / newline separated string, or null.
+function _receiptOrderCodes(r) {
+  if (!r) return [];
+  const raw = r.order_codes;
+  if (!raw) return [];
+  const arr = Array.isArray(raw) ? raw : String(raw).split(/[\s,;]+/);
+  return arr.map(x => String(x || '').trim().toUpperCase()).filter(Boolean);
+}
+
 function renderBostaCash() {
   const host = document.getElementById('bosta-cash');
   if (!host) return;
   const orders = (typeof cache !== 'undefined' && cache.orders) ? cache.orders : [];
   const delivered = orders.filter(o => o.status === 'Delivered');
-  const returned = orders.filter(o => o.status === 'Returned');
-  // Money I should receive from Bosta =
-  //   total Bosta collected from customers (delivered order totals)
-  //   − (actual shipping of delivered orders + actual shipping of returned orders).
-  const collected = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
-  const delShip = delivered.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
-  const retShip = returned.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
-  const shouldReceive = collected - (delShip + retShip);
-  const received = (bostaCashCache.receipts || []).reduce((a, r) => a + parseFloat(r.amount || 0), 0);
-  const remaining = shouldReceive - received;
 
-  const rows = (bostaCashCache.receipts || []).length
-    ? bostaCashCache.receipts.map(r => `
-        <tr>
-          <td>${esc(r.date) || '—'}</td>
-          <td><strong>EGP ${fmt(r.amount)}</strong></td>
-          <td>${esc(r.note) || '—'}</td>
-          <td><button class="btn btn-danger btn-xs" onclick="delBostaReceipt('${r.id}')">✕</button></td>
-        </tr>`).join('')
-    : '<tr><td colspan="4"><div class="empty">No money received logged yet</div></td></tr>';
+  // ── Money I SHOULD receive from Bosta ───────────────────────────────
+  // Strict spec: total collected of ALL DELIVERED orders
+  //              − actual_shipping of ALL DELIVERED orders.
+  // No fallbacks, no est_shipping. Cash-cycle state does not matter here.
+  const shippingFeeFor = (o) => parseFloat(o.actual_shipping || 0);
+  const collected = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
+  const delShip   = delivered.reduce((a, o) => a + shippingFeeFor(o), 0);
+  const shouldReceive = collected - delShip;
+
+  // Closed vs open split — informational only. Uses the same
+  // actual_shipping value so both halves sum back to `shouldReceive`.
+  const closedD  = delivered.filter(o => o.cash_cycle_closed === true);
+  const openD    = delivered.filter(o => o.cash_cycle_closed !== true);
+  const closedNet = closedD.reduce((a, o) => a + parseFloat(o.total || 0) - shippingFeeFor(o), 0);
+  const openNet   = openD  .reduce((a, o) => a + parseFloat(o.total || 0) - shippingFeeFor(o), 0);
+
+  // ── Received so far — sum of manually-recorded bank transfers ───────
+  const receipts = (bostaCashCache.receipts || [])
+    .slice()
+    .sort((a, b) => String(b.date || b.created_at || '').localeCompare(String(a.date || a.created_at || '')));
+  const received = receipts.reduce((a, r) => a + parseFloat(r.amount || 0), 0);
+
+  // ── Per-order paid map from every receipt's order_codes list ────────
+  // paidBy[code] = list of receipt objects that referenced this order.
+  const paidBy = new Map();
+  for (const r of receipts) {
+    for (const code of _receiptOrderCodes(r)) {
+      if (!paidBy.has(code)) paidBy.set(code, []);
+      paidBy.get(code).push(r);
+    }
+  }
+
+  // Split delivered orders into paid / unpaid by whether any receipt covers them.
+  const paidOrders   = delivered.filter(o => paidBy.has(String(o.code || '').toUpperCase()));
+  const unpaidOrders = delivered
+    .filter(o => !paidBy.has(String(o.code || '').toUpperCase()))
+    .sort((a, b) => String(a.created_at || a.date || '').localeCompare(String(b.created_at || b.date || '')));
+
+  // Money still to receive = sum over UNPAID delivered orders of (total − shipping)
+  const stillToReceive = unpaidOrders.reduce((a, o) =>
+    a + (parseFloat(o.total || 0) - shippingFeeFor(o)), 0);
+
+  // Sanity metric: does the cash we've received match the paid orders' net?
+  const paidNet = paidOrders.reduce((a, o) =>
+    a + (parseFloat(o.total || 0) - shippingFeeFor(o)), 0);
+  const diff = received - paidNet;
+
+  // ── Bank transfers table ────────────────────────────────────────────
+  const transferRows = receipts.length
+    ? receipts.map(r => {
+        const codes = _receiptOrderCodes(r);
+        const codesHtml = codes.length
+          ? `<div style="max-height:80px;overflow:auto;font-size:11px;line-height:1.5">
+               ${codes.map(c => `<span class="badge b-orange" style="margin:1px 3px 1px 0">${esc(c)}</span>`).join('')}
+             </div>`
+          : '<span style="opacity:.6;font-size:12px">— no orders listed —</span>';
+        return `
+          <tr>
+            <td>${esc(r.date) || '—'}</td>
+            <td><strong>EGP ${fmt(r.amount)}</strong></td>
+            <td>${codes.length} orders${codesHtml}</td>
+            <td>${esc(r.note) || '—'}</td>
+            <td>
+              <button class="btn btn-ghost btn-xs" onclick="editBostaReceipt('${r.id}')">✎</button>
+              <button class="btn btn-danger btn-xs" onclick="delBostaReceipt('${r.id}')">✕</button>
+            </td>
+          </tr>`;
+      }).join('')
+    : '<tr><td colspan="5"><div class="empty">No bank transfers logged yet</div></td></tr>';
+
+  // ── Unpaid orders table ─────────────────────────────────────────────
+  const unpaidRows = unpaidOrders.length
+    ? unpaidOrders.map(o => {
+        const net = parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0);
+        return `
+          <tr>
+            <td><span class="badge b-orange">${esc(o.code || '')}</span></td>
+            <td style="opacity:.75">${esc(String(o.created_at || o.date || '').slice(0, 10))}</td>
+            <td>${esc(o.customer_name || '')}</td>
+            <td>EGP ${fmt(o.total)}</td>
+            <td>EGP ${fmt(o.actual_shipping)}</td>
+            <td><strong>EGP ${fmt(net)}</strong></td>
+          </tr>`;
+      }).join('')
+    : '<tr><td colspan="6"><div class="empty">🎉 Every delivered order has been paid out by Bosta</div></td></tr>';
+
   host.innerHTML = `
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">
-        <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:8px">💰 Bosta — Money to receive
+        <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:8px">💰 Money From Bosta
           ${bostaCashCache.loading ? '<span style="font-size:12px;color:var(--muted)">loading…</span>' : ''}
         </h3>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-ghost btn-sm" onclick="downloadBostaExcel()">📥 Excel</button>
-          <button class="btn btn-primary btn-sm" onclick="openBostaReceipt()">+ Record Receipt</button>
+          <button class="btn btn-primary btn-sm" onclick="openBostaReceipt()">+ Record Bank Transfer</button>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:8px">
-        <div class="stat-card orange"><div class="stat-val">EGP ${fmt(shouldReceive)}</div><div class="stat-label">Total I should receive from Bosta</div></div>
-        <div class="stat-card green"><div class="stat-val">EGP ${fmt(received)}</div><div class="stat-label">Received so far</div></div>
-        <div class="stat-card ${remaining > 0 ? 'blue' : 'green'}"><div class="stat-val">EGP ${fmt(Math.abs(remaining))}</div><div class="stat-label">${remaining > 0 ? 'Still to collect' : 'All collected ✓'}</div></div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:8px">
+        <div class="stat-card orange">
+          <div class="stat-val">EGP ${fmt(shouldReceive)}</div>
+          <div class="stat-label">Total I should receive<br><span style="opacity:.7;font-size:11px">${delivered.length} delivered orders · collected − actual shipping</span></div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-val">EGP ${fmt(received)}</div>
+          <div class="stat-label">Received so far<br><span style="opacity:.7;font-size:11px">${receipts.length} bank transfers</span></div>
+        </div>
+        <div class="stat-card ${stillToReceive > 0 ? 'blue' : 'green'}">
+          <div class="stat-val">EGP ${fmt(Math.abs(stillToReceive))}</div>
+          <div class="stat-label">Still to receive<br><span style="opacity:.7;font-size:11px">${unpaidOrders.length} unpaid delivered orders</span></div>
+        </div>
       </div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:18px">
-        Bosta collected (delivered): EGP ${fmt(collected)} &nbsp;−&nbsp; delivered shipping: EGP ${fmt(delShip)} &nbsp;−&nbsp; returned shipping: EGP ${fmt(retShip)} &nbsp;=&nbsp; EGP ${fmt(shouldReceive)}
+
+      <div style="font-size:12px;color:var(--muted);margin:14px 0 6px">
+        Delivered collected: EGP ${fmt(collected)} &nbsp;−&nbsp; delivered shipping: EGP ${fmt(delShip)} &nbsp;=&nbsp; <b>EGP ${fmt(shouldReceive)}</b>
+        <div style="margin-top:4px">
+          🔒 Closed cash cycles (${closedD.length} orders): <b>EGP ${fmt(closedNet)}</b>
+          &nbsp;•&nbsp; 🕒 Open cash cycles (${openD.length} orders): <b>EGP ${fmt(openNet)}</b>
+        </div>
+        ${Math.abs(diff) >= 1
+          ? `<div style="margin-top:4px;color:${diff > 0 ? '#d97706' : '#dc2626'}">
+              ⚠️ Cash received (${fmt(received)}) ${diff > 0 ? 'exceeds' : 'is short of'} the paid orders' net (${fmt(paidNet)}) by EGP ${fmt(Math.abs(diff))} — check the order-code lists on the transfers below.
+            </div>` : ''}
       </div>
-      <h4 style="margin:6px 0;font-size:13px;color:var(--muted)">Payments received from Bosta</h4>
+
+      <details style="margin:10px 0 6px;border:1px solid var(--line);padding:8px 12px">
+        <summary style="cursor:pointer;font-weight:600;font-size:13px">🔍 Per-order breakdown (${delivered.length} delivered)</summary>
+        <div style="max-height:340px;overflow:auto;margin-top:8px">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead>
+              <tr style="text-align:left;border-bottom:1px solid var(--line)">
+                <th style="padding:6px 4px">Order</th>
+                <th style="padding:6px 4px">Cycle</th>
+                <th style="padding:6px 4px;text-align:right">Total</th>
+                <th style="padding:6px 4px;text-align:right">Est. ship</th>
+                <th style="padding:6px 4px;text-align:right">Actual ship</th>
+                <th style="padding:6px 4px;text-align:right">Used</th>
+                <th style="padding:6px 4px;text-align:right">Net</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${delivered.slice().sort((a, b) => String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || ''))).map(o => {
+                const used = shippingFeeFor(o);
+                const net  = parseFloat(o.total || 0) - used;
+                const cyc  = o.cash_cycle_closed === true ? '🔒 closed' : '🕒 open';
+                return `<tr>
+                  <td style="padding:4px">${esc(o.code || '')}</td>
+                  <td style="padding:4px">${cyc}</td>
+                  <td style="padding:4px;text-align:right">${fmt(o.total)}</td>
+                  <td style="padding:4px;text-align:right">${fmt(o.est_shipping)}</td>
+                  <td style="padding:4px;text-align:right">${fmt(o.actual_shipping)}</td>
+                  <td style="padding:4px;text-align:right"><b>${fmt(used)}</b></td>
+                  <td style="padding:4px;text-align:right"><b>${fmt(net)}</b></td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </details>
+
+      <h4 style="margin:18px 0 6px;font-size:13px;color:var(--muted)">🏦 Bank transfers from Bosta</h4>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Date</th><th>Amount</th><th>Note</th><th></th></tr></thead>
-          <tbody>${rows}</tbody>
+          <thead><tr><th>Date</th><th>Amount</th><th>Orders covered</th><th>Note</th><th></th></tr></thead>
+          <tbody>${transferRows}</tbody>
+        </table>
+      </div>
+
+      <h4 style="margin:18px 0 6px;font-size:13px;color:var(--muted)">⏳ Delivered orders NOT yet paid by Bosta (${unpaidOrders.length})</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Order</th><th>Date</th><th>Customer</th><th>Total</th><th>Shipping</th><th>Net to receive</th></tr></thead>
+          <tbody>${unpaidRows}</tbody>
         </table>
       </div>
     </div>`;
@@ -2780,19 +2918,37 @@ function saveStartingCapital(v) {
   showToast('Starting capital saved ✓');
 }
 
-function openBostaReceipt() {
+function openBostaReceipt(existingId) {
+  const editing = existingId ? (bostaCashCache.receipts || []).find(r => r.id === existingId) : null;
+  const codesText = editing ? _receiptOrderCodes(editing).join('\n') : '';
   const overlay = document.getElementById('overlay');
   overlay.innerHTML = `
-    <div style="background:#fff;border-radius:14px;max-width:440px;width:92%;padding:24px;max-height:90vh;overflow:auto">
+    <div style="background:#fff;border-radius:14px;max-width:520px;width:92%;padding:24px;max-height:90vh;overflow:auto">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px">
-        <h3 style="margin:0;font-size:17px">💰 Record Money Received from Bosta</h3>
+        <h3 style="margin:0;font-size:17px">💰 ${editing ? 'Edit' : 'Record'} Bank Transfer from Bosta</h3>
         <button class="btn btn-ghost btn-xs" onclick="closeModal()">✕</button>
       </div>
-      <div class="form-group"><label>Amount Received (EGP) *</label><input type="number" id="br-amt" min="0" placeholder="0" inputmode="decimal"></div>
-      <div class="form-group"><label>Date</label><input type="text" id="br-date" value="${today()}"></div>
-      <div class="form-group"><label>Note (optional)</label><input type="text" id="br-note" placeholder="e.g. bank transfer"></div>
+      <div class="form-group"><label>Amount Received (EGP) *</label>
+        <input type="number" id="br-amt" min="0" placeholder="0" inputmode="decimal" value="${editing ? esc(editing.amount) : ''}">
+      </div>
+      <div class="form-group"><label>Date</label>
+        <input type="text" id="br-date" value="${editing ? esc(editing.date || '') : today()}">
+      </div>
+      <div class="form-group"><label>Note (optional)</label>
+        <input type="text" id="br-note" placeholder="e.g. bank transfer reference" value="${editing ? esc(editing.note || '') : ''}">
+      </div>
+      <div class="form-group">
+        <label>Orders covered by this transfer</label>
+        <textarea id="br-codes" rows="6" placeholder="Paste the order codes from Bosta's transfer breakdown, one per line (or separated by spaces / commas):
+ORD-3AT4Q
+ORD-UYD68
+ORD-XXXXX">${esc(codesText)}</textarea>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">
+          Each Bosta bank transfer lists which orders it covered. Paste those codes here so the dashboard can mark those orders as paid and only count the rest as "still to receive".
+        </div>
+      </div>
       <div style="display:flex;gap:10px;margin-top:8px">
-        <button class="btn btn-primary" style="flex:1" onclick="saveBostaReceipt()">Save</button>
+        <button class="btn btn-primary" style="flex:1" onclick="saveBostaReceipt(${editing ? `'${editing.id}'` : 'null'})">${editing ? 'Save changes' : 'Save'}</button>
         <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
       </div>
     </div>`;
@@ -2801,25 +2957,37 @@ function openBostaReceipt() {
   setTimeout(() => document.getElementById('br-amt')?.focus(), 60);
 }
 
-async function saveBostaReceipt() {
+function editBostaReceipt(id) { openBostaReceipt(id); }
+
+async function saveBostaReceipt(existingId) {
   const amount = parseFloat(document.getElementById('br-amt').value || 0);
   const note = document.getElementById('br-note').value.trim();
   const date = document.getElementById('br-date').value.trim() || today();
+  const codesRaw = document.getElementById('br-codes')?.value || '';
+  const order_codes = codesRaw.split(/[\s,;]+/).map(x => x.trim().toUpperCase()).filter(Boolean);
   if (!amount || amount <= 0) { showToast('Please enter a valid amount'); return; }
-  const data = { id: genId(), amount, note, date, created_at: new Date().toISOString() };
   try {
-    const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/bosta_receipts`, {
-      method: 'POST',
-      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=representation' },
-      body: JSON.stringify(data)
-    });
-    if (!res.ok) throw new Error(await res.text());
-    const saved = await res.json().catch(() => []);
-    if (!Array.isArray(saved) || !saved.length) throw new Error('Row not persisted');
+    if (existingId) {
+      const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/bosta_receipts?id=eq.${encodeURIComponent(existingId)}`, {
+        method: 'PATCH',
+        headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=representation' },
+        body: JSON.stringify({ amount, note, date, order_codes })
+      });
+      if (!res.ok) throw new Error(await res.text());
+    } else {
+      const data = { id: genId(), amount, note, date, order_codes, created_at: new Date().toISOString() };
+      const res = await fetch(`${SUPPLIER_SB_URL}/rest/v1/bosta_receipts`, {
+        method: 'POST',
+        headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=representation' },
+        body: JSON.stringify(data)
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const saved = await res.json().catch(() => []);
+      if (!Array.isArray(saved) || !saved.length) throw new Error('Row not persisted');
+    }
     const fresh = await sbSupplierGet('bosta_receipts');
     if (fresh) { bostaCashCache.receipts = fresh; bostaCashCache.loaded = true; }
-    else bostaCashCache.receipts = [saved[0], ...bostaCashCache.receipts];
-    showToast('Receipt recorded ✓');
+    showToast(existingId ? 'Transfer updated ✓' : 'Transfer recorded ✓');
     closeModal();
     renderBostaCash();
   } catch (e) { showToast('Error: ' + e.message); }

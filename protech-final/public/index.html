@@ -203,14 +203,14 @@
       <button class="btn btn-primary btn-sm" onclick="openExpense()">+ Add Expense</button>
       <button class="btn btn-ghost btn-sm" onclick="downloadAllFinancesExcel()" style="margin-inline-start:8px">📥 All finances Excel</button>
     </div>
+
+    <!-- Block 1: Money from Bosta — delivered-only, matched to bank transfers -->
     <div id="bosta-cash"></div>
+
+    <!-- Block 2: Elashry — total buying cost of DELIVERED orders + payment ledger -->
     <div id="supplier-account"></div>
-    <div class="card">
-      <div class="card-header"><span class="card-title">🧮 Media Buyer Payment (20% of paid ads + 1% of delivered sales)</span>
-        <button class="btn btn-ghost btn-xs" onclick="downloadMediaBuyerExcel()" style="margin-inline-start:auto">📥 Excel</button>
-      </div>
-      <div class="card-body" id="fin-mediabuyer"></div>
-    </div>
+
+    <!-- Expenses (kept as-is) -->
     <div class="card">
       <div class="card-header"><span class="card-title">Expenses</span>
         <button class="btn btn-ghost btn-xs" onclick="downloadExpensesExcel()" style="margin-inline-start:auto">📥 Excel</button>
@@ -223,24 +223,13 @@
         </table>
       </div>
     </div>
+
+    <!-- Block 4: Media Buyer salary — rolling since last payment -->
     <div class="card">
-      <div class="card-header"><span class="card-title">Revenue Summary</span></div>
-      <div class="card-body" id="fin-revenue"></div>
-    </div>
-    <div class="card" id="fin-confirmed-card">
-      <div class="card-header"><span class="card-title" style="color:var(--orange)">💰 Confirmed Profit — Cash-Cycle Closed Orders Only</span></div>
-      <div class="card-body" id="fin-confirmed"></div>
-    </div>
-    <div class="card" id="fin-net-card">
-      <div class="card-header"><span class="card-title" style="color:var(--orange)">Net Profit Summary</span></div>
-      <div class="card-body" id="fin-net"></div>
-    </div>
-    <div class="card" id="fin-chart-card">
-      <div class="card-header"><span class="card-title">📈 Projected Profit — Weekly (since June)</span></div>
-      <div class="card-body" style="padding:16px">
-        <div style="position:relative;height:320px"><canvas id="profit-weekly-chart"></canvas></div>
-        <div id="profit-weekly-note" style="margin-top:10px;font-size:12px;color:#666;line-height:1.5"></div>
+      <div class="card-header"><span class="card-title">🧮 Media Buyer Salary (20% of paid ads + 1% of delivered sales)</span>
+        <button class="btn btn-ghost btn-xs" onclick="downloadMediaBuyerExcel()" style="margin-inline-start:auto">📥 Excel</button>
       </div>
+      <div class="card-body" id="fin-mediabuyer"></div>
     </div>
   </div>
 
@@ -669,7 +658,6 @@
 <script src="js/bulk_inventory.js?v=4"></script>
 <script src="js/bulk_sell_price.js?v=4"></script>
 <script src="js/notifications.js"></script>
-<script src="js/profit_chart.js"></script>
 </body>
 </html>
 
