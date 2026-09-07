@@ -664,20 +664,60 @@ export default async function handler(req, res) {
         return res.status(200).json({ ok: true, orders: await expandAll(rows.map(strip)) });
       }
       if (op === 'returning') {
-        // Parcels Bosta is bringing back — customer refused / uncollectable.
-        // status='On its way to me' AND we haven't confirmed reintake yet
-        // (warehouse_confirmed=false). Once the ops manager taps "تم
-        // الاستلام في المخزن" that flag flips and the row drops off.
-        const rows = await sbGet('orders?select=*&status=eq.On%20its%20way%20to%20me&or=(warehouse_confirmed.is.false,warehouse_confirmed.is.null)&order=updated_at.desc.nullslast,created_at.desc&limit=500');
+        // Parcels heading back to us — customer refused / uncollectable.
+        // Semantically "returning" = "coming back and NOT yet confirmed in
+        // our warehouse", regardless of whether Bosta still shows the leg
+        // as in progress ('On its way to me') or has already finalised it
+        // ('Returned'). Bosta flips some parcels straight to Returned
+        // (state code 46) as soon as the RTS is issued — before the goods
+        // physically arrive here — so filtering only on 'On its way to me'
+        // hid those from the picker. Widening to include Returned-but-
+        // not-yet-warehouse_confirmed makes every incoming return appear.
+        // The row drops off the moment the ops manager taps
+        // "تم الاستلام في المخزن" (which flips warehouse_confirmed=true).
+        const rows = await sbGet(
+          'orders?select=*'
+          + '&status=in.(On%20its%20way%20to%20me,Returned)'
+          + '&or=(warehouse_confirmed.is.false,warehouse_confirmed.is.null)'
+          + '&order=updated_at.desc.nullslast,created_at.desc&limit=500'
+        );
         return res.status(200).json({ ok: true, orders: await expandAll(rows.map(strip)) });
       }
       if (op === 'receive-back') {
         // Ops manager confirms the returning parcel is physically back in
-        // the warehouse — same effect as the admin dashboard's "Confirm
-        // Received in Warehouse" button. Bosta may still show it as
-        // 'On its way to me' but from our side it's fully closed.
+        // the warehouse. This is now the ONLY path that flips
+        // warehouse_confirmed=true — the admin dashboard's "Confirm
+        // Received in Warehouse" button was removed, so this handler must
+        // do everything that used to happen there:
+        //   1) Restore each line's qty back to the product row.
+        //   2) Set status='Returned' + warehouse_confirmed=true on the order.
         const orderId = (req.query?.orderId || '').toString();
         if (!/^[A-Za-z0-9_-]+$/.test(orderId)) return res.status(400).json({ error: 'Bad orderId' });
+
+        // Fetch the order so we know which products / quantities to restore.
+        const ordRow = await sbGet(`orders?select=id,products,warehouse_confirmed&id=eq.${encodeURIComponent(orderId)}&limit=1`);
+        const order = ordRow && ordRow[0];
+        if (!order) return res.status(404).json({ error: 'Order not found' });
+
+        // Idempotent guard: if it's already confirmed, don't restock again.
+        if (!order.warehouse_confirmed) {
+          for (const p of (order.products || [])) {
+            const code = (p?.code || '').toString().trim();
+            const addQty = parseInt(p?.qty || 1) || 1;
+            if (!code || addQty <= 0) continue;
+            // Look up the product row by code so we can update its qty.
+            const prRows = await sbGet(`products?select=id,qty&code=eq.${encodeURIComponent(code)}&limit=1`);
+            const pr = prRows && prRows[0];
+            if (!pr) continue;
+            const newQty = (parseInt(pr.qty || 0) || 0) + addQty;
+            await fetch(`${SUPABASE_URL}/rest/v1/products?id=eq.${encodeURIComponent(pr.id)}`, {
+              method: 'PATCH',
+              headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+              body: JSON.stringify({ qty: newQty }),
+            });
+          }
+        }
+
         const r = await fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
           method: 'PATCH',
           headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
