@@ -63,6 +63,46 @@ export default async function handler(req, res) {
       walletDetail = await wr.json().catch(() => null);
     } catch {}
 
+    // ── PAID-TO-MERCHANT SIGNAL SCAN ─────────────────────────────────
+    // Walk every path of the response bodies and collect any key whose
+    // name looks like it might indicate "Bosta has already paid this
+    // delivery out to the merchant". Common candidates seen in Bosta
+    // APIs: cashCycle.state ("PAID" | "CLOSED" | "OPEN"), transferId,
+    // payoutDate, paidAt, invoiceNumber, paymentInfo, transferredAt,
+    // settlementDate. Surfacing them all in one place tells us which
+    // field to key off of for auto-marking orders as paid.
+    const PAID_HINTS = /paid|payout|settled|settlement|transfer|invoice|payment|wallet|cash.?cycle/i;
+    const scanPaidHints = (obj, prefix = '') => {
+      const hits = [];
+      const walk = (val, path) => {
+        if (val === null || val === undefined) return;
+        if (Array.isArray(val)) {
+          val.forEach((v, i) => walk(v, `${path}[${i}]`));
+          return;
+        }
+        if (typeof val === 'object') {
+          for (const k of Object.keys(val)) {
+            const p = path ? `${path}.${k}` : k;
+            if (PAID_HINTS.test(k)) {
+              const v = val[k];
+              const preview = (v === null || v === undefined) ? null
+                : (typeof v === 'object' ? (Array.isArray(v) ? `array(${v.length})` : `object(${Object.keys(v).join(',')})`) : v);
+              hits.push({ path: prefix + p, value: preview });
+            }
+            walk(val[k], p);
+          }
+        }
+      };
+      walk(obj, '');
+      return hits;
+    };
+
+    const paidHintsAll = [
+      ...scanPaidHints(del, 'detail.'),
+      ...scanPaidHints(pricingDetail, 'pricing.'),
+      ...scanPaidHints(walletDetail, 'wallet.'),
+    ];
+
     return res.status(200).json({
       track,
       matchedTracking: searchHit.trackingNumber,
@@ -74,6 +114,12 @@ export default async function handler(req, res) {
       pricing: del?.pricing || null,
       computedActualShipping_withVat: computedActual,
       note: 'computedActualShipping_withVat = shipmentFees × 1.14 (what our sync writes).',
+
+      // NEW — every field whose name looks like a paid/payout/transfer/invoice signal.
+      // Look here first: whichever key flips from empty to a value once
+      // Bosta pays the delivery out to the merchant is our "paid" flag.
+      paidHints: paidHintsAll,
+
       // Full raw payloads so we can grep for the true 127 EGP fee.
       fullDetail: del,
       pricingDetail,
