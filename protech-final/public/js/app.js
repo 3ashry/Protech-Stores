@@ -1528,57 +1528,108 @@ function renderMediaBuyer() {
   const expenses = cache.expenses || [];
   const delivered = orders.filter(o => o.status === 'Delivered');
 
-  const mbPayments = expenses.filter(e => e.category === 'Media Buyer');
-  const lastPaymentAt = mbPayments.reduce((max, e) => {
-    const t = String(e.created_at || e.date || '');
-    return t > max ? t : max;
-  }, '');
-  const cycleStartISO = lastPaymentAt || '1970-01-01T00:00:00';
-  const inCycle = (t) => {
-    const s = String(t || '');
-    return !!s && s > cycleStartISO;
-  };
+  // ── Current calendar month window ──────────────────────────────────
+  const now = new Date();
+  const y = now.getFullYear(), m = now.getMonth();
+  const monthStart = new Date(y, m, 1, 0, 0, 0).toISOString();
+  const nextMonth  = new Date(y, m + 1, 1, 0, 0, 0).toISOString();
+  const dateOfExpense = (e) => String(e.date || e.created_at || '').slice(0, 10);
+  const dateOfOrder   = (o) => String(o.created_at || o.date || '').slice(0, 10);
+  const monthStartDay = monthStart.slice(0, 10);
+  const nextMonthDay  = nextMonth.slice(0, 10);
+  const inMonth = (day) => day >= monthStartDay && day < nextMonthDay;
 
-  const paidAdsCycle = expenses
-    .filter(e => e.category === 'Paid Ads' && inCycle(e.created_at || e.date))
+  const MO_AR = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+  const MO_EN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const monthLabel = `${MO_AR[m]} ${y} · ${MO_EN[m]} ${y}`;
+
+  // ── This month's owed amount ───────────────────────────────────────
+  //   Owed = 20% × Paid Ads spent this month
+  //        +  1% × delivered product sales (excl. shipping) this month
+  //        −  Media Buyer payments already made this month
+  const paidAdsMonth = expenses
+    .filter(e => e.category === 'Paid Ads' && inMonth(dateOfExpense(e)))
     .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
 
-  const cycleDelivered = delivered
-    .filter(o => inCycle(o.created_at || o.date))
+  const monthDelivered = delivered
+    .filter(o => inMonth(dateOfOrder(o)))
     .slice()
     .sort((a, b) => String(a.created_at || a.date || '').localeCompare(String(b.created_at || b.date || '')));
-  const cycleSales = cycleDelivered.reduce((a, o) =>
+  const monthSales = monthDelivered.reduce((a, o) =>
     a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
 
-  const adsShare   = paidAdsCycle * 0.20;
-  const salesShare = cycleSales   * 0.01;
-  const mbOwed     = Math.round(Math.max(0, adsShare + salesShare) * 100) / 100;
+  const adsShare    = paidAdsMonth * 0.20;
+  const salesShare  = monthSales   * 0.01;
+  const grossOwed   = adsShare + salesShare;
 
-  const startDay = lastPaymentAt ? lastPaymentAt.slice(0, 10) : 'the beginning';
-  const nowDay   = new Date().toISOString().slice(0, 10);
-  const cycleLabel = lastPaymentAt
-    ? `منذ آخر دفعة: ${startDay} → ${nowDay}`
-    : `منذ البداية → ${nowDay} (لا توجد دفعة سابقة)`;
+  const mbPayments = expenses.filter(e => e.category === 'Media Buyer');
+  const paidThisMonth = mbPayments
+    .filter(e => inMonth(dateOfExpense(e)))
+    .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
 
-  const ordersRows = cycleDelivered.length
-    ? cycleDelivered.map(o => `
+  const mbOwed = Math.round(Math.max(0, grossOwed - paidThisMonth) * 100) / 100;
+
+  // ── Per-month history from the Media Buyer expenses ledger ─────────
+  //   Groups every Media Buyer expense by YYYY-MM, most recent first.
+  const byMonth = new Map();
+  for (const e of mbPayments) {
+    const day = dateOfExpense(e);
+    if (!/^\d{4}-\d{2}/.test(day)) continue;
+    const key = day.slice(0, 7);
+    const cur = byMonth.get(key) || { total: 0, count: 0, entries: [] };
+    cur.total += parseFloat(e.amount || 0) || 0;
+    cur.count += 1;
+    cur.entries.push(e);
+    byMonth.set(key, cur);
+  }
+  const historyKeys = Array.from(byMonth.keys()).sort().reverse();
+  const historyRows = historyKeys.length
+    ? historyKeys.map(k => {
+        const [yy, mm] = k.split('-').map(Number);
+        const label = `${MO_AR[mm - 1]} ${yy} · ${MO_EN[mm - 1]} ${yy}`;
+        const b = byMonth.get(k);
+        const detail = b.entries.map(e => {
+          const day = dateOfExpense(e);
+          return `<div style="opacity:.75;font-size:11px">${esc(day)} — EGP ${fmt(e.amount)}${e.description ? ` · ${esc(e.description)}` : ''}</div>`;
+        }).join('');
+        return `
+          <tr>
+            <td style="padding:6px 4px">${label}</td>
+            <td style="padding:6px 4px;text-align:right"><b>EGP ${fmt(b.total)}</b></td>
+            <td style="padding:6px 4px;text-align:right">${b.count}</td>
+            <td style="padding:6px 4px">${detail}</td>
+          </tr>`;
+      }).join('')
+    : '<tr><td colspan="4" style="text-align:center;opacity:.6;padding:12px">لا توجد دفعات مسجلة سابقاً — No prior Media Buyer payouts recorded</td></tr>';
+
+  const totalEverPaid = mbPayments.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+
+  // ── Cycle delivered-orders drawer (for verification) ───────────────
+  const ordersRows = monthDelivered.length
+    ? monthDelivered.map(o => `
         <tr>
           <td style="padding:4px">${esc(o.code || '')}</td>
-          <td style="padding:4px;opacity:.75">${esc(String(o.created_at || o.date || '').slice(0, 10))}</td>
+          <td style="padding:4px;opacity:.75">${esc(dateOfOrder(o))}</td>
           <td style="padding:4px">${esc(o.customer_name || '')}</td>
           <td style="padding:4px;text-align:right">EGP ${fmt(parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0))}</td>
         </tr>`).join('')
-    : '<tr><td colspan="4" style="text-align:center;opacity:.6;padding:12px">No delivered orders since last payment</td></tr>';
+    : '<tr><td colspan="4" style="text-align:center;opacity:.6;padding:12px">لا توجد طلبات مسلّمة هذا الشهر</td></tr>';
 
   el.innerHTML = `
-    <div class="fin-row" style="opacity:.75;font-size:12px"><span>${cycleLabel}</span><span>${cycleDelivered.length} delivered orders in this cycle</span></div>
-    <div class="fin-row"><span>Paid ads spend (since last payment)</span><span class="fin-val">EGP ${fmt(paidAdsCycle)}</span></div>
+    <div class="fin-row" style="opacity:.75;font-size:12px">
+      <span>الشهر الحالي: ${monthLabel}</span>
+      <span>${monthDelivered.length} طلب مسلّم</span>
+    </div>
+    <div class="fin-row"><span>Paid ads spend (this month)</span><span class="fin-val">EGP ${fmt(paidAdsMonth)}</span></div>
     <div class="fin-row"><span>20% of paid ads</span><span class="fin-val">EGP ${fmt(adsShare)}</span></div>
-    <div class="fin-row"><span>Delivered product sales (excl. shipping)</span><span class="fin-val">EGP ${fmt(cycleSales)}</span></div>
+    <div class="fin-row"><span>Delivered product sales (this month, excl. shipping)</span><span class="fin-val">EGP ${fmt(monthSales)}</span></div>
     <div class="fin-row"><span>1% of delivered sales</span><span class="fin-val">EGP ${fmt(salesShare)}</span></div>
-    <div class="fin-row subtotal"><span>Owed now (${startDay} → ${nowDay})</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(mbOwed)}</span></div>
+    <div class="fin-row"><span>Gross salary for this month</span><span class="fin-val">EGP ${fmt(grossOwed)}</span></div>
+    ${paidThisMonth > 0 ? `<div class="fin-row"><span>Already paid this month</span><span class="fin-val deduct">− EGP ${fmt(paidThisMonth)}</span></div>` : ''}
+    <div class="fin-row subtotal"><span>Owed now (${monthLabel})</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(mbOwed)}</span></div>
+
     <details style="margin-top:12px;border:1px solid var(--line);padding:8px 12px">
-      <summary style="cursor:pointer;font-weight:600">📋 Delivered orders in this cycle (${cycleDelivered.length})</summary>
+      <summary style="cursor:pointer;font-weight:600">📋 Delivered orders this month (${monthDelivered.length})</summary>
       <div style="max-height:280px;overflow:auto;margin-top:8px">
         <table style="width:100%;border-collapse:collapse;font-size:13px">
           <thead>
@@ -1593,8 +1644,27 @@ function renderMediaBuyer() {
         </table>
       </div>
     </details>
+
     <div style="margin-top:12px">
       <button class="btn btn-primary btn-sm" ${mbOwed > 0 ? '' : 'disabled'} onclick="payMediaBuyer(${mbOwed})">✅ Mark as paid (record EGP ${fmt(mbOwed)} to expenses)</button>
+    </div>
+
+    <h4 style="margin:22px 0 6px;font-size:13px;color:var(--muted)">🗓️ Media Buyer payouts — history</h4>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:6px">
+      Grouped by month from the Expenses ledger (category = Media Buyer). Total paid to date: <b>EGP ${fmt(totalEverPaid)}</b> across ${mbPayments.length} payout(s).
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Month</th>
+            <th style="text-align:right">Total paid</th>
+            <th style="text-align:right">Payouts</th>
+            <th>Entries</th>
+          </tr>
+        </thead>
+        <tbody>${historyRows}</tbody>
+      </table>
     </div>`;
 }
 
