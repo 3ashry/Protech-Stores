@@ -1425,12 +1425,16 @@ protechstores.com
       <button class="btn btn-primary" onclick="saveDetail('${id}')">Save Changes</button>
       ${o.status === 'Delivered' ? `<a href="${waLink}" target="_blank" class="btn btn-wa" onclick="markFeedbackSent('${id}')">WhatsApp Feedback</a>` : ''}
       ${o.status === 'Delivered' ? `<button class="btn btn-ghost" onclick="openFeedback('${o.code}')">Add Manual Feedback</button>` : ''}
-      ${o.status === 'Returned' && !o.warehouse_confirmed ? `
+      ${(o.status === 'Returned' || o.status === 'On its way to me') && !o.warehouse_confirmed ? `
         <span style="color:#c2410c;font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px;background:#fff7ed;border:1px solid #fed7aa;padding:6px 10px;border-radius:8px">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-          في انتظار استلامها في المخزن — يقوم موظف التجهيز بتأكيد الاستلام
+          ⏳ لم يتم الاستلام في المخزن بعد — Not yet received at warehouse
         </span>` : ''}
-      ${o.status === 'Returned' && o.warehouse_confirmed ? `<span style="color:#16a34a;font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Stock Returned to Inventory</span>
+      ${(o.status === 'Returned' || o.status === 'On its way to me') && o.warehouse_confirmed ? `
+        <span style="color:#16a34a;font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px;background:#ecfdf5;border:1px solid #a7f3d0;padding:6px 10px;border-radius:8px">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          ✅ تم الاستلام في المخزن — Received at warehouse (stock restored)
+        </span>
         <button class="btn btn-ghost btn-xs" onclick="undoWarehouse('${id}')">Undo</button>` : ''}
     </div>`;
   showModal('tpl-detail');
