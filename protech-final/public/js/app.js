@@ -2887,8 +2887,11 @@ async function loadAnalytics() {
     sinceISO = since.toISOString();
     params += `&created_at=gte.${encodeURIComponent(sinceISO)}`;
   }
-  // Cache-buster so a stale CDN / browser cache never masks the filter.
-  const url = `${ANALYTICS_SB_URL}/rest/v1/analytics_events?${params}&_ts=${Date.now()}`;
+  // No cache-buster query param — PostgREST 12+ rejects unknown query
+  // params as failed filter parses ("failed to parse filter (…)"),
+  // which killed the whole analytics fetch. Cache: 'no-store' on the
+  // request below is enough to prevent stale responses.
+  const url = `${ANALYTICS_SB_URL}/rest/v1/analytics_events?${params}`;
   analyticsCache.sinceISO = sinceISO;
   try {
     const res = await fetch(url, {
