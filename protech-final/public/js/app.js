@@ -1601,6 +1601,7 @@ function renderFinancials() {
     </tr>`).join('') : '<tr><td colspan="5"><div class="empty">No expenses recorded</div></td></tr>';
 
   if (typeof renderInflightBuyCost === 'function') renderInflightBuyCost();
+  if (typeof renderFinalisedBuyCost === 'function') renderFinalisedBuyCost();
   if (typeof renderBostaCash === 'function') renderBostaCash();
   if (typeof renderSupplierAccount === 'function') renderSupplierAccount();
   if (typeof renderMediaBuyer === 'function') renderMediaBuyer();
@@ -1618,6 +1619,75 @@ function renderFinancials() {
 //  same formula the Elashry block uses. Shows a top-line tile plus a
 //  drawer with per-status breakdown and a per-order list.
 // ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+//  FINALISED BUY COST — buy cost of every order in a final state,
+//  i.e. status IS Delivered OR Returned. Companion to the in-flight
+//  card above; together the two cards cover every order that has
+//  ever left Processing (in-flight + finalised = all shipped).
+// ═══════════════════════════════════════════════════════════════════
+function renderFinalisedBuyCost() {
+  const el = document.getElementById('fin-finalised-buy');
+  if (!el) return;
+  const orders = cache.orders || [];
+  const products = cache.products || [];
+  const FINAL_STATUSES = new Set(['Delivered', 'Returned']);
+  const finalised = orders.filter(o => FINAL_STATUSES.has(o.status));
+  const buyCostOf = (o) => (o.products || []).reduce((b, p) =>
+    b + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0);
+
+  const delivered = finalised.filter(o => o.status === 'Delivered');
+  const returned  = finalised.filter(o => o.status === 'Returned');
+  const deliveredBuy = delivered.reduce((a, o) => a + buyCostOf(o), 0);
+  const returnedBuy  = returned .reduce((a, o) => a + buyCostOf(o), 0);
+  const totalBuy = deliveredBuy + returnedBuy;
+
+  const rowsHtml = finalised.length
+    ? finalised.slice()
+        .sort((a, b) => String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || '')))
+        .map(o => `
+          <tr>
+            <td style="padding:4px"><span class="badge b-orange">${esc(o.code || '')}</span></td>
+            <td style="padding:4px;opacity:.75">${esc(String(o.created_at || o.date || '').slice(0, 10))}</td>
+            <td style="padding:4px">${esc(o.customer_name || '')}</td>
+            <td style="padding:4px">${esc(o.status || '')}</td>
+            <td style="padding:4px;text-align:right"><b>EGP ${fmt(buyCostOf(o))}</b></td>
+          </tr>`).join('')
+    : '<tr><td colspan="5" style="text-align:center;padding:12px;opacity:.6">No finalised orders yet</td></tr>';
+
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:8px">
+      <div class="stat-card orange">
+        <div class="stat-val">EGP ${fmt(totalBuy)}</div>
+        <div class="stat-label">Total buy cost — finalised<br><span style="opacity:.7;font-size:11px">${finalised.length} orders · Delivered + Returned</span></div>
+      </div>
+      <div class="stat-card green">
+        <div class="stat-val">EGP ${fmt(deliveredBuy)}</div>
+        <div class="stat-label">✅ Delivered<br><span style="opacity:.7;font-size:11px">${delivered.length} orders</span></div>
+      </div>
+      <div class="stat-card blue">
+        <div class="stat-val">EGP ${fmt(returnedBuy)}</div>
+        <div class="stat-label">↩️ Returned<br><span style="opacity:.7;font-size:11px">${returned.length} orders</span></div>
+      </div>
+    </div>
+    <details style="margin-top:12px;border:1px solid var(--line);padding:8px 12px">
+      <summary style="cursor:pointer;font-weight:600;font-size:13px">🔍 Per-order list (${finalised.length})</summary>
+      <div style="max-height:340px;overflow:auto;margin-top:8px">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead>
+            <tr style="text-align:left;border-bottom:1px solid var(--line)">
+              <th style="padding:6px 4px">Order</th>
+              <th style="padding:6px 4px">Date</th>
+              <th style="padding:6px 4px">Customer</th>
+              <th style="padding:6px 4px">Status</th>
+              <th style="padding:6px 4px;text-align:right">Buy cost</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>
+    </details>`;
+}
+
 function renderInflightBuyCost() {
   const el = document.getElementById('fin-inflight-buy');
   if (!el) return;
