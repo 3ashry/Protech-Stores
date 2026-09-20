@@ -1794,7 +1794,7 @@ function renderNetProfitBlock() {
 
   // 2. Elashry owed — matches the Elashry card exactly.
   //    Fixed total from supplier − returned goods − payments made.
-  const ELASHRY_TOTAL_TAKEN = 604656; // keep in sync with renderSupplierAccount
+  const ELASHRY_TOTAL_TAKEN = 742720; // keep in sync with renderSupplierAccount
   const returnedBuyCost = returnedAll.reduce((a, o) => a + buyCostOf(o), 0);
   const elashryPaid = (typeof supplierCache !== 'undefined' && supplierCache.payments || [])
     .reduce((a, p) => a + parseFloat(p.amount || 0), 0);
@@ -3313,7 +3313,7 @@ function renderSupplierAccount() {
   //
   //   Cash-cycle-closed is a Bosta invoicing detail and does not
   //   filter here.
-  const ELASHRY_TOTAL_TAKEN = 604656; // confirmed by Elashry
+  const ELASHRY_TOTAL_TAKEN = 742720; // confirmed by Elashry
   const orders = cache.orders || [];
   const buyCostOf = (o) => (o.products || []).reduce((b, p) =>
     b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0);
