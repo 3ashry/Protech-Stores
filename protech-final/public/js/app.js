@@ -1793,9 +1793,11 @@ function renderNetProfitBlock() {
   const bostaSettlement = totalCollectedD - delivShipCC - retShipCC;
 
   // 2. Elashry owed — matches the Elashry card exactly.
-  //    Fixed total from supplier − returned goods − payments made.
-  const ELASHRY_TOTAL_TAKEN = 742720; // keep in sync with renderSupplierAccount
-  const returnedBuyCost = returnedAll.reduce((a, o) => a + buyCostOf(o), 0);
+  //    Fixed totals confirmed by the supplier; do NOT recompute from
+  //    our stored buy prices, which drift from theirs.
+  const ELASHRY_TOTAL_TAKEN    = 742720; // keep in sync with renderSupplierAccount
+  const ELASHRY_TOTAL_RETURNED = 146657; // keep in sync with renderSupplierAccount
+  const returnedBuyCost = ELASHRY_TOTAL_RETURNED;
   const elashryPaid = (typeof supplierCache !== 'undefined' && supplierCache.payments || [])
     .reduce((a, p) => a + parseFloat(p.amount || 0), 0);
   const elashryOwed = ELASHRY_TOTAL_TAKEN - returnedBuyCost - elashryPaid;
@@ -3313,13 +3315,21 @@ function renderSupplierAccount() {
   //
   //   Cash-cycle-closed is a Bosta invoicing detail and does not
   //   filter here.
-  const ELASHRY_TOTAL_TAKEN = 742720; // confirmed by Elashry
+  const ELASHRY_TOTAL_TAKEN    = 742720; // confirmed by Elashry
+  const ELASHRY_TOTAL_RETURNED = 146657; // confirmed by Elashry (goods physically returned to their warehouse)
   const orders = cache.orders || [];
   const buyCostOf = (o) => (o.products || []).reduce((b, p) =>
     b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0);
 
+  // Our-side view is now informational only — every Returned order
+  // was physically sent back to Elashry, so the gap between our
+  // dynamic sum and Elashry's confirmed number is pure buy-price
+  // inflation on the returned mix (some product buy_prices are
+  // higher in our DB than what Elashry actually credited).
   const returnedOrders  = orders.filter(o => o.status === 'Returned');
-  const returnedBuyCost = returnedOrders.reduce((a, o) => a + buyCostOf(o), 0);
+  const returnedBuyCostOurs = returnedOrders.reduce((a, o) => a + buyCostOf(o), 0);
+  const returnedBuyCost = ELASHRY_TOTAL_RETURNED;
+  const returnedDiff = returnedBuyCostOurs - ELASHRY_TOTAL_RETURNED;
 
   const paid = (supplierCache.payments || [])
     .reduce((a, p) => a + parseFloat(p.amount || 0), 0);
@@ -3372,6 +3382,9 @@ function renderSupplierAccount() {
         <span>${(supplierCache.payments || []).length} payments · ${returnedOrders.length} returned orders</span>
       </div>
       <div class="fin-row"><span>📦 Total taken from Elashry (supplier's confirmed total)</span><span class="fin-val">EGP ${fmt(ELASHRY_TOTAL_TAKEN)}</span></div>
+      <div style="opacity:.7;font-size:11px;padding:0 4px 6px;margin-top:-4px">
+        Our-side returned buy cost: EGP ${fmt(returnedBuyCostOurs)} &nbsp;•&nbsp; Elashry-confirmed: EGP ${fmt(ELASHRY_TOTAL_RETURNED)}${returnedDiff !== 0 ? ` &nbsp;•&nbsp; diff: ${returnedDiff > 0 ? '+' : ''}EGP ${fmt(returnedDiff)} (buy-price inflation on returned mix — fix the affected product prices to close the gap)` : ''}
+      </div>
       <div class="fin-row"><span>↩️ Returned (goods back to their warehouse)</span><span class="fin-val deduct">− EGP ${fmt(returnedBuyCost)}</span></div>
       <div class="fin-row"><span>💵 Already paid to Elashry</span><span class="fin-val deduct">− EGP ${fmt(paid)}</span></div>
       <div class="fin-row ${settled ? 'profit' : 'loss'}" style="border-top:2px solid var(--line);padding-top:14px;margin-top:8px;font-size:1.15rem">
