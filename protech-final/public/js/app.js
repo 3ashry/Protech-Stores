@@ -2575,6 +2575,104 @@ function downloadOrdersFullReportExcel() {
   showToast(`Excel: ${orderRows.length} orders · ${itemRows.length} lines ✓`);
 }
 
+// ═══════════════════════════════════════════════════════════════════
+//  ↩️ RETURNS — FULL REPORT (Excel)
+//  One sheet, grouped per Returned order:
+//    • Order-detail row (code, date, customer, phone, city, address,
+//      ship code, order total, actual shipping)
+//    • One row per product line — individual buy price shown
+//    • A "TOTAL BUY COST" subtotal row for that order
+//    • Blank separator before the next order
+//  Ends with a grand-total row across every returned order.
+// ═══════════════════════════════════════════════════════════════════
+function downloadReturnsFullReportExcel() {
+  const products = cache.products || [];
+  const rows = (cache.orders || [])
+    .filter(o => o.status === 'Returned')
+    .slice()
+    .sort((a, b) => String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || '')));
+  if (!rows.length) { showToast('No returned orders to export'); return; }
+
+  const round2 = (n) => Math.round((parseFloat(n) || 0) * 100) / 100;
+
+  // Single wide sheet with grouped sections.
+  const aoa = [[
+    'Order Code', 'Created', 'Customer Name', 'Phone', 'City', 'Address',
+    'Ship Code', 'Bosta ID', 'Cash Cycle', 'Warehouse Confirmed',
+    'Order Total (EGP)', 'Actual Shipping (EGP)',
+    'Product Code', 'Product Name', 'Qty', 'Buy Price (EGP)', 'Line Buy Total (EGP)',
+  ]];
+
+  let grandTotalBuy = 0;
+  let grandLineCount = 0;
+
+  for (const o of rows) {
+    const items = Array.isArray(o.products) ? o.products : [];
+    const orderBuyCost = items.reduce(
+      (a, p) => a + lineBuyPrice(p, products) * (parseInt(p.qty || 1) || 1), 0);
+    grandTotalBuy += orderBuyCost;
+    grandLineCount += items.length;
+
+    const cashCycle = o.cash_cycle_closed === true ? 'Closed (final)' : 'Open (estimated)';
+    const created = String(o.created_at || o.date || '').slice(0, 16).replace('T', ' ');
+
+    // One row per line item — order detail columns repeated on every line
+    // so filtering/sorting in Excel still works cleanly.
+    items.forEach((p, idx) => {
+      const qty = parseInt(p.qty || 1) || 1;
+      const buy = lineBuyPrice(p, products);
+      const name = p.name || (products.find(x => x.code === p.code)?.name) || '';
+      aoa.push([
+        o.code || '',
+        created,
+        o.customer_name || '',
+        o.phone || '',
+        o.city || '',
+        o.address || '',
+        o.ship_code || '',
+        o.bosta_id || '',
+        cashCycle,
+        o.warehouse_confirmed ? 'Yes' : 'No',
+        idx === 0 ? round2(o.total) : '',
+        idx === 0 ? round2(o.actual_shipping) : '',
+        p.code || '',
+        name,
+        qty,
+        round2(buy),
+        round2(buy * qty),
+      ]);
+    });
+
+    // Subtotal row — highlights the total buying cost of this returned order.
+    aoa.push([
+      '', '', '', '', '', '', '', '', '', '', '', '',
+      '', 'TOTAL BUY COST →', '', '', round2(orderBuyCost),
+    ]);
+    // Blank separator between orders.
+    aoa.push([]);
+  }
+
+  // Grand-total row at the bottom.
+  aoa.push([
+    '', '', '', '', '', '', '', '', '', '', '', '',
+    '', `GRAND TOTAL — ${rows.length} returned orders · ${grandLineCount} lines`,
+    '', '', round2(grandTotalBuy),
+  ]);
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [
+    { wch: 14 }, { wch: 18 }, { wch: 24 }, { wch: 14 }, { wch: 14 }, { wch: 40 },
+    { wch: 14 }, { wch: 24 }, { wch: 18 }, { wch: 20 },
+    { wch: 18 }, { wch: 20 },
+    { wch: 22 }, { wch: 40 }, { wch: 6 }, { wch: 16 }, { wch: 20 },
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Returns');
+  XLSX.writeFile(wb, `Protech_Returns_FullReport_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  showToast(`Returns report: ${rows.length} orders · ${grandLineCount} lines · ${round2(grandTotalBuy)} EGP buy cost ✓`);
+}
+
 function downloadOrdersExcel() {
   const now = new Date();
   const monthName = now.toLocaleString('en', { month: 'long', year: 'numeric' });
