@@ -638,54 +638,62 @@ function scanInvoice() {
 
   _im.invoiceMap = {};
 
-  // 3. Anchor: every "N.NN عدد" (or "N عدد") in the invoice is a line's
-  //    quantity. For each anchor, find the code variant occurrence that
-  //    is CLOSEST in the text (not the longest — closest wins). This
-  //    prevents a big ±240 window from claiming a neighbouring row's
-  //    code when both are within reach.
-  const unitRe = /(\d+(?:\.\d+)?)\s*عدد/g;
-  let m;
-  while ((m = unitRe.exec(norm))) {
-    const qty = Math.round(parseFloat(m[1]));
-    if (!(qty > 0 && qty < 1000)) continue;
-    const pos = m.index;
-    const winStart = Math.max(0, pos - 240);
-    const winEnd = Math.min(upper.length, pos + 240);
-    const win = upper.slice(winStart, winEnd);
-    let bestVariant = null;
-    let bestDist = Infinity;
+  // 3. Split the invoice into "row blocks". Elashry invoices have a
+  //    checkbox character "ü" at the start of every row. If pdf.js
+  //    extracts them, one block per row is the cleanest cut. If ü isn't
+  //    present (rare), fall back to slicing ±150 chars around each code
+  //    occurrence and treating each slice as a block.
+  let blocks = [];
+  const uCount = (norm.match(/ü/gi) || []).length;
+  if (uCount >= 2) {
+    blocks = norm.split(/ü/i).slice(1);
+  } else {
+    const positions = [];
     for (const v of variants.keys()) {
-      let idx = win.indexOf(v);
-      while (idx !== -1) {
-        const absPos = winStart + idx;
-        // Prefer the code MID-point over its start so long codes don't
-        // get an unfair advantage — but keep it simple: distance from
-        // the anchor to the code's first char.
-        const dist = Math.abs(absPos - pos);
-        if (dist < bestDist) { bestDist = dist; bestVariant = v; }
-        idx = win.indexOf(v, idx + 1);
-      }
+      let idx = upper.indexOf(v);
+      while (idx !== -1) { positions.push(idx); idx = upper.indexOf(v, idx + 1); }
     }
-    if (bestVariant) {
-      const canonical = variants.get(bestVariant);
-      _im.invoiceMap[canonical] = (_im.invoiceMap[canonical] || 0) + qty;
+    positions.sort((a, b) => a - b);
+    for (const pos of positions) {
+      blocks.push(norm.slice(Math.max(0, pos - 150), Math.min(norm.length, pos + 200)));
     }
   }
 
-  // 4. Fallback for codes we still couldn't find via the "عدد" anchor —
-  //    scan a small window around the variant for a number in "N.00" qty
-  //    format (Elashry invoices always print qty as N.00). Rejects
-  //    description numbers like "٦٦ن" (torque spec) and price numbers.
-  for (const [variant, canonical] of variants) {
-    if (_im.invoiceMap[canonical]) continue;
-    const idx = upper.indexOf(variant);
-    if (idx < 0) continue;
-    const win = norm.slice(Math.max(0, idx - 120), Math.min(norm.length, idx + 120));
-    const qtyMatch = win.match(/\b(\d{1,3})\.00\b/);
-    if (qtyMatch) {
-      const q = parseInt(qtyMatch[1]);
-      if (q > 0 && q < 100) _im.invoiceMap[canonical] = q;
+  // 4. Per block: find the code (longest variant match wins so a bundle
+  //    SKU like "TCKLI202598" isn't confused for "TCKLI20595"). Then
+  //    pick the quantity via, in order:
+  //       a) "N.NN عدد" pattern if present in the block
+  //       b) smallest "N.00" value where N ∈ [1, 99] and N ≠ 3
+  //          (3.00 is always the discount rate in Elashry invoices)
+  //       c) if every N.00 in the block equals 3, use 3 (real qty=3)
+  //    A block that already claimed a code doesn't claim another.
+  for (const block of blocks) {
+    const blockUpper = block.toUpperCase();
+    let matchedCode = null, longest = 0;
+    for (const [variant, canonical] of variants) {
+      if (blockUpper.includes(variant) && variant.length > longest) {
+        longest = variant.length;
+        matchedCode = canonical;
+      }
     }
+    if (!matchedCode) continue;
+    if (_im.invoiceMap[matchedCode]) continue;
+
+    let qty = null;
+    const unitMatch = block.match(/(\d+(?:\.\d+)?)\s*عدد/);
+    if (unitMatch) {
+      const q = Math.round(parseFloat(unitMatch[1]));
+      if (q > 0 && q < 100) qty = q;
+    }
+    if (qty == null) {
+      const nums = [...block.matchAll(/\b(\d{1,2})\.00\b/g)]
+        .map(n => parseInt(n[1]))
+        .filter(n => n > 0 && n < 100);
+      const nonThree = nums.filter(n => n !== 3);
+      if (nonThree.length) qty = Math.min(...nonThree);
+      else if (nums.length) qty = 3;
+    }
+    if (qty != null) _im.invoiceMap[matchedCode] = qty;
   }
 
   // 5. Render right-hand totals + comparison card.
