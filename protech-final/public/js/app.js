@@ -481,9 +481,13 @@ const _im = { ordersByDate: {}, dates: [], selectedDate: '', invoiceMap: {} };
 
 function initInvoiceMatch() {
   _im.ordersByDate = {};
+  // Group by the date the picker confirmed / prepared the order — that is
+  // the day the goods actually leave the supplier's warehouse and belong on
+  // Elashry's invoice. Orders that haven't been prepared yet are skipped.
   const orders = (cache.orders || []).slice();
   for (const o of orders) {
-    const d = String(o.created_at || o.date || '').slice(0, 10);
+    if (!o.picker_prepared_at) continue;
+    const d = String(o.picker_prepared_at).slice(0, 10);
     if (!d) continue;
     (_im.ordersByDate[d] = _im.ordersByDate[d] || []).push(o);
   }
@@ -492,9 +496,9 @@ function initInvoiceMatch() {
   if (!sel) return;
   const options = _im.dates.map(d => {
     const list = _im.ordersByDate[d];
-    return `<option value="${d}">${d} · ${list.length} order${list.length === 1 ? '' : 's'}</option>`;
+    return `<option value="${d}">${d} · ${list.length} prepared</option>`;
   });
-  sel.innerHTML = options.length ? options.join('') : '<option value="">No orders yet</option>';
+  sel.innerHTML = options.length ? options.join('') : '<option value="">No prepared orders yet</option>';
   _im.selectedDate = _im.dates[0] || '';
   sel.value = _im.selectedDate;
   renderInvoiceMatch();
@@ -517,14 +521,14 @@ function renderInvoiceMatch() {
       <td style="font-family:var(--f-mono,monospace);font-size:12px;color:var(--muted)">${esc(o.ship_code || '')}</td>
       <td style="font-size:12px;color:var(--muted)">${esc(brief)}</td>
     </tr>`;
-  }).join('') || `<tr><td colspan="4" style="padding:20px;text-align:center;color:var(--muted)">No orders on this day</td></tr>`;
+  }).join('') || `<tr><td colspan="4" style="padding:20px;text-align:center;color:var(--muted)">No orders prepared on this day</td></tr>`;
 
   document.getElementById('im-orders-body').innerHTML = `
     <div class="table-wrap"><table style="width:100%">
       <thead><tr><th style="width:110px">Code</th><th>Customer</th><th style="width:100px">Ship</th><th>Products</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
-  document.getElementById('im-orders-count').textContent = `${list.length} order${list.length === 1 ? '' : 's'}`;
+  document.getElementById('im-orders-count').textContent = `${list.length} prepared`;
 
   // Aggregate — sum qty per code across every order this day.
   const agg = new Map();
@@ -541,7 +545,7 @@ function renderInvoiceMatch() {
   }
   _im.aggregated = Array.from(agg.values()).sort((a, b) => b.qty - a.qty);
   const totalUnits = _im.aggregated.reduce((s, r) => s + r.qty, 0);
-  document.getElementById('im-day-summary').textContent = `${list.length} order${list.length === 1 ? '' : 's'} · ${_im.aggregated.length} SKUs · ${totalUnits} pieces`;
+  document.getElementById('im-day-summary').textContent = `${list.length} prepared · ${_im.aggregated.length} SKUs · ${totalUnits} pieces`;
   document.getElementById('im-orders-totals').innerHTML = _im.aggregated.length
     ? _im.aggregated.map(r => `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px dashed var(--line)">
         <span style="font-family:var(--f-mono,monospace);font-size:12px">${esc(r.code)}</span>
