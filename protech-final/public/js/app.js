@@ -780,6 +780,9 @@ function editProduct(id) {
     document.getElementById('p-is-suggested').checked = !!p.is_suggested;
     const bw = Array.isArray(p.bundle_with) ? p.bundle_with : (typeof p.bundle_with === 'string' ? p.bundle_with.split(/[,\s]+/) : []);
     document.getElementById('p-bundle-with').value = bw.filter(Boolean).join(', ');
+    const aw = Array.isArray(p.accessories_with) ? p.accessories_with : (typeof p.accessories_with === 'string' ? p.accessories_with.split(/[,\s]+/) : []);
+    const awEl = document.getElementById('p-accessories-with');
+    if (awEl) awEl.value = aw.filter(Boolean).join(', ');
     const cats = Array.isArray(p.categories) ? p.categories : (p.category ? [p.category] : []);
     document.querySelectorAll('.p-cat-cb').forEach(cb => { cb.checked = cats.includes(cb.value); });
     renderVariantRows(Array.isArray(p.variants) ? p.variants : []);
@@ -807,6 +810,10 @@ async function saveProduct() {
   const bundle_with = bundleRaw
     ? bundleRaw.split(/[,\s]+/).map(s => s.trim().toUpperCase()).filter(Boolean).slice(0, 3)
     : [];
+  const accessoriesRaw = (document.getElementById('p-accessories-with')?.value || '').trim();
+  const accessories_with = accessoriesRaw
+    ? accessoriesRaw.split(/[,\s]+/).map(s => s.trim().toUpperCase()).filter(Boolean)
+    : [];
   const categories = Array.from(document.querySelectorAll('.p-cat-cb:checked')).map(cb => cb.value);
   // Keep first category in 'category' field for backward compatibility with store
   const category = categories[0] || null;
@@ -817,17 +824,37 @@ async function saveProduct() {
   if (is_offer && !offer_price) { showToast('Please enter the discounted price'); return; }
 
   const id = document.getElementById('p-idx').value;
-const payload = { code, name, qty, price, buy_price, brand, description, is_offer, offer_price, is_published, free_shipping, is_suggested, bundle_with, bundle_of, categories, category, variants, images: currentProductImages };
+const payload = { code, name, qty, price, buy_price, brand, description, is_offer, offer_price, is_published, free_shipping, is_suggested, bundle_with, accessories_with, bundle_of, categories, category, variants, images: currentProductImages };
+  // If the DB is missing the accessories_with column PostgREST replies with
+  // "Could not find the 'accessories_with' column …". Retry once without it
+  // so pre-migration installs still save the rest, with a clear toast telling
+  // the admin how to add the column.
+  const attempt = async (body) => {
+    if (id) { await dbUpdate('products', id, body); return { updated: true }; }
+    const data = { id: genId(), ...body, created_at: new Date().toISOString() };
+    await dbInsert('products', data);
+    return { created: data };
+  };
   try {
-    if (id) {
-      await dbUpdate('products', id, payload);
+    let result;
+    try {
+      result = await attempt(payload);
+    } catch (e) {
+      const msg = String(e.message || '');
+      if (/accessories_with/i.test(msg) && /column/i.test(msg)) {
+        const { accessories_with: _drop, ...fallback } = payload;
+        result = await attempt(fallback);
+        showToast('Saved (add column: ALTER TABLE products ADD COLUMN accessories_with jsonb;)');
+      } else {
+        throw e;
+      }
+    }
+    if (result.updated) {
       const i = cache.products.findIndex(x => x.id === id);
       if (i >= 0) cache.products[i] = { ...cache.products[i], ...payload };
       showToast('Product updated ✓');
-    } else {
-      const data = { id: genId(), ...payload, created_at: new Date().toISOString() };
-      await dbInsert('products', data);
-      cache.products.push(data);
+    } else if (result.created) {
+      cache.products.push(result.created);
       showToast('Product added ✓');
     }
     closeModal(); renderAll();
