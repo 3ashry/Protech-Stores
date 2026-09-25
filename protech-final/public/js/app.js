@@ -481,6 +481,9 @@ const _im = { ordersByDate: {}, dates: [], selectedDate: '', invoiceMap: {} };
 
 function initInvoiceMatch() {
   _im.ordersByDate = {};
+  _im.viewingSaved = null;
+  document.getElementById('im-viewing-saved') && (document.getElementById('im-viewing-saved').style.display = 'none');
+  loadSavedInvoices();
   // Group by the date the picker confirmed / prepared the order — that is
   // the day the goods actually leave the supplier's warehouse and belong on
   // Elashry's invoice. Orders that haven't been prepared yet are skipped.
@@ -636,39 +639,53 @@ function scanInvoice() {
   _im.invoiceMap = {};
 
   // 3. Anchor: every "N.NN عدد" (or "N عدد") in the invoice is a line's
-  //    quantity. For each such anchor, look ±240 chars for a code variant
-  //    and assign the qty to it. Multiple hits for the same code sum up.
+  //    quantity. For each anchor, find the code variant occurrence that
+  //    is CLOSEST in the text (not the longest — closest wins). This
+  //    prevents a big ±240 window from claiming a neighbouring row's
+  //    code when both are within reach.
   const unitRe = /(\d+(?:\.\d+)?)\s*عدد/g;
   let m;
   while ((m = unitRe.exec(norm))) {
     const qty = Math.round(parseFloat(m[1]));
     if (!(qty > 0 && qty < 1000)) continue;
     const pos = m.index;
-    const win = upper.slice(Math.max(0, pos - 240), Math.min(upper.length, pos + 240));
-    // Longer variants first so "TCKLI20595" wins over "TCKLI" if both listed.
-    const sorted = Array.from(variants.keys()).sort((a, b) => b.length - a.length);
-    for (const v of sorted) {
-      if (win.includes(v)) {
-        const canonical = variants.get(v);
-        _im.invoiceMap[canonical] = (_im.invoiceMap[canonical] || 0) + qty;
-        break;
+    const winStart = Math.max(0, pos - 240);
+    const winEnd = Math.min(upper.length, pos + 240);
+    const win = upper.slice(winStart, winEnd);
+    let bestVariant = null;
+    let bestDist = Infinity;
+    for (const v of variants.keys()) {
+      let idx = win.indexOf(v);
+      while (idx !== -1) {
+        const absPos = winStart + idx;
+        // Prefer the code MID-point over its start so long codes don't
+        // get an unfair advantage — but keep it simple: distance from
+        // the anchor to the code's first char.
+        const dist = Math.abs(absPos - pos);
+        if (dist < bestDist) { bestDist = dist; bestVariant = v; }
+        idx = win.indexOf(v, idx + 1);
       }
+    }
+    if (bestVariant) {
+      const canonical = variants.get(bestVariant);
+      _im.invoiceMap[canonical] = (_im.invoiceMap[canonical] || 0) + qty;
     }
   }
 
   // 4. Fallback for codes we still couldn't find via the "عدد" anchor —
-  //    scan the whole text for the variant and grab the nearest small
-  //    integer within ~60 chars. Handles image-only OCR fragments that
-  //    lose the "عدد" marker.
+  //    scan a small window around the variant for a number in "N.00" qty
+  //    format (Elashry invoices always print qty as N.00). Rejects
+  //    description numbers like "٦٦ن" (torque spec) and price numbers.
   for (const [variant, canonical] of variants) {
     if (_im.invoiceMap[canonical]) continue;
     const idx = upper.indexOf(variant);
     if (idx < 0) continue;
-    const win = norm.slice(Math.max(0, idx - 80), Math.min(norm.length, idx + 80));
-    const nums = [...win.matchAll(/\b(\d{1,3})\b/g)]
-      .map(n => parseInt(n[1]))
-      .filter(n => n > 0 && n < 100);
-    if (nums.length) _im.invoiceMap[canonical] = nums[0];
+    const win = norm.slice(Math.max(0, idx - 120), Math.min(norm.length, idx + 120));
+    const qtyMatch = win.match(/\b(\d{1,3})\.00\b/);
+    if (qtyMatch) {
+      const q = parseInt(qtyMatch[1]);
+      if (q > 0 && q < 100) _im.invoiceMap[canonical] = q;
+    }
   }
 
   // 5. Render right-hand totals + comparison card.
@@ -724,6 +741,186 @@ function clearInvoiceScan() {
   _im.invoiceMap = {};
   document.getElementById('im-invoice-totals').innerHTML = 'Hit <b>Scan</b> after pasting the invoice.';
   document.getElementById('im-compare-card').style.display = 'none';
+}
+
+// ─── Save / retrieve past matches ────────────────────────────────────────
+// Persists the full snapshot (orders + invoice text + parsed totals) to a
+// Supabase table so the admin can look up any past reconciliation later.
+async function saveInvoiceMatch() {
+  if (_im.viewingSaved) { showToast('Already viewing a saved match'); return; }
+  const list = _im.ordersByDate?.[_im.selectedDate] || [];
+  if (!list.length) { showToast('No orders on this day to save'); return; }
+  const text = (document.getElementById('im-invoice-text')?.value || '').trim();
+  if (!text) { showToast('Paste and scan the invoice first'); return; }
+  if (!_im.invoiceMap || !Object.keys(_im.invoiceMap).length) {
+    if (!confirm('No matches detected yet — save anyway?')) return;
+  }
+  const defaultName = `Elashry — ${_im.selectedDate}`;
+  const name = (prompt('Save as (invoice name):', defaultName) || '').trim();
+  if (!name) return;
+
+  const record = {
+    id: genId(),
+    name,
+    prepared_date: _im.selectedDate || null,
+    orders_snapshot: list.map(o => ({
+      id: o.id,
+      code: o.code,
+      customer_name: o.customer_name,
+      ship_code: o.ship_code,
+      phone: o.phone,
+      city: o.city,
+      products: o.products,
+      picker_prepared_at: o.picker_prepared_at,
+      total: o.total,
+    })),
+    invoice_text: text,
+    invoice_map: _im.invoiceMap,
+    aggregated: _im.aggregated,
+    created_at: new Date().toISOString(),
+  };
+
+  try {
+    await dbInsert('supplier_invoices', record);
+    showToast('Saved ✓');
+    (_im.saved = _im.saved || []).unshift(record);
+    renderSavedInvoices();
+  } catch (e) {
+    const msg = String(e.message || '');
+    if (/supplier_invoices/i.test(msg) && (/relation|does not exist|schema cache/i.test(msg))) {
+      showToast('Create table first (see the note below the save button).');
+      alert(`Run this once in Supabase SQL editor:\n\nCREATE TABLE IF NOT EXISTS supplier_invoices (\n  id text PRIMARY KEY,\n  name text NOT NULL,\n  prepared_date date,\n  orders_snapshot jsonb,\n  invoice_text text,\n  invoice_map jsonb,\n  aggregated jsonb,\n  created_at timestamptz DEFAULT now()\n);\n\n-- and allow authenticated selects/inserts (or open it to anon if your admin uses anon):\nALTER TABLE supplier_invoices ENABLE ROW LEVEL SECURITY;\nCREATE POLICY "admin full access" ON supplier_invoices FOR ALL TO authenticated USING (true) WITH CHECK (true);`);
+    } else {
+      showToast('Save failed: ' + msg);
+    }
+  }
+}
+
+async function loadSavedInvoices() {
+  const tbody = document.getElementById('im-saved-tbody');
+  if (!tbody) return;
+  try {
+    const rows = await dbFetch('supplier_invoices', { order: 'created_at.desc' });
+    _im.saved = Array.isArray(rows) ? rows : [];
+  } catch (e) {
+    _im.saved = [];
+    // Table probably missing — show a hint row rather than a scary error.
+    if (/relation|does not exist|schema cache|supplier_invoices/i.test(String(e.message || ''))) {
+      tbody.innerHTML = '<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--muted)">Table not created yet — hit 💾 Save once to see the SQL you need.</td></tr>';
+      return;
+    }
+  }
+  renderSavedInvoices();
+}
+
+function renderSavedInvoices() {
+  const tbody = document.getElementById('im-saved-tbody');
+  if (!tbody) return;
+  const q = (document.getElementById('im-saved-search')?.value || '').trim().toLowerCase();
+  const filtered = (_im.saved || []).filter(r => {
+    if (!q) return true;
+    return (r.name || '').toLowerCase().includes(q)
+      || String(r.prepared_date || '').includes(q)
+      || String(r.created_at || '').includes(q);
+  });
+  if (!filtered.length) {
+    tbody.innerHTML = `<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--muted)">${q ? 'No matches for "' + esc(q) + '"' : 'No saved invoices yet — scan a match then hit 💾 Save.'}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = filtered.map(r => {
+    const skus = (r.aggregated || []).length;
+    let orderedTotal = 0, invoiceTotal = 0, mismatches = 0;
+    for (const row of (r.aggregated || [])) {
+      orderedTotal += row.qty || 0;
+      const inv = (r.invoice_map || {})[row.code] || 0;
+      invoiceTotal += inv;
+      if (inv !== row.qty) mismatches++;
+    }
+    const savedAt = String(r.created_at || '').slice(0, 16).replace('T', ' ');
+    const dCls = mismatches === 0 ? 'b-success' : 'b-warning';
+    const dLabel = mismatches === 0 ? '✓ all match' : `${mismatches} off`;
+    return `<tr>
+      <td><b>${esc(r.name)}</b></td>
+      <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(r.prepared_date || '—')}</td>
+      <td style="font-family:var(--f-mono,monospace);font-size:12px;color:var(--muted)">${esc(savedAt)}</td>
+      <td style="text-align:center;font-family:var(--f-mono,monospace)">${skus}</td>
+      <td style="text-align:center"><span class="badge ${dCls}">${dLabel}</span></td>
+      <td><div class="actions">
+        <button class="btn btn-ghost btn-xs" onclick="openSavedInvoice('${r.id}')">Open</button>
+        <button class="btn btn-danger btn-xs" onclick="deleteSavedInvoice('${r.id}')">Delete</button>
+      </div></td>
+    </tr>`;
+  }).join('');
+}
+
+function openSavedInvoice(id) {
+  const r = (_im.saved || []).find(x => x.id === id);
+  if (!r) return;
+  _im.viewingSaved = r;
+  _im.aggregated = r.aggregated || [];
+  _im.invoiceMap = r.invoice_map || {};
+  // Repopulate the two columns from the snapshot rather than live data.
+  const list = r.orders_snapshot || [];
+  const rows = list.map(o => {
+    const items = Array.isArray(o.products) ? o.products : [];
+    const brief = items.map(p => `${p.name || p.code} ×${p.qty || 1}`).join(' · ');
+    return `<tr>
+      <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(o.code || '')}</td>
+      <td>${esc(o.customer_name || '—')}</td>
+      <td style="font-family:var(--f-mono,monospace);font-size:12px;color:var(--muted)">${esc(o.ship_code || '')}</td>
+      <td style="font-size:12px;color:var(--muted)">${esc(brief)}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('im-orders-body').innerHTML = `<div class="table-wrap"><table style="width:100%">
+    <thead><tr><th style="width:110px">Code</th><th>Customer</th><th style="width:100px">Ship</th><th>Products</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+  document.getElementById('im-orders-count').textContent = `${list.length} orders (saved)`;
+  const totalUnits = (r.aggregated || []).reduce((s, x) => s + (x.qty || 0), 0);
+  document.getElementById('im-day-summary').textContent = `${list.length} prepared · ${(r.aggregated || []).length} SKUs · ${totalUnits} pieces (saved)`;
+  document.getElementById('im-orders-totals').innerHTML = (r.aggregated || []).map(x => `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px dashed var(--line)">
+    <span style="font-family:var(--f-mono,monospace);font-size:12px">${esc(x.code)}</span>
+    <span style="flex:1;padding:0 10px;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.name || '')}</span>
+    <b style="font-family:var(--f-mono,monospace);color:#F26A21">× ${x.qty}</b></div>`).join('');
+  document.getElementById('im-invoice-text').value = r.invoice_text || '';
+  const codes = (r.aggregated || []).map(x => x.code);
+  document.getElementById('im-invoice-totals').innerHTML = codes.map(c => {
+    const v = (r.invoice_map || {})[c] || 0;
+    if (!v) return `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px dashed var(--line);opacity:.6">
+      <span style="font-family:var(--f-mono,monospace);font-size:12px">${esc(c)}</span>
+      <span style="font-size:12px;color:var(--muted)">not found</span><b>—</b></div>`;
+    return `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px dashed var(--line)">
+      <span style="font-family:var(--f-mono,monospace);font-size:12px">${esc(c)}</span>
+      <span style="font-size:12px;color:var(--muted);flex:1;padding:0 10px">detected</span>
+      <b style="font-family:var(--f-mono,monospace);color:#16a34a">× ${v}</b></div>`;
+  }).join('');
+  renderInvoiceCompare();
+  // Show the "viewing saved" banner.
+  document.getElementById('im-viewing-saved').style.display = '';
+  document.getElementById('im-viewing-saved-name').textContent = `${r.name} · ${r.prepared_date || ''}`;
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function backToLiveInvoiceMatch() {
+  _im.viewingSaved = null;
+  document.getElementById('im-viewing-saved').style.display = 'none';
+  document.getElementById('im-invoice-text').value = '';
+  _im.invoiceMap = {};
+  document.getElementById('im-invoice-totals').innerHTML = 'Hit <b>Scan</b> after pasting the invoice.';
+  document.getElementById('im-compare-card').style.display = 'none';
+  renderInvoiceMatch();
+}
+
+async function deleteSavedInvoice(id) {
+  const r = (_im.saved || []).find(x => x.id === id);
+  if (!r) return;
+  if (!confirm(`Delete saved match "${r.name}"?`)) return;
+  try {
+    await dbDelete('supplier_invoices', id);
+    _im.saved = _im.saved.filter(x => x.id !== id);
+    renderSavedInvoices();
+    if (_im.viewingSaved && _im.viewingSaved.id === id) backToLiveInvoiceMatch();
+    showToast('Deleted');
+  } catch (e) { showToast('Delete failed: ' + e.message); }
 }
 
 function openFlashOfferProductsList() {

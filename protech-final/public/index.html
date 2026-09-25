@@ -360,6 +360,7 @@
               onchange="onInvoiceFileChosen(event)"
               style="flex:1;padding:8px 10px;border:1.5px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px;background:var(--bg)">
             <button class="btn btn-primary btn-sm" onclick="scanInvoice()">🔍 Scan</button>
+            <button class="btn btn-dark btn-sm" onclick="saveInvoiceMatch()">💾 Save</button>
             <button class="btn btn-ghost btn-sm" onclick="clearInvoiceScan()">Clear</button>
           </div>
           <textarea id="im-invoice-text" rows="10" placeholder="Paste supplier invoice text here…"
@@ -372,6 +373,12 @@
       </div>
     </div>
 
+    <!-- Banner when viewing a saved match instead of the live day. -->
+    <div id="im-viewing-saved" style="display:none;margin:10px 0;padding:10px 14px;background:#fef3c7;border:1.5px solid #fcd34d;border-radius:10px;font-size:13px;font-weight:700;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="flex:1">📂 Viewing saved match: <span id="im-viewing-saved-name"></span></span>
+      <button class="btn btn-ghost btn-sm" onclick="backToLiveInvoiceMatch()">← Back to live</button>
+    </div>
+
     <!-- Comparison table — shows up after a scan -->
     <div class="card" id="im-compare-card" style="display:none;margin-top:14px">
       <div class="card-header"><span class="card-title">✅ Match check</span>
@@ -381,6 +388,22 @@
         <table>
           <thead><tr><th>Code</th><th>Name</th><th style="text-align:center">Ordered</th><th style="text-align:center">Invoice</th><th style="text-align:center">Δ</th><th>Status</th></tr></thead>
           <tbody id="im-compare-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Saved matches — searchable archive of past invoices -->
+    <div class="card" style="margin-top:14px">
+      <div class="card-header" style="flex-wrap:wrap;gap:10px">
+        <span class="card-title">🗂️ Saved matches</span>
+        <input type="search" id="im-saved-search" placeholder="Search by name or date…" oninput="renderSavedInvoices()"
+          style="min-width:220px;flex:1;max-width:420px;margin-inline-start:auto;padding:8px 12px;border:1.5px solid var(--line);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg)">
+        <button class="btn btn-ghost btn-sm" onclick="loadSavedInvoices()">🔄</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Prepared</th><th>Saved</th><th style="text-align:center">SKUs</th><th style="text-align:center">Δ</th><th></th></tr></thead>
+          <tbody id="im-saved-tbody"><tr><td colspan="6" style="padding:20px;text-align:center;color:var(--muted)">Loading…</td></tr></tbody>
         </table>
       </div>
     </div>
