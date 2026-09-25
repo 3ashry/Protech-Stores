@@ -608,40 +608,70 @@ function scanInvoice() {
   const codes = (_im.aggregated || []).map(r => r.code);
   if (!codes.length) { showToast('No products on this day to match against'); return; }
 
-  // Normalise: keep letters, digits, +, spaces, newlines.
-  // Convert Arabic-Indic digits to Latin so the qty regex catches them.
+  // 1. Normalise Arabic-Indic digits (٠-٩) to Latin so we can regex numbers.
   const arNumMap = { '٠':'0','١':'1','٢':'2','٣':'3','٤':'4','٥':'5','٦':'6','٧':'7','٨':'8','٩':'9' };
   const norm = raw.replace(/[٠-٩]/g, d => arNumMap[d] || d);
+  const upper = norm.toUpperCase();
 
-  _im.invoiceMap = {};
-  const upperText = norm.toUpperCase();
+  // 2. Elashry's invoice PDF has Latin codes inside RTL Arabic text, so
+  //    pdf.js extracts them with the letter-prefix and digit-suffix swapped
+  //    ("TMT516003" comes out as "516003TMT"). Build a variant map that
+  //    accepts either orientation and resolves back to the canonical code.
+  const variants = new Map();  // upperVariant → canonicalCode
   for (const code of codes) {
-    // Match the code with word boundaries that allow '+' as part of the code.
-    // Then look for the nearest standalone integer within ~40 chars either side.
-    const codeRe = new RegExp(code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
-    let bestQty = 0;
-    let match;
-    while ((match = codeRe.exec(upperText))) {
-      const pos = match.index;
-      const window = norm.slice(Math.max(0, pos - 60), Math.min(norm.length, pos + code.length + 60));
-      // Scan for numbers, prefer the one closest to the code marker.
-      const nums = [...window.matchAll(/\b(\d{1,4})\b/g)];
-      if (!nums.length) continue;
-      // Pick the smallest number that's plausibly a qty (1..999 typically).
-      // Prefer numbers on the RIGHT of the code (more common invoice layout).
-      const codeInWin = window.toUpperCase().indexOf(code);
-      const scored = nums.map(n => {
-        const num = parseInt(n[1]);
-        const distFromCode = Math.abs(n.index - codeInWin);
-        // Penalise huge numbers — those are usually prices, not qty.
-        const priceLike = num >= 100 ? 200 : 0;
-        return { num, score: distFromCode + priceLike };
-      }).sort((a, b) => a.score - b.score);
-      if (scored[0] && scored[0].num > bestQty) bestQty = scored[0].num;
+    variants.set(code.toUpperCase(), code);
+    const m = code.match(/^([A-Za-z]+)(\d+)$/);
+    if (m) variants.set((m[2] + m[1]).toUpperCase(), code);
+    // Some codes have "+" (e.g. combined SKUs). Split, try each half's
+    // reversed form too, so a partial mention still identifies the row.
+    if (code.includes('+')) {
+      for (const part of code.split('+').map(s => s.trim()).filter(Boolean)) {
+        variants.set(part.toUpperCase(), code);
+        const pm = part.match(/^([A-Za-z]+)(\d+)$/);
+        if (pm) variants.set((pm[2] + pm[1]).toUpperCase(), code);
+      }
     }
-    if (bestQty) _im.invoiceMap[code] = bestQty;
   }
 
+  _im.invoiceMap = {};
+
+  // 3. Anchor: every "N.NN عدد" (or "N عدد") in the invoice is a line's
+  //    quantity. For each such anchor, look ±240 chars for a code variant
+  //    and assign the qty to it. Multiple hits for the same code sum up.
+  const unitRe = /(\d+(?:\.\d+)?)\s*عدد/g;
+  let m;
+  while ((m = unitRe.exec(norm))) {
+    const qty = Math.round(parseFloat(m[1]));
+    if (!(qty > 0 && qty < 1000)) continue;
+    const pos = m.index;
+    const win = upper.slice(Math.max(0, pos - 240), Math.min(upper.length, pos + 240));
+    // Longer variants first so "TCKLI20595" wins over "TCKLI" if both listed.
+    const sorted = Array.from(variants.keys()).sort((a, b) => b.length - a.length);
+    for (const v of sorted) {
+      if (win.includes(v)) {
+        const canonical = variants.get(v);
+        _im.invoiceMap[canonical] = (_im.invoiceMap[canonical] || 0) + qty;
+        break;
+      }
+    }
+  }
+
+  // 4. Fallback for codes we still couldn't find via the "عدد" anchor —
+  //    scan the whole text for the variant and grab the nearest small
+  //    integer within ~60 chars. Handles image-only OCR fragments that
+  //    lose the "عدد" marker.
+  for (const [variant, canonical] of variants) {
+    if (_im.invoiceMap[canonical]) continue;
+    const idx = upper.indexOf(variant);
+    if (idx < 0) continue;
+    const win = norm.slice(Math.max(0, idx - 80), Math.min(norm.length, idx + 80));
+    const nums = [...win.matchAll(/\b(\d{1,3})\b/g)]
+      .map(n => parseInt(n[1]))
+      .filter(n => n > 0 && n < 100);
+    if (nums.length) _im.invoiceMap[canonical] = nums[0];
+  }
+
+  // 5. Render right-hand totals + comparison card.
   const invoiceTotals = document.getElementById('im-invoice-totals');
   const rows = codes.map(c => {
     const v = _im.invoiceMap[c] || 0;
@@ -657,7 +687,8 @@ function scanInvoice() {
   invoiceTotals.innerHTML = rows;
 
   renderInvoiceCompare();
-  showToast(`Scanned · ${Object.keys(_im.invoiceMap).length}/${codes.length} codes matched`);
+  const matchedCount = codes.filter(c => _im.invoiceMap[c]).length;
+  showToast(`Scanned · ${matchedCount}/${codes.length} codes matched`);
 }
 
 function renderInvoiceCompare() {
