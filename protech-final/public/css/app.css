@@ -223,6 +223,15 @@ input, select, textarea {
   -webkit-appearance: none;
 }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--acc); box-shadow: none; }
+/* Restore native checkbox / radio rendering — the wildcard rule above
+   strips their appearance and stretches them to full-width, which hides
+   the tick and breaks click targets. Inline width/height on the input
+   is honored, but the -webkit-appearance:none must be re-opened here. */
+input[type="checkbox"], input[type="radio"] {
+  width: auto; padding: 0;
+  -webkit-appearance: auto; -moz-appearance: auto; appearance: auto;
+  accent-color: var(--acc);
+}
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 @media (max-width: 520px) { .form-row { grid-template-columns: 1fr; } }
 
