@@ -95,10 +95,11 @@ protechstores.com
 }
 
 // ── NAVIGATION ──
-const SCREENS = ['home', 'inventory', 'orders', 'returns', 'financials', 'invoices', 'carts', 'accounts', 'tasks', 'analytics'];
+const SCREENS = ['home', 'inventory', 'orders', 'returns', 'financials', 'invoices', 'invoice-match', 'carts', 'accounts', 'tasks', 'analytics'];
 function go(id) {
   if (id === 'analytics' && !analyticsCache.loaded) loadAnalytics();
   if (id === 'carts') loadAbandonedCarts();
+  if (id === 'invoice-match') initInvoiceMatch();
   SCREENS.forEach(s => {
     document.getElementById('screen-' + s)?.classList.toggle('active', s === id);
   });
@@ -464,6 +465,230 @@ async function saveFlashOfferConfig() {
   } catch (e) {
     showToast('Save failed: ' + (e.message || 'unknown'));
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  📊 INVOICE MATCH — reconcile a day's orders vs supplier invoice
+//  Left: aggregated product totals across every order created on the
+//        picked day (customer name / order code / ship code / brief
+//        product list + a sum-per-code table at the bottom).
+//  Right: paste (or upload text of) the supplier's invoice; parser
+//        finds each ordered code in the pasted text and picks up the
+//        nearest integer to it — that's the invoice qty for that
+//        code. Bottom card shows a per-code match / mismatch table.
+// ═══════════════════════════════════════════════════════════════════
+const _im = { ordersByDate: {}, dates: [], selectedDate: '', invoiceMap: {} };
+
+function initInvoiceMatch() {
+  _im.ordersByDate = {};
+  const orders = (cache.orders || []).slice();
+  for (const o of orders) {
+    const d = String(o.created_at || o.date || '').slice(0, 10);
+    if (!d) continue;
+    (_im.ordersByDate[d] = _im.ordersByDate[d] || []).push(o);
+  }
+  _im.dates = Object.keys(_im.ordersByDate).sort().reverse();
+  const sel = document.getElementById('im-date-select');
+  if (!sel) return;
+  const options = _im.dates.map(d => {
+    const list = _im.ordersByDate[d];
+    return `<option value="${d}">${d} · ${list.length} order${list.length === 1 ? '' : 's'}</option>`;
+  });
+  sel.innerHTML = options.length ? options.join('') : '<option value="">No orders yet</option>';
+  _im.selectedDate = _im.dates[0] || '';
+  sel.value = _im.selectedDate;
+  renderInvoiceMatch();
+}
+
+function renderInvoiceMatch() {
+  const sel = document.getElementById('im-date-select');
+  _im.selectedDate = sel?.value || _im.selectedDate;
+  const list = _im.ordersByDate[_im.selectedDate] || [];
+  const products = cache.products || [];
+  const byCode = new Map(products.map(p => [String(p.code || '').toUpperCase(), p]));
+
+  // Left column — one row per order.
+  const rows = list.map(o => {
+    const items = Array.isArray(o.products) ? o.products : [];
+    const brief = items.map(p => `${p.name || p.code} ×${p.qty || 1}`).join(' · ');
+    return `<tr>
+      <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(o.code || '')}</td>
+      <td>${esc(o.customer_name || '—')}</td>
+      <td style="font-family:var(--f-mono,monospace);font-size:12px;color:var(--muted)">${esc(o.ship_code || '')}</td>
+      <td style="font-size:12px;color:var(--muted)">${esc(brief)}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="4" style="padding:20px;text-align:center;color:var(--muted)">No orders on this day</td></tr>`;
+
+  document.getElementById('im-orders-body').innerHTML = `
+    <div class="table-wrap"><table style="width:100%">
+      <thead><tr><th style="width:110px">Code</th><th>Customer</th><th style="width:100px">Ship</th><th>Products</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+  document.getElementById('im-orders-count').textContent = `${list.length} order${list.length === 1 ? '' : 's'}`;
+
+  // Aggregate — sum qty per code across every order this day.
+  const agg = new Map();
+  for (const o of list) {
+    for (const p of (Array.isArray(o.products) ? o.products : [])) {
+      const code = String(p.code || '').toUpperCase();
+      if (!code) continue;
+      const q = parseInt(p.qty || 1) || 1;
+      const cur = agg.get(code) || { code, name: p.name || byCode.get(code)?.name || '', qty: 0 };
+      cur.qty += q;
+      if (!cur.name && p.name) cur.name = p.name;
+      agg.set(code, cur);
+    }
+  }
+  _im.aggregated = Array.from(agg.values()).sort((a, b) => b.qty - a.qty);
+  const totalUnits = _im.aggregated.reduce((s, r) => s + r.qty, 0);
+  document.getElementById('im-day-summary').textContent = `${list.length} order${list.length === 1 ? '' : 's'} · ${_im.aggregated.length} SKUs · ${totalUnits} pieces`;
+  document.getElementById('im-orders-totals').innerHTML = _im.aggregated.length
+    ? _im.aggregated.map(r => `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px dashed var(--line)">
+        <span style="font-family:var(--f-mono,monospace);font-size:12px">${esc(r.code)}</span>
+        <span style="flex:1;padding:0 10px;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name || '')}</span>
+        <b style="font-family:var(--f-mono,monospace);color:#F26A21">× ${r.qty}</b></div>`).join('')
+    : '<div style="color:var(--muted)">No products to aggregate.</div>';
+
+  // Rebuild the comparison table if there's already a scanned invoice.
+  if (Object.keys(_im.invoiceMap).length) renderInvoiceCompare();
+}
+
+function onInvoiceFileChosen(e) {
+  const f = e.target.files?.[0];
+  if (!f) return;
+  const ta = document.getElementById('im-invoice-text');
+  const type = f.type || '';
+  if (type === 'application/pdf' || /\.pdf$/i.test(f.name)) {
+    // Try to read embedded text from the PDF. Works only for text-based
+    // PDFs — scanned/image PDFs need OCR (not yet wired). We surface the
+    // right message so the admin knows to paste manually if empty.
+    extractPdfText(f).then(txt => {
+      if (txt && txt.trim()) { ta.value = txt; showToast('Loaded PDF text · press Scan'); }
+      else showToast('PDF has no embedded text — copy the invoice text and paste it here.');
+    }).catch(err => showToast('PDF read failed: ' + err.message));
+  } else if (type.startsWith('text/') || /\.txt$/i.test(f.name)) {
+    f.text().then(t => { ta.value = t; showToast('Loaded · press Scan'); });
+  } else if (type.startsWith('image/')) {
+    showToast('Image OCR not wired yet — paste the invoice text manually into the box.');
+  } else {
+    showToast('Unsupported file type — paste the text manually.');
+  }
+}
+
+async function extractPdfText(file) {
+  // Use pdf.js if it's already on the page (jspdf doesn't parse — it writes).
+  // Fall back to a raw byte scan for text objects if pdf.js isn't loaded.
+  if (typeof pdfjsLib !== 'undefined') {
+    const buf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    const out = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      out.push(content.items.map(x => x.str).join(' '));
+    }
+    return out.join('\n');
+  }
+  // Naive fallback — pull ASCII/UTF-8 runs from between "BT ... ET" markers.
+  const buf = new Uint8Array(await file.arrayBuffer());
+  let s = new TextDecoder('utf-8', { fatal: false }).decode(buf);
+  const chunks = [];
+  const re = /\(([^)]+)\)\s*Tj/g;
+  let m; while ((m = re.exec(s))) chunks.push(m[1]);
+  return chunks.join(' ');
+}
+
+function scanInvoice() {
+  const raw = (document.getElementById('im-invoice-text')?.value || '').trim();
+  if (!raw) { showToast('Paste the invoice text first'); return; }
+  const codes = (_im.aggregated || []).map(r => r.code);
+  if (!codes.length) { showToast('No products on this day to match against'); return; }
+
+  // Normalise: keep letters, digits, +, spaces, newlines.
+  // Convert Arabic-Indic digits to Latin so the qty regex catches them.
+  const arNumMap = { '٠':'0','١':'1','٢':'2','٣':'3','٤':'4','٥':'5','٦':'6','٧':'7','٨':'8','٩':'9' };
+  const norm = raw.replace(/[٠-٩]/g, d => arNumMap[d] || d);
+
+  _im.invoiceMap = {};
+  const upperText = norm.toUpperCase();
+  for (const code of codes) {
+    // Match the code with word boundaries that allow '+' as part of the code.
+    // Then look for the nearest standalone integer within ~40 chars either side.
+    const codeRe = new RegExp(code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+    let bestQty = 0;
+    let match;
+    while ((match = codeRe.exec(upperText))) {
+      const pos = match.index;
+      const window = norm.slice(Math.max(0, pos - 60), Math.min(norm.length, pos + code.length + 60));
+      // Scan for numbers, prefer the one closest to the code marker.
+      const nums = [...window.matchAll(/\b(\d{1,4})\b/g)];
+      if (!nums.length) continue;
+      // Pick the smallest number that's plausibly a qty (1..999 typically).
+      // Prefer numbers on the RIGHT of the code (more common invoice layout).
+      const codeInWin = window.toUpperCase().indexOf(code);
+      const scored = nums.map(n => {
+        const num = parseInt(n[1]);
+        const distFromCode = Math.abs(n.index - codeInWin);
+        // Penalise huge numbers — those are usually prices, not qty.
+        const priceLike = num >= 100 ? 200 : 0;
+        return { num, score: distFromCode + priceLike };
+      }).sort((a, b) => a.score - b.score);
+      if (scored[0] && scored[0].num > bestQty) bestQty = scored[0].num;
+    }
+    if (bestQty) _im.invoiceMap[code] = bestQty;
+  }
+
+  const invoiceTotals = document.getElementById('im-invoice-totals');
+  const rows = codes.map(c => {
+    const v = _im.invoiceMap[c] || 0;
+    if (!v) return `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px dashed var(--line);opacity:.6">
+      <span style="font-family:var(--f-mono,monospace);font-size:12px">${esc(c)}</span>
+      <span style="font-size:12px;color:var(--muted)">not found</span>
+      <b>—</b></div>`;
+    return `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px dashed var(--line)">
+      <span style="font-family:var(--f-mono,monospace);font-size:12px">${esc(c)}</span>
+      <span style="font-size:12px;color:var(--muted);flex:1;padding:0 10px">detected</span>
+      <b style="font-family:var(--f-mono,monospace);color:#16a34a">× ${v}</b></div>`;
+  }).join('');
+  invoiceTotals.innerHTML = rows;
+
+  renderInvoiceCompare();
+  showToast(`Scanned · ${Object.keys(_im.invoiceMap).length}/${codes.length} codes matched`);
+}
+
+function renderInvoiceCompare() {
+  const card = document.getElementById('im-compare-card');
+  const body = document.getElementById('im-compare-tbody');
+  const summary = document.getElementById('im-compare-summary');
+  if (!card || !body) return;
+  const rows = (_im.aggregated || []).map(r => {
+    const inv = _im.invoiceMap[r.code] || 0;
+    const delta = inv - r.qty;
+    const cls = inv === 0 ? 'b-danger' : delta === 0 ? 'b-success' : 'b-warning';
+    const label = inv === 0 ? 'missing' : delta === 0 ? '✓ match' : delta > 0 ? `+${delta} extra` : `${delta} short`;
+    return `<tr>
+      <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(r.code)}</td>
+      <td style="font-size:12px;color:var(--muted)">${esc(r.name || '')}</td>
+      <td style="text-align:center;font-family:var(--f-mono,monospace)">${r.qty}</td>
+      <td style="text-align:center;font-family:var(--f-mono,monospace)">${inv || '—'}</td>
+      <td style="text-align:center;font-family:var(--f-mono,monospace);font-weight:700;color:${delta === 0 ? '#16a34a' : delta > 0 ? '#F26A21' : '#dc2626'}">${inv === 0 ? '—' : delta > 0 ? '+' + delta : delta}</td>
+      <td><span class="badge ${cls}">${label}</span></td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--muted)">Nothing to compare</td></tr>';
+  body.innerHTML = rows;
+  const total = (_im.aggregated || []).length;
+  const matched = (_im.aggregated || []).filter(r => (_im.invoiceMap[r.code] || 0) === r.qty).length;
+  const missing = (_im.aggregated || []).filter(r => !(_im.invoiceMap[r.code])).length;
+  summary.textContent = `${matched}/${total} exact match · ${missing} missing`;
+  card.style.display = '';
+}
+
+function clearInvoiceScan() {
+  document.getElementById('im-invoice-text').value = '';
+  document.getElementById('im-invoice-file').value = '';
+  _im.invoiceMap = {};
+  document.getElementById('im-invoice-totals').innerHTML = 'Hit <b>Scan</b> after pasting the invoice.';
+  document.getElementById('im-compare-card').style.display = 'none';
 }
 
 function openFlashOfferProductsList() {
@@ -1015,7 +1240,6 @@ function renderOrders() {
         <button class="btn btn-ghost btn-xs" onclick="viewOrder('${o.id}')">View</button>
         <button class="btn btn-dark btn-xs" onclick="editOrder('${o.id}')">Edit</button>
         <button class="btn ${o.sent_to_picker_at ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="toggleSentToPicker('${o.id}', ${!!o.sent_to_picker_at})" title="${o.sent_to_picker_at ? 'إلغاء الإرسال للتجهيز' : 'إرسال للتجهيز'}">${o.sent_to_picker_at ? '📤 تم الإرسال' : '📦 إرسال للتجهيز'}</button>
-        <button class="btn ${isInPickup(o.id) ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="togglePickup('${o.id}')" title="أضف/إزالة من قائمة اليوم">${isInPickup(o.id) ? '✓ في القائمة' : '📋 قائمة اليوم'}</button>
         <button class="btn btn-danger btn-xs" onclick="delOrder('${o.id}')">Delete</button>
       </div></td>
     </tr>`).join('') : `<tr><td colspan="6"><div class="empty"><div class="empty-icon">🛒</div>${rawQ ? 'No orders match “' + esc(rawQ) + '”' : 'No orders yet'}</div></td></tr>`;
@@ -1108,9 +1332,15 @@ function aggregatePickup() {
 }
 
 // Small floating badge (top-left, near the sync buttons) showing count.
+// Disabled on the admin dashboard — the picker (order-preparation center)
+// still uses its own version. Kept the function callable so nothing else
+// throws when it references it.
 function renderPickupBadge() {
+  const el = document.getElementById('pickup-badge');
+  if (el) el.remove();
+  return;
+  // eslint-disable-next-line no-unreachable
   const ids = getPickupIds();
-  let el = document.getElementById('pickup-badge');
   if (!ids.length) { if (el) el.remove(); return; }
   if (!el) {
     el = document.createElement('button');

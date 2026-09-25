@@ -314,6 +314,77 @@
     </div>
   </div>
 
+  <!-- SUPPLIER INVOICE MATCH -->
+  <div class="screen" id="screen-invoice-match">
+    <div class="page-header">
+      <div class="page-title">Invoice <span>Match</span></div>
+    </div>
+    <div class="card" style="margin-bottom:14px">
+      <div class="card-header" style="flex-wrap:wrap;gap:12px">
+        <span class="card-title">🗓️ Pick a day</span>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-inline-start:auto">
+          <label style="font-size:13px;color:var(--muted);text-transform:none;letter-spacing:0;font-weight:normal;margin-bottom:0">Orders prepared on:</label>
+          <select id="im-date-select" onchange="renderInvoiceMatch()"
+            style="min-width:220px;padding:9px 12px;border:1.5px solid var(--line);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg)"></select>
+          <span id="im-day-summary" style="font-size:12px;color:var(--muted)"></span>
+        </div>
+      </div>
+    </div>
+
+    <style>@media(max-width:900px){#im-two-cols{grid-template-columns:1fr !important}}</style>
+    <div id="im-two-cols" style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <!-- LEFT: Orders for the day + aggregated totals -->
+      <div class="card">
+        <div class="card-header"><span class="card-title">📦 Orders on this day</span>
+          <span id="im-orders-count" style="margin-inline-start:auto;font-size:12px;color:var(--muted)"></span>
+        </div>
+        <div class="card-body" style="padding:0" id="im-orders-body">
+          <div class="empty"><div class="empty-icon">🗓️</div>Select a date to see orders</div>
+        </div>
+        <div style="padding:14px 16px;border-top:1px solid var(--line)">
+          <div style="font-weight:800;font-size:13px;margin-bottom:8px">🧮 Totals to order from Elashry</div>
+          <div id="im-orders-totals" style="font-size:13px;color:var(--muted)">—</div>
+        </div>
+      </div>
+
+      <!-- RIGHT: Supplier invoice — paste OR upload, parse into totals -->
+      <div class="card">
+        <div class="card-header"><span class="card-title">🧾 Supplier invoice</span></div>
+        <div class="card-body" style="padding:14px 16px;display:flex;flex-direction:column;gap:10px">
+          <div style="font-size:12px;color:var(--muted);line-height:1.55">
+            Paste the text you copied from Elashry's invoice (or type it), then hit <b>Scan</b>. The system looks for each product code from the left column and reads its quantity from the invoice. You can also upload a PDF/image — for now the OCR feature only extracts embedded text; if it comes back empty, copy the text manually.
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input type="file" id="im-invoice-file" accept="application/pdf,image/*,.txt"
+              onchange="onInvoiceFileChosen(event)"
+              style="flex:1;padding:8px 10px;border:1.5px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px;background:var(--bg)">
+            <button class="btn btn-primary btn-sm" onclick="scanInvoice()">🔍 Scan</button>
+            <button class="btn btn-ghost btn-sm" onclick="clearInvoiceScan()">Clear</button>
+          </div>
+          <textarea id="im-invoice-text" rows="10" placeholder="Paste supplier invoice text here…"
+            style="width:100%;padding:10px 12px;border:1.5px solid var(--line);border-radius:8px;font-family:var(--f-mono,monospace);font-size:12px;background:var(--bg);resize:vertical;min-height:180px"></textarea>
+        </div>
+        <div style="padding:12px 16px;border-top:1px solid var(--line)">
+          <div style="font-weight:800;font-size:13px;margin-bottom:8px">🧮 Totals detected in the invoice</div>
+          <div id="im-invoice-totals" style="font-size:13px;color:var(--muted)">Hit <b>Scan</b> after pasting the invoice.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Comparison table — shows up after a scan -->
+    <div class="card" id="im-compare-card" style="display:none;margin-top:14px">
+      <div class="card-header"><span class="card-title">✅ Match check</span>
+        <span id="im-compare-summary" style="margin-inline-start:auto;font-size:12px;color:var(--muted)"></span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Code</th><th>Name</th><th style="text-align:center">Ordered</th><th style="text-align:center">Invoice</th><th style="text-align:center">Δ</th><th>Status</th></tr></thead>
+          <tbody id="im-compare-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <!-- ABANDONED CARTS -->
   <div class="screen" id="screen-carts">
     <div class="page-header">
@@ -418,6 +489,7 @@
     <button class="sidebar-btn" onclick="goSb('inventory')"><span>📦</span> Inventory</button>
     <button class="sidebar-btn" onclick="goSb('financials')"><span>💰</span> Financials</button>
     <button class="sidebar-btn" onclick="goSb('invoices')"><span>🧾</span> Invoices</button>
+    <button class="sidebar-btn" onclick="goSb('invoice-match')"><span>📊</span> Invoice Match</button>
     <button class="sidebar-btn" onclick="goSb('analytics')"><span>📊</span> Analytics</button>
 
     <div class="sidebar-group">Admin</div>
@@ -737,6 +809,8 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>if(window['pdfjs-dist/build/pdf']){window.pdfjsLib=window['pdfjs-dist/build/pdf'];pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="js/db.js"></script>
