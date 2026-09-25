@@ -390,6 +390,87 @@ function renderHome() {
     </div>`).join('');
 
   if (typeof renderHomeTopProductsChart === 'function') renderHomeTopProductsChart();
+  if (typeof renderFlashOfferPanel === 'function') renderFlashOfferPanel();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  ⚡ FLASH OFFER — countdown-banner config
+//  Reads/writes a single row in `site_settings` (key='flash_offer',
+//  value jsonb {enabled, end_at}). The storefront reads the same row.
+// ═══════════════════════════════════════════════════════════════════
+const SB_REST = (typeof SUPABASE_URL === 'string' ? SUPABASE_URL : 'https://wljxplbcfoorqpoflcdz.supabase.co') + '/rest/v1';
+
+async function fetchFlashOfferConfig() {
+  try {
+    const res = await fetch(`${SB_REST}/site_settings?key=eq.flash_offer&select=value`, { headers: sbHeaders(), cache: 'no-store' });
+    if (!res.ok) return null;
+    const rows = await res.json();
+    return rows[0]?.value || null;
+  } catch { return null; }
+}
+
+async function renderFlashOfferPanel() {
+  const enabledEl = document.getElementById('flash-offer-enabled');
+  const endAtEl = document.getElementById('flash-offer-end-at');
+  const statusEl = document.getElementById('flash-offer-status');
+  if (!enabledEl || !endAtEl) return;
+  const cfg = await fetchFlashOfferConfig();
+  const now = Date.now();
+  if (cfg) {
+    enabledEl.checked = !!cfg.enabled;
+    if (cfg.end_at) {
+      // Convert stored ISO to the datetime-local input's expected format
+      // (YYYY-MM-DDTHH:MM in local time).
+      const d = new Date(cfg.end_at);
+      const pad = n => String(n).padStart(2, '0');
+      endAtEl.value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+  }
+  if (statusEl) {
+    const flagged = (cache.products || []).filter(p => p.is_flash_offer === true).length;
+    if (!cfg?.enabled) statusEl.textContent = `${flagged} products flagged · banner OFF`;
+    else if (!cfg.end_at) statusEl.textContent = `${flagged} products flagged · deadline not set`;
+    else if (new Date(cfg.end_at).getTime() < now) statusEl.textContent = `${flagged} products flagged · timer expired`;
+    else statusEl.textContent = `${flagged} products flagged · banner LIVE`;
+  }
+}
+
+async function saveFlashOfferConfig() {
+  const enabled = !!document.getElementById('flash-offer-enabled')?.checked;
+  const raw = document.getElementById('flash-offer-end-at')?.value || '';
+  // datetime-local gives "YYYY-MM-DDTHH:MM" in the admin's local zone; new
+  // Date() parses that as local and .toISOString() emits the UTC equivalent.
+  const end_at = raw ? new Date(raw).toISOString() : null;
+  const value = { enabled, end_at };
+  try {
+    // Try PATCH first (existing row). If nothing was updated, INSERT.
+    const patchRes = await fetch(`${SB_REST}/site_settings?key=eq.flash_offer`, {
+      method: 'PATCH',
+      headers: sbHeaders({ 'Prefer': 'return=representation' }),
+      body: JSON.stringify({ value })
+    });
+    if (!patchRes.ok) throw new Error(await patchRes.text());
+    const patched = await patchRes.json();
+    if (!Array.isArray(patched) || patched.length === 0) {
+      const insRes = await fetch(`${SB_REST}/site_settings`, {
+        method: 'POST',
+        headers: sbHeaders({ 'Prefer': 'return=minimal' }),
+        body: JSON.stringify({ key: 'flash_offer', value })
+      });
+      if (!insRes.ok) throw new Error(await insRes.text());
+    }
+    showToast('Flash offer banner saved ✓');
+    renderFlashOfferPanel();
+  } catch (e) {
+    showToast('Save failed: ' + (e.message || 'unknown'));
+  }
+}
+
+function openFlashOfferProductsList() {
+  const flagged = (cache.products || []).filter(p => p.is_flash_offer === true);
+  if (!flagged.length) { showToast('No products flagged. Open a product and tick ⚡ Flash Offer.'); return; }
+  const list = flagged.map(p => `• ${p.code} — ${p.name}`).join('\n');
+  alert(`${flagged.length} product(s) will appear on the flash-offers page:\n\n${list}`);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -778,6 +859,8 @@ function editProduct(id) {
     document.getElementById('p-is-published').checked = p.is_published !== false;
     document.getElementById('p-free-shipping').checked = !!p.free_shipping;
     document.getElementById('p-is-suggested').checked = !!p.is_suggested;
+    const flashEl = document.getElementById('p-is-flash-offer');
+    if (flashEl) flashEl.checked = !!p.is_flash_offer;
     const bw = Array.isArray(p.bundle_with) ? p.bundle_with : (typeof p.bundle_with === 'string' ? p.bundle_with.split(/[,\s]+/) : []);
     document.getElementById('p-bundle-with').value = bw.filter(Boolean).join(', ');
     const aw = Array.isArray(p.accessories_with) ? p.accessories_with : (typeof p.accessories_with === 'string' ? p.accessories_with.split(/[,\s]+/) : []);
@@ -806,6 +889,7 @@ async function saveProduct() {
   const is_published = document.getElementById('p-is-published').checked;
   const free_shipping = document.getElementById('p-free-shipping').checked;
   const is_suggested = document.getElementById('p-is-suggested').checked;
+  const is_flash_offer = document.getElementById('p-is-flash-offer')?.checked || false;
   const bundleRaw = (document.getElementById('p-bundle-with').value || '').trim();
   const bundle_with = bundleRaw
     ? bundleRaw.split(/[,\s]+/).map(s => s.trim().toUpperCase()).filter(Boolean).slice(0, 3)
@@ -824,30 +908,42 @@ async function saveProduct() {
   if (is_offer && !offer_price) { showToast('Please enter the discounted price'); return; }
 
   const id = document.getElementById('p-idx').value;
-const payload = { code, name, qty, price, buy_price, brand, description, is_offer, offer_price, is_published, free_shipping, is_suggested, bundle_with, accessories_with, bundle_of, categories, category, variants, images: currentProductImages };
-  // If the DB is missing the accessories_with column PostgREST replies with
-  // "Could not find the 'accessories_with' column …". Retry once without it
-  // so pre-migration installs still save the rest, with a clear toast telling
-  // the admin how to add the column.
+const payload = { code, name, qty, price, buy_price, brand, description, is_offer, offer_price, is_published, free_shipping, is_suggested, is_flash_offer, bundle_with, accessories_with, bundle_of, categories, category, variants, images: currentProductImages };
+  // If the DB is missing a new column PostgREST replies with "Could not find
+  // the 'X' column …". Retry with each unknown column stripped so pre-migration
+  // installs still save the rest, with a clear toast telling the admin how
+  // to add the missing column(s).
   const attempt = async (body) => {
     if (id) { await dbUpdate('products', id, body); return { updated: true }; }
     const data = { id: genId(), ...body, created_at: new Date().toISOString() };
     await dbInsert('products', data);
     return { created: data };
   };
-  try {
-    let result;
-    try {
-      result = await attempt(payload);
-    } catch (e) {
-      const msg = String(e.message || '');
-      if (/accessories_with/i.test(msg) && /column/i.test(msg)) {
-        const { accessories_with: _drop, ...fallback } = payload;
-        result = await attempt(fallback);
-        showToast('Saved (add column: ALTER TABLE products ADD COLUMN accessories_with jsonb;)');
-      } else {
-        throw e;
+  const stripUnknownColumns = async (body) => {
+    let cur = { ...body };
+    const missing = [];
+    for (let i = 0; i < 4; i++) {
+      try { return { result: await attempt(cur), missing }; }
+      catch (e) {
+        const msg = String(e.message || '');
+        const m = /column ['"]?(\w+)['"]?/i.exec(msg) || /'(\w+)'/i.exec(msg);
+        const col = m && Object.prototype.hasOwnProperty.call(cur, m[1]) ? m[1] : null;
+        if (!col) throw e;
+        missing.push(col);
+        delete cur[col];
       }
+    }
+    throw new Error('Too many missing columns');
+  };
+  try {
+    let result, missing;
+    ({ result, missing } = await stripUnknownColumns(payload));
+    if (missing.length) {
+      const alters = missing.map(c => {
+        const t = (c === 'is_flash_offer' || c === 'is_suggested' || c === 'is_offer' || c === 'free_shipping' || c === 'is_published') ? 'boolean' : 'jsonb';
+        return `ALTER TABLE products ADD COLUMN ${c} ${t};`;
+      }).join(' ');
+      showToast('Saved (run: ' + alters + ')');
     }
     if (result.updated) {
       const i = cache.products.findIndex(x => x.id === id);
