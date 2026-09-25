@@ -780,6 +780,9 @@ function editProduct(id) {
     document.getElementById('p-is-suggested').checked = !!p.is_suggested;
     const bw = Array.isArray(p.bundle_with) ? p.bundle_with : (typeof p.bundle_with === 'string' ? p.bundle_with.split(/[,\s]+/) : []);
     document.getElementById('p-bundle-with').value = bw.filter(Boolean).join(', ');
+    const aw = Array.isArray(p.accessories_with) ? p.accessories_with : (typeof p.accessories_with === 'string' ? p.accessories_with.split(/[,\s]+/) : []);
+    const awEl = document.getElementById('p-accessories-with');
+    if (awEl) awEl.value = aw.filter(Boolean).join(', ');
     const cats = Array.isArray(p.categories) ? p.categories : (p.category ? [p.category] : []);
     document.querySelectorAll('.p-cat-cb').forEach(cb => { cb.checked = cats.includes(cb.value); });
     renderVariantRows(Array.isArray(p.variants) ? p.variants : []);
@@ -807,6 +810,10 @@ async function saveProduct() {
   const bundle_with = bundleRaw
     ? bundleRaw.split(/[,\s]+/).map(s => s.trim().toUpperCase()).filter(Boolean).slice(0, 3)
     : [];
+  const accessoriesRaw = (document.getElementById('p-accessories-with')?.value || '').trim();
+  const accessories_with = accessoriesRaw
+    ? accessoriesRaw.split(/[,\s]+/).map(s => s.trim().toUpperCase()).filter(Boolean)
+    : [];
   const categories = Array.from(document.querySelectorAll('.p-cat-cb:checked')).map(cb => cb.value);
   // Keep first category in 'category' field for backward compatibility with store
   const category = categories[0] || null;
@@ -817,17 +824,37 @@ async function saveProduct() {
   if (is_offer && !offer_price) { showToast('Please enter the discounted price'); return; }
 
   const id = document.getElementById('p-idx').value;
-const payload = { code, name, qty, price, buy_price, brand, description, is_offer, offer_price, is_published, free_shipping, is_suggested, bundle_with, bundle_of, categories, category, variants, images: currentProductImages };
+const payload = { code, name, qty, price, buy_price, brand, description, is_offer, offer_price, is_published, free_shipping, is_suggested, bundle_with, accessories_with, bundle_of, categories, category, variants, images: currentProductImages };
+  // If the DB is missing the accessories_with column PostgREST replies with
+  // "Could not find the 'accessories_with' column …". Retry once without it
+  // so pre-migration installs still save the rest, with a clear toast telling
+  // the admin how to add the column.
+  const attempt = async (body) => {
+    if (id) { await dbUpdate('products', id, body); return { updated: true }; }
+    const data = { id: genId(), ...body, created_at: new Date().toISOString() };
+    await dbInsert('products', data);
+    return { created: data };
+  };
   try {
-    if (id) {
-      await dbUpdate('products', id, payload);
+    let result;
+    try {
+      result = await attempt(payload);
+    } catch (e) {
+      const msg = String(e.message || '');
+      if (/accessories_with/i.test(msg) && /column/i.test(msg)) {
+        const { accessories_with: _drop, ...fallback } = payload;
+        result = await attempt(fallback);
+        showToast('Saved (add column: ALTER TABLE products ADD COLUMN accessories_with jsonb;)');
+      } else {
+        throw e;
+      }
+    }
+    if (result.updated) {
       const i = cache.products.findIndex(x => x.id === id);
       if (i >= 0) cache.products[i] = { ...cache.products[i], ...payload };
       showToast('Product updated ✓');
-    } else {
-      const data = { id: genId(), ...payload, created_at: new Date().toISOString() };
-      await dbInsert('products', data);
-      cache.products.push(data);
+    } else if (result.created) {
+      cache.products.push(result.created);
       showToast('Product added ✓');
     }
     closeModal(); renderAll();
@@ -2573,6 +2600,104 @@ function downloadOrdersFullReportExcel() {
 
   XLSX.writeFile(wb, `Protech_Orders_FullReport_${new Date().toISOString().slice(0, 10)}.xlsx`);
   showToast(`Excel: ${orderRows.length} orders · ${itemRows.length} lines ✓`);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  ↩️ RETURNS — FULL REPORT (Excel)
+//  One sheet, grouped per Returned order:
+//    • Order-detail row (code, date, customer, phone, city, address,
+//      ship code, order total, actual shipping)
+//    • One row per product line — individual buy price shown
+//    • A "TOTAL BUY COST" subtotal row for that order
+//    • Blank separator before the next order
+//  Ends with a grand-total row across every returned order.
+// ═══════════════════════════════════════════════════════════════════
+function downloadReturnsFullReportExcel() {
+  const products = cache.products || [];
+  const rows = (cache.orders || [])
+    .filter(o => o.status === 'Returned')
+    .slice()
+    .sort((a, b) => String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || '')));
+  if (!rows.length) { showToast('No returned orders to export'); return; }
+
+  const round2 = (n) => Math.round((parseFloat(n) || 0) * 100) / 100;
+
+  // Single wide sheet with grouped sections.
+  const aoa = [[
+    'Order Code', 'Created', 'Customer Name', 'Phone', 'City', 'Address',
+    'Ship Code', 'Bosta ID', 'Cash Cycle', 'Warehouse Confirmed',
+    'Order Total (EGP)', 'Actual Shipping (EGP)',
+    'Product Code', 'Product Name', 'Qty', 'Buy Price (EGP)', 'Line Buy Total (EGP)',
+  ]];
+
+  let grandTotalBuy = 0;
+  let grandLineCount = 0;
+
+  for (const o of rows) {
+    const items = Array.isArray(o.products) ? o.products : [];
+    const orderBuyCost = items.reduce(
+      (a, p) => a + lineBuyPrice(p, products) * (parseInt(p.qty || 1) || 1), 0);
+    grandTotalBuy += orderBuyCost;
+    grandLineCount += items.length;
+
+    const cashCycle = o.cash_cycle_closed === true ? 'Closed (final)' : 'Open (estimated)';
+    const created = String(o.created_at || o.date || '').slice(0, 16).replace('T', ' ');
+
+    // One row per line item — order detail columns repeated on every line
+    // so filtering/sorting in Excel still works cleanly.
+    items.forEach((p, idx) => {
+      const qty = parseInt(p.qty || 1) || 1;
+      const buy = lineBuyPrice(p, products);
+      const name = p.name || (products.find(x => x.code === p.code)?.name) || '';
+      aoa.push([
+        o.code || '',
+        created,
+        o.customer_name || '',
+        o.phone || '',
+        o.city || '',
+        o.address || '',
+        o.ship_code || '',
+        o.bosta_id || '',
+        cashCycle,
+        o.warehouse_confirmed ? 'Yes' : 'No',
+        idx === 0 ? round2(o.total) : '',
+        idx === 0 ? round2(o.actual_shipping) : '',
+        p.code || '',
+        name,
+        qty,
+        round2(buy),
+        round2(buy * qty),
+      ]);
+    });
+
+    // Subtotal row — highlights the total buying cost of this returned order.
+    aoa.push([
+      '', '', '', '', '', '', '', '', '', '', '', '',
+      '', 'TOTAL BUY COST →', '', '', round2(orderBuyCost),
+    ]);
+    // Blank separator between orders.
+    aoa.push([]);
+  }
+
+  // Grand-total row at the bottom.
+  aoa.push([
+    '', '', '', '', '', '', '', '', '', '', '', '',
+    '', `GRAND TOTAL — ${rows.length} returned orders · ${grandLineCount} lines`,
+    '', '', round2(grandTotalBuy),
+  ]);
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [
+    { wch: 14 }, { wch: 18 }, { wch: 24 }, { wch: 14 }, { wch: 14 }, { wch: 40 },
+    { wch: 14 }, { wch: 24 }, { wch: 18 }, { wch: 20 },
+    { wch: 18 }, { wch: 20 },
+    { wch: 22 }, { wch: 40 }, { wch: 6 }, { wch: 16 }, { wch: 20 },
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Returns');
+  XLSX.writeFile(wb, `Protech_Returns_FullReport_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  showToast(`Returns report: ${rows.length} orders · ${grandLineCount} lines · ${round2(grandTotalBuy)} EGP buy cost ✓`);
 }
 
 function downloadOrdersExcel() {
