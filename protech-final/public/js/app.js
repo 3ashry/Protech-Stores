@@ -775,12 +775,18 @@ function renderPriceCompare() {
   const byCode = new Map(products.map(p => [String(p.code || '').toUpperCase(), p]));
   const priceMap = _im.priceMap || {};
   const fmt = n => (Number(n) || 0).toLocaleString('en-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // Derive per-unit price from the invoice total the way the admin wants:
+  //   invoice_per_unit = الإجمالي ÷ 0.97 ÷ qty
+  // i.e. reverse the 3% discount, then divide by qty. The result equals
+  // Elashry's list-price-per-unit, which is what the system's buy_price
+  // is stored as, so a direct Δ against buy_price is meaningful.
+  const derivePerUnit = (total, qty) => (qty > 0) ? (total / 0.97 / qty) : 0;
+
   const rows = (_im.aggregated || []).map(r => {
     const sysProd = byCode.get(String(r.code || '').toUpperCase());
     const sysBuy = parseFloat(sysProd?.buy_price || 0) || 0;
     const inv = priceMap[r.code];
     const qty = r.qty || 0;
-    const sysExpected = sysBuy * qty * 0.97;
     if (!inv) {
       return `<tr>
         <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(r.code)}</td>
@@ -789,35 +795,34 @@ function renderPriceCompare() {
         <td style="text-align:center;font-family:var(--f-mono,monospace)">${sysBuy ? fmt(sysBuy) : '—'}</td>
         <td style="text-align:center;color:var(--muted)">—</td>
         <td style="text-align:center;color:var(--muted)">—</td>
-        <td style="text-align:center;font-family:var(--f-mono,monospace);color:var(--muted)">${sysBuy ? fmt(sysExpected) : '—'}</td>
         <td style="text-align:center;color:var(--muted)">—</td>
         <td><span class="badge b-danger">no invoice price</span></td>
       </tr>`;
     }
-    const delta = inv.total - sysExpected;
-    const pct = sysExpected > 0 ? delta / sysExpected : 0;
-    const tolerant = Math.abs(delta) < 1 || Math.abs(pct) < 0.005;
+    const invPerUnit = derivePerUnit(inv.total, qty);
+    const delta = invPerUnit - sysBuy;
+    const pct = sysBuy > 0 ? delta / sysBuy : 0;
+    const tolerant = sysBuy > 0 && (Math.abs(delta) < 1 || Math.abs(pct) < 0.005);
     const cls = tolerant ? 'b-success' : (delta > 0 ? 'b-warning' : 'b-danger');
-    const label = tolerant ? '✓ match' : (delta > 0 ? `+${fmt(delta)} EGP` : `${fmt(delta)} EGP`);
+    const label = !sysBuy ? 'no system price' : tolerant ? '✓ match' : (delta > 0 ? `+${fmt(delta)} EGP/unit` : `${fmt(delta)} EGP/unit`);
     return `<tr>
       <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(r.code)}</td>
       <td style="font-size:12px;color:var(--muted)">${esc(r.name || '')}</td>
       <td style="text-align:center;font-family:var(--f-mono,monospace)">${qty}</td>
       <td style="text-align:center;font-family:var(--f-mono,monospace)">${sysBuy ? fmt(sysBuy) : '—'}</td>
-      <td style="text-align:center;font-family:var(--f-mono,monospace)">${fmt(inv.list)}</td>
-      <td style="text-align:center;font-family:var(--f-mono,monospace);font-weight:700;color:#F26A21">${fmt(inv.total)}</td>
-      <td style="text-align:center;font-family:var(--f-mono,monospace);color:var(--muted)">${sysBuy ? fmt(sysExpected) : '—'}</td>
+      <td style="text-align:center;font-family:var(--f-mono,monospace);font-weight:700;color:#0891b2">${fmt(invPerUnit)}</td>
       <td style="text-align:center;font-family:var(--f-mono,monospace);font-weight:700;color:${tolerant ? '#16a34a' : (delta > 0 ? '#F26A21' : '#dc2626')}">${sysBuy ? (delta > 0 ? '+' + fmt(delta) : fmt(delta)) : '—'}</td>
+      <td style="text-align:center;font-family:var(--f-mono,monospace);color:#F26A21">${fmt(inv.total)}</td>
       <td><span class="badge ${cls}">${label}</span></td>
     </tr>`;
   }).join('');
-  body.innerHTML = rows || '<tr><td colspan="9" style="padding:20px;text-align:center;color:var(--muted)">Nothing to compare</td></tr>';
+  body.innerHTML = rows || '<tr><td colspan="8" style="padding:20px;text-align:center;color:var(--muted)">Nothing to compare</td></tr>';
   const totalInvoice = (_im.aggregated || []).reduce((s, r) => s + (priceMap[r.code]?.total || 0), 0);
-  const totalExpected = (_im.aggregated || []).reduce((s, r) => {
+  const totalSystem = (_im.aggregated || []).reduce((s, r) => {
     const sb = parseFloat(byCode.get(String(r.code || '').toUpperCase())?.buy_price || 0) || 0;
     return s + sb * r.qty * 0.97;
   }, 0);
-  summary.textContent = `Invoice ${fmt(totalInvoice)} · Expected ${fmt(totalExpected)} · Δ ${fmt(totalInvoice - totalExpected)} EGP`;
+  summary.textContent = `Invoice ${fmt(totalInvoice)} EGP · System (buy × qty × 0.97) ${fmt(totalSystem)} EGP · Δ ${fmt(totalInvoice - totalSystem)} EGP`;
   card.style.display = '';
 }
 
