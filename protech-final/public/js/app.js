@@ -709,10 +709,12 @@ function scanInvoice() {
 
     // Also pull the per-line list price and الإجمالي (total after 3%
     // discount = list * qty * 0.97). Parse every price-shaped number
-    // in the block (>= 100, may have thousands commas), then find the
-    // pair (a, b) where b ≈ a * qty * 0.97 within a small tolerance.
+    // in the block (>= 100, may or may not have thousands commas),
+    // then find the pair (a, b) where b ≈ a * qty * 0.97 within
+    // a small tolerance. `\d+` (not `\d{1,3}`) so 4+ digit prices
+    // without commas — 6471.00, 8105.00 — get picked up too.
     if (qty != null && qty > 0) {
-      const priceRe = /\b(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)\b/g;
+      const priceRe = /\b(\d+(?:,\d{3})*(?:\.\d{1,2})?)\b/g;
       const prices = [];
       let pm;
       while ((pm = priceRe.exec(block))) {
