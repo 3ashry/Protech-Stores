@@ -374,8 +374,9 @@
     </div>
 
     <!-- Banner when viewing a saved match instead of the live day. -->
-    <div id="im-viewing-saved" style="display:none;margin:10px 0;padding:10px 14px;background:#fef3c7;border:1.5px solid #fcd34d;border-radius:10px;font-size:13px;font-weight:700;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <div id="im-viewing-saved" style="display:none;margin:10px 0;padding:10px 14px;background:#fef3c7;border:1.5px solid #fcd34d;border-radius:10px;font-size:13px;font-weight:700;align-items:center;gap:10px;flex-wrap:wrap">
       <span style="flex:1">📂 Viewing saved match: <span id="im-viewing-saved-name"></span></span>
+      <button class="btn btn-primary btn-sm" id="im-download-original" onclick="downloadSavedOriginal()" style="display:none">⬇ Download original</button>
       <button class="btn btn-ghost btn-sm" onclick="backToLiveInvoiceMatch()">← Back to live</button>
     </div>
 
