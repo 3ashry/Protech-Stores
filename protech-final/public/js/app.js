@@ -477,7 +477,7 @@ async function saveFlashOfferConfig() {
 //        nearest integer to it — that's the invoice qty for that
 //        code. Bottom card shows a per-code match / mismatch table.
 // ═══════════════════════════════════════════════════════════════════
-const _im = { ordersByDate: {}, dates: [], selectedDate: '', invoiceMap: {} };
+const _im = { ordersByDate: {}, dates: [], selectedDate: '', invoiceMap: {}, priceMap: {} };
 
 function initInvoiceMatch() {
   _im.ordersByDate = {};
@@ -648,6 +648,7 @@ function scanInvoice() {
   }
 
   _im.invoiceMap = {};
+  _im.priceMap = {};
 
   // 3. Split the invoice into "row blocks". Elashry invoices have a
   //    checkbox character "ü" at the start of every row. If pdf.js
@@ -705,6 +706,42 @@ function scanInvoice() {
       else if (nums.length) qty = 3;
     }
     if (qty != null) _im.invoiceMap[matchedCode] = qty;
+
+    // Also pull the per-line list price and الإجمالي (total after 3%
+    // discount = list * qty * 0.97). Parse every price-shaped number
+    // in the block (>= 100, may have thousands commas), then find the
+    // pair (a, b) where b ≈ a * qty * 0.97 within a small tolerance.
+    if (qty != null && qty > 0) {
+      const priceRe = /\b(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)\b/g;
+      const prices = [];
+      let pm;
+      while ((pm = priceRe.exec(block))) {
+        const num = parseFloat(pm[1].replace(/,/g, ''));
+        if (num >= 100) prices.push(num);
+      }
+      let listPrice = null, invoiceTotal = null;
+      const unique = Array.from(new Set(prices));
+      const expectedMul = qty * 0.97;
+      for (const a of unique) {
+        for (const b of unique) {
+          if (a === b) continue;
+          const expected = a * expectedMul;
+          const err = Math.abs(b - expected) / expected;
+          if (err < 0.01) { listPrice = a; invoiceTotal = b; break; }
+        }
+        if (listPrice != null) break;
+      }
+      // Fallback for qty=1 rows where the two candidates might tie:
+      // largest = list, second-largest ≈ list*0.97 = total.
+      if (listPrice == null && qty === 1 && unique.length >= 2) {
+        const sorted = unique.slice().sort((a, b) => b - a);
+        const err = Math.abs(sorted[1] - sorted[0] * 0.97) / (sorted[0] * 0.97);
+        if (err < 0.01) { listPrice = sorted[0]; invoiceTotal = sorted[1]; }
+      }
+      if (listPrice != null) {
+        _im.priceMap[matchedCode] = { list: listPrice, total: invoiceTotal, qty };
+      }
+    }
   }
 
   // 5. Render right-hand totals + comparison card.
@@ -725,6 +762,61 @@ function scanInvoice() {
   renderInvoiceCompare();
   const matchedCount = codes.filter(c => _im.invoiceMap[c]).length;
   showToast(`Scanned · ${matchedCount}/${codes.length} codes matched`);
+}
+
+function renderPriceCompare() {
+  const card = document.getElementById('im-price-card');
+  const body = document.getElementById('im-price-tbody');
+  const summary = document.getElementById('im-price-summary');
+  if (!card || !body) return;
+  const products = cache.products || [];
+  const byCode = new Map(products.map(p => [String(p.code || '').toUpperCase(), p]));
+  const priceMap = _im.priceMap || {};
+  const fmt = n => (Number(n) || 0).toLocaleString('en-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const rows = (_im.aggregated || []).map(r => {
+    const sysProd = byCode.get(String(r.code || '').toUpperCase());
+    const sysBuy = parseFloat(sysProd?.buy_price || 0) || 0;
+    const inv = priceMap[r.code];
+    const qty = r.qty || 0;
+    const sysExpected = sysBuy * qty * 0.97;
+    if (!inv) {
+      return `<tr>
+        <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(r.code)}</td>
+        <td style="font-size:12px;color:var(--muted)">${esc(r.name || '')}</td>
+        <td style="text-align:center;font-family:var(--f-mono,monospace)">${qty}</td>
+        <td style="text-align:center;font-family:var(--f-mono,monospace)">${sysBuy ? fmt(sysBuy) : '—'}</td>
+        <td style="text-align:center;color:var(--muted)">—</td>
+        <td style="text-align:center;color:var(--muted)">—</td>
+        <td style="text-align:center;font-family:var(--f-mono,monospace);color:var(--muted)">${sysBuy ? fmt(sysExpected) : '—'}</td>
+        <td style="text-align:center;color:var(--muted)">—</td>
+        <td><span class="badge b-danger">no invoice price</span></td>
+      </tr>`;
+    }
+    const delta = inv.total - sysExpected;
+    const pct = sysExpected > 0 ? delta / sysExpected : 0;
+    const tolerant = Math.abs(delta) < 1 || Math.abs(pct) < 0.005;
+    const cls = tolerant ? 'b-success' : (delta > 0 ? 'b-warning' : 'b-danger');
+    const label = tolerant ? '✓ match' : (delta > 0 ? `+${fmt(delta)} EGP` : `${fmt(delta)} EGP`);
+    return `<tr>
+      <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(r.code)}</td>
+      <td style="font-size:12px;color:var(--muted)">${esc(r.name || '')}</td>
+      <td style="text-align:center;font-family:var(--f-mono,monospace)">${qty}</td>
+      <td style="text-align:center;font-family:var(--f-mono,monospace)">${sysBuy ? fmt(sysBuy) : '—'}</td>
+      <td style="text-align:center;font-family:var(--f-mono,monospace)">${fmt(inv.list)}</td>
+      <td style="text-align:center;font-family:var(--f-mono,monospace);font-weight:700;color:#F26A21">${fmt(inv.total)}</td>
+      <td style="text-align:center;font-family:var(--f-mono,monospace);color:var(--muted)">${sysBuy ? fmt(sysExpected) : '—'}</td>
+      <td style="text-align:center;font-family:var(--f-mono,monospace);font-weight:700;color:${tolerant ? '#16a34a' : (delta > 0 ? '#F26A21' : '#dc2626')}">${sysBuy ? (delta > 0 ? '+' + fmt(delta) : fmt(delta)) : '—'}</td>
+      <td><span class="badge ${cls}">${label}</span></td>
+    </tr>`;
+  }).join('');
+  body.innerHTML = rows || '<tr><td colspan="9" style="padding:20px;text-align:center;color:var(--muted)">Nothing to compare</td></tr>';
+  const totalInvoice = (_im.aggregated || []).reduce((s, r) => s + (priceMap[r.code]?.total || 0), 0);
+  const totalExpected = (_im.aggregated || []).reduce((s, r) => {
+    const sb = parseFloat(byCode.get(String(r.code || '').toUpperCase())?.buy_price || 0) || 0;
+    return s + sb * r.qty * 0.97;
+  }, 0);
+  summary.textContent = `Invoice ${fmt(totalInvoice)} · Expected ${fmt(totalExpected)} · Δ ${fmt(totalInvoice - totalExpected)} EGP`;
+  card.style.display = '';
 }
 
 function renderInvoiceCompare() {
@@ -752,15 +844,19 @@ function renderInvoiceCompare() {
   const missing = (_im.aggregated || []).filter(r => !(_im.invoiceMap[r.code])).length;
   summary.textContent = `${matched}/${total} exact match · ${missing} missing`;
   card.style.display = '';
+  renderPriceCompare();
 }
 
 function clearInvoiceScan() {
   document.getElementById('im-invoice-text').value = '';
   document.getElementById('im-invoice-file').value = '';
   _im.invoiceMap = {};
+  _im.priceMap = {};
   _im.pendingFile = null;
   document.getElementById('im-invoice-totals').innerHTML = 'Hit <b>Scan</b> after pasting the invoice.';
   document.getElementById('im-compare-card').style.display = 'none';
+  const pc = document.getElementById('im-price-card');
+  if (pc) pc.style.display = 'none';
 }
 
 // ─── Save / retrieve past matches ────────────────────────────────────────
@@ -796,36 +892,44 @@ async function saveInvoiceMatch() {
     })),
     invoice_text: text,
     invoice_map: _im.invoiceMap,
+    price_map: _im.priceMap,
     aggregated: _im.aggregated,
     original_file: _im.pendingFile || null,
     created_at: new Date().toISOString(),
   };
 
   try {
-    let savedWithoutFile = false;
-    try {
-      await dbInsert('supplier_invoices', record);
-    } catch (e) {
-      const msg = String(e.message || '');
-      // Retry without original_file if that column doesn't exist yet.
-      if (/original_file/i.test(msg) && /column|schema cache|does not exist/i.test(msg)) {
-        const { original_file: _drop, ...fallback } = record;
-        await dbInsert('supplier_invoices', fallback);
-        savedWithoutFile = true;
-      } else {
-        throw e;
+    // Retry loop — if the table is missing an optional column (e.g. a
+    // new one added by a later feature), strip it and try again so the
+    // rest of the record still saves. Reports what got skipped.
+    let cur = { ...record };
+    const missing = [];
+    let saved = false;
+    for (let i = 0; i < 4; i++) {
+      try { await dbInsert('supplier_invoices', cur); saved = true; break; }
+      catch (e) {
+        const msg = String(e.message || '');
+        const m = /column ["']?(\w+)["']?/i.exec(msg) || /'(\w+)'/i.exec(msg);
+        const col = m && Object.prototype.hasOwnProperty.call(cur, m[1]) ? m[1] : null;
+        if (!col) throw e;
+        missing.push(col);
+        delete cur[col];
       }
     }
-    showToast(savedWithoutFile
-      ? 'Saved without file — run: ALTER TABLE supplier_invoices ADD COLUMN original_file jsonb;'
-      : 'Saved ✓');
+    if (!saved) throw new Error('supplier_invoices insert failed after stripping columns');
+    if (missing.length) {
+      const alters = missing.map(c => `ALTER TABLE supplier_invoices ADD COLUMN ${c} jsonb;`).join(' ');
+      showToast('Saved (run: ' + alters + ')');
+    } else {
+      showToast('Saved ✓');
+    }
     (_im.saved = _im.saved || []).unshift(record);
     renderSavedInvoices();
   } catch (e) {
     const msg = String(e.message || '');
     if (/supplier_invoices/i.test(msg) && (/relation|does not exist|schema cache/i.test(msg))) {
       showToast('Create table first (see the note below the save button).');
-      alert(`Run this once in Supabase SQL editor:\n\nCREATE TABLE IF NOT EXISTS supplier_invoices (\n  id text PRIMARY KEY,\n  name text NOT NULL,\n  prepared_date date,\n  orders_snapshot jsonb,\n  invoice_text text,\n  invoice_map jsonb,\n  aggregated jsonb,\n  original_file jsonb,\n  created_at timestamptz DEFAULT now()\n);\n-- If you already created the table without original_file:\nALTER TABLE supplier_invoices ADD COLUMN IF NOT EXISTS original_file jsonb;\n\nALTER TABLE supplier_invoices ENABLE ROW LEVEL SECURITY;\nCREATE POLICY "admin full access" ON supplier_invoices FOR ALL TO authenticated USING (true) WITH CHECK (true);`);
+      alert(`Run this once in Supabase SQL editor:\n\nCREATE TABLE IF NOT EXISTS supplier_invoices (\n  id text PRIMARY KEY,\n  name text NOT NULL,\n  prepared_date date,\n  orders_snapshot jsonb,\n  invoice_text text,\n  invoice_map jsonb,\n  price_map jsonb,\n  aggregated jsonb,\n  original_file jsonb,\n  created_at timestamptz DEFAULT now()\n);\n-- If you already created the table earlier without one of these columns:\nALTER TABLE supplier_invoices ADD COLUMN IF NOT EXISTS original_file jsonb;\nALTER TABLE supplier_invoices ADD COLUMN IF NOT EXISTS price_map jsonb;\n\nALTER TABLE supplier_invoices ENABLE ROW LEVEL SECURITY;\nCREATE POLICY "admin full access" ON supplier_invoices FOR ALL TO authenticated USING (true) WITH CHECK (true);`);
     } else {
       showToast('Save failed: ' + msg);
     }
@@ -895,6 +999,7 @@ function openSavedInvoice(id) {
   _im.viewingSaved = r;
   _im.aggregated = r.aggregated || [];
   _im.invoiceMap = r.invoice_map || {};
+  _im.priceMap = r.price_map || {};
   // Repopulate the two columns from the snapshot rather than live data.
   const list = r.orders_snapshot || [];
   const rows = list.map(o => {
@@ -963,8 +1068,11 @@ function backToLiveInvoiceMatch() {
   document.getElementById('im-invoice-text').value = '';
   document.getElementById('im-invoice-file').value = '';
   _im.invoiceMap = {};
+  _im.priceMap = {};
   document.getElementById('im-invoice-totals').innerHTML = 'Hit <b>Scan</b> after pasting the invoice.';
   document.getElementById('im-compare-card').style.display = 'none';
+  const pc = document.getElementById('im-price-card');
+  if (pc) pc.style.display = 'none';
   renderInvoiceMatch();
 }
 
