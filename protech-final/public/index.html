@@ -399,7 +399,7 @@
         <span id="im-price-summary" style="margin-inline-start:auto;font-size:12px;color:var(--muted)"></span>
       </div>
       <div style="padding:10px 16px;font-size:12px;color:var(--muted);line-height:1.55">
-        Invoice total (الإجمالى) = list price × qty × 0.97 (3% supplier discount). System expected = your stored buy price × qty × 0.97. Δ &gt; 0 means Elashry charged more than your system; Δ &lt; 0 means less.
+        Per-unit invoice price is derived from الإجمالي: <b>total ÷ 0.97 ÷ qty</b> — that reverses Elashry's fixed 3% discount and gives you the list price per unit, which is what your system stores as <code>buy_price</code>. Δ &gt; 0 means Elashry charged more per unit than your system; Δ &lt; 0 means less.
       </div>
       <div class="table-wrap">
         <table>
@@ -408,10 +408,9 @@
             <th>Name</th>
             <th style="text-align:center">Qty</th>
             <th style="text-align:center">System buy /unit</th>
-            <th style="text-align:center">Invoice list /unit</th>
+            <th style="text-align:center">Invoice /unit</th>
+            <th style="text-align:center">Δ /unit</th>
             <th style="text-align:center">Invoice total (الإجمالى)</th>
-            <th style="text-align:center">System expected</th>
-            <th style="text-align:center">Δ</th>
             <th>Status</th>
           </tr></thead>
           <tbody id="im-price-tbody"></tbody>
