@@ -565,10 +565,21 @@ function onInvoiceFileChosen(e) {
   if (!f) return;
   const ta = document.getElementById('im-invoice-text');
   const type = f.type || '';
+  // Stash the raw file too so Save can archive the original alongside
+  // the extracted text — the admin can re-download it later. Encoded
+  // as base64 (data-URL prefix included) so it round-trips through
+  // JSON/jsonb without escape issues.
+  const reader = new FileReader();
+  reader.onload = () => {
+    _im.pendingFile = {
+      name: f.name || 'invoice',
+      type: type || 'application/octet-stream',
+      data_url: reader.result || '',
+      size: f.size || 0,
+    };
+  };
+  reader.readAsDataURL(f);
   if (type === 'application/pdf' || /\.pdf$/i.test(f.name)) {
-    // Try to read embedded text from the PDF. Works only for text-based
-    // PDFs — scanned/image PDFs need OCR (not yet wired). We surface the
-    // right message so the admin knows to paste manually if empty.
     extractPdfText(f).then(txt => {
       if (txt && txt.trim()) { ta.value = txt; showToast('Loaded PDF text · press Scan'); }
       else showToast('PDF has no embedded text — copy the invoice text and paste it here.');
@@ -576,9 +587,9 @@ function onInvoiceFileChosen(e) {
   } else if (type.startsWith('text/') || /\.txt$/i.test(f.name)) {
     f.text().then(t => { ta.value = t; showToast('Loaded · press Scan'); });
   } else if (type.startsWith('image/')) {
-    showToast('Image OCR not wired yet — paste the invoice text manually into the box.');
+    showToast('Image loaded — OCR not wired yet, paste text manually. Original will still be saved for download.');
   } else {
-    showToast('Unsupported file type — paste the text manually.');
+    showToast('File loaded — paste the extracted text manually. Original will still be saved for download.');
   }
 }
 
@@ -747,6 +758,7 @@ function clearInvoiceScan() {
   document.getElementById('im-invoice-text').value = '';
   document.getElementById('im-invoice-file').value = '';
   _im.invoiceMap = {};
+  _im.pendingFile = null;
   document.getElementById('im-invoice-totals').innerHTML = 'Hit <b>Scan</b> after pasting the invoice.';
   document.getElementById('im-compare-card').style.display = 'none';
 }
@@ -785,19 +797,35 @@ async function saveInvoiceMatch() {
     invoice_text: text,
     invoice_map: _im.invoiceMap,
     aggregated: _im.aggregated,
+    original_file: _im.pendingFile || null,
     created_at: new Date().toISOString(),
   };
 
   try {
-    await dbInsert('supplier_invoices', record);
-    showToast('Saved ✓');
+    let savedWithoutFile = false;
+    try {
+      await dbInsert('supplier_invoices', record);
+    } catch (e) {
+      const msg = String(e.message || '');
+      // Retry without original_file if that column doesn't exist yet.
+      if (/original_file/i.test(msg) && /column|schema cache|does not exist/i.test(msg)) {
+        const { original_file: _drop, ...fallback } = record;
+        await dbInsert('supplier_invoices', fallback);
+        savedWithoutFile = true;
+      } else {
+        throw e;
+      }
+    }
+    showToast(savedWithoutFile
+      ? 'Saved without file — run: ALTER TABLE supplier_invoices ADD COLUMN original_file jsonb;'
+      : 'Saved ✓');
     (_im.saved = _im.saved || []).unshift(record);
     renderSavedInvoices();
   } catch (e) {
     const msg = String(e.message || '');
     if (/supplier_invoices/i.test(msg) && (/relation|does not exist|schema cache/i.test(msg))) {
       showToast('Create table first (see the note below the save button).');
-      alert(`Run this once in Supabase SQL editor:\n\nCREATE TABLE IF NOT EXISTS supplier_invoices (\n  id text PRIMARY KEY,\n  name text NOT NULL,\n  prepared_date date,\n  orders_snapshot jsonb,\n  invoice_text text,\n  invoice_map jsonb,\n  aggregated jsonb,\n  created_at timestamptz DEFAULT now()\n);\n\n-- and allow authenticated selects/inserts (or open it to anon if your admin uses anon):\nALTER TABLE supplier_invoices ENABLE ROW LEVEL SECURITY;\nCREATE POLICY "admin full access" ON supplier_invoices FOR ALL TO authenticated USING (true) WITH CHECK (true);`);
+      alert(`Run this once in Supabase SQL editor:\n\nCREATE TABLE IF NOT EXISTS supplier_invoices (\n  id text PRIMARY KEY,\n  name text NOT NULL,\n  prepared_date date,\n  orders_snapshot jsonb,\n  invoice_text text,\n  invoice_map jsonb,\n  aggregated jsonb,\n  original_file jsonb,\n  created_at timestamptz DEFAULT now()\n);\n-- If you already created the table without original_file:\nALTER TABLE supplier_invoices ADD COLUMN IF NOT EXISTS original_file jsonb;\n\nALTER TABLE supplier_invoices ENABLE ROW LEVEL SECURITY;\nCREATE POLICY "admin full access" ON supplier_invoices FOR ALL TO authenticated USING (true) WITH CHECK (true);`);
     } else {
       showToast('Save failed: ' + msg);
     }
@@ -902,16 +930,38 @@ function openSavedInvoice(id) {
       <b style="font-family:var(--f-mono,monospace);color:#16a34a">× ${v}</b></div>`;
   }).join('');
   renderInvoiceCompare();
-  // Show the "viewing saved" banner.
-  document.getElementById('im-viewing-saved').style.display = '';
+  // Show the "viewing saved" banner. Download button only appears if the
+  // record actually has the original file archived alongside.
+  const banner = document.getElementById('im-viewing-saved');
+  banner.style.display = 'flex';
   document.getElementById('im-viewing-saved-name').textContent = `${r.name} · ${r.prepared_date || ''}`;
+  const dl = document.getElementById('im-download-original');
+  const hasFile = !!(r.original_file && r.original_file.data_url);
+  dl.style.display = hasFile ? '' : 'none';
+  dl.textContent = hasFile ? `⬇ ${r.original_file.name || 'Download original'}` : '';
   window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function downloadSavedOriginal() {
+  const r = _im.viewingSaved;
+  if (!r || !r.original_file || !r.original_file.data_url) {
+    showToast('No original file archived for this match');
+    return;
+  }
+  const a = document.createElement('a');
+  a.href = r.original_file.data_url;
+  a.download = r.original_file.name || 'invoice';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }
 
 function backToLiveInvoiceMatch() {
   _im.viewingSaved = null;
+  _im.pendingFile = null;
   document.getElementById('im-viewing-saved').style.display = 'none';
   document.getElementById('im-invoice-text').value = '';
+  document.getElementById('im-invoice-file').value = '';
   _im.invoiceMap = {};
   document.getElementById('im-invoice-totals').innerHTML = 'Hit <b>Scan</b> after pasting the invoice.';
   document.getElementById('im-compare-card').style.display = 'none';
