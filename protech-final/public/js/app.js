@@ -477,11 +477,21 @@ async function saveFlashOfferConfig() {
 //        nearest integer to it — that's the invoice qty for that
 //        code. Bottom card shows a per-code match / mismatch table.
 // ═══════════════════════════════════════════════════════════════════
-const _im = { ordersByDate: {}, dates: [], selectedDate: '', invoiceMap: {}, priceMap: {} };
+const _im = { ordersByDate: {}, dates: [], selectedDate: '', invoiceMap: {}, priceMap: {}, adjustments: {} };
+const IM_ADJUSTMENTS_KEY = 'protech_invoice_match_adjustments_v1';
+function _imLoadAdjustments() {
+  try { _im.adjustments = JSON.parse(localStorage.getItem(IM_ADJUSTMENTS_KEY) || '{}') || {}; }
+  catch { _im.adjustments = {}; }
+}
+function _imSaveAdjustments() {
+  try { localStorage.setItem(IM_ADJUSTMENTS_KEY, JSON.stringify(_im.adjustments || {})); }
+  catch {}
+}
 
 function initInvoiceMatch() {
   _im.ordersByDate = {};
   _im.viewingSaved = null;
+  _imLoadAdjustments();
   document.getElementById('im-viewing-saved') && (document.getElementById('im-viewing-saved').style.display = 'none');
   loadSavedInvoices();
   // Group by the date the picker confirmed / prepared the order — that is
@@ -546,7 +556,34 @@ function renderInvoiceMatch() {
       agg.set(code, cur);
     }
   }
+  // Manual adjustments — for orders whose products were split across two
+  // supplier invoices (a product picked yesterday but the order not fully
+  // prepared until today). Positive qty adds, negative subtracts.
+  const adj = _im.adjustments?.[_im.selectedDate] || [];
+  for (const a of adj) {
+    const code = String(a.code || '').toUpperCase();
+    if (!code) continue;
+    const q = parseInt(a.qty || 0) || 0;
+    if (!q) continue;
+    const name = a.name || byCode.get(code)?.name || '';
+    const cur = agg.get(code) || { code, name, qty: 0, adjusted: true };
+    cur.qty += q;
+    if (!cur.name && name) cur.name = name;
+    cur.adjusted = true;
+    if (cur.qty <= 0) agg.delete(code);
+    else agg.set(code, cur);
+  }
   _im.aggregated = Array.from(agg.values()).sort((a, b) => b.qty - a.qty);
+  // Render the adjustments list.
+  const adjEl = document.getElementById('im-adjustments-list');
+  if (adjEl) {
+    adjEl.innerHTML = adj.length ? adj.map((a, i) => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line)">
+      <span style="font-family:var(--f-mono,monospace);font-size:12px;min-width:110px">${esc(a.code)}</span>
+      <b style="font-family:var(--f-mono,monospace);color:${a.qty >= 0 ? '#16a34a' : '#dc2626'};min-width:50px;text-align:center">${a.qty >= 0 ? '+' : ''}${a.qty}</b>
+      <span style="flex:1;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.note || '')}</span>
+      <button class="btn btn-ghost btn-xs" onclick="removeInvoiceAdjustment(${i})" title="Remove">✕</button>
+    </div>`).join('') : '<div style="color:var(--muted);font-size:12px">No adjustments — the totals below come straight from the prepared orders above.</div>';
+  }
   const totalUnits = _im.aggregated.reduce((s, r) => s + r.qty, 0);
   document.getElementById('im-day-summary').textContent = `${list.length} prepared · ${_im.aggregated.length} SKUs · ${totalUnits} pieces`;
   document.getElementById('im-orders-totals').innerHTML = _im.aggregated.length
@@ -558,6 +595,35 @@ function renderInvoiceMatch() {
 
   // Rebuild the comparison table if there's already a scanned invoice.
   if (Object.keys(_im.invoiceMap).length) renderInvoiceCompare();
+}
+
+function addInvoiceAdjustment() {
+  if (!_im.selectedDate) { showToast('Pick a date first'); return; }
+  const codeRaw = prompt('Product code (as it appears on the invoice, e.g. TMT516003):');
+  if (!codeRaw) return;
+  const qtyRaw = prompt('Qty change — positive to ADD to today\'s totals, negative to SUBTRACT (e.g. +2 or -1):');
+  const qty = parseInt(qtyRaw);
+  if (!qty) { showToast('Invalid qty — nothing added'); return; }
+  const note = prompt('Note — where this adjustment comes from (e.g. "from ORD-052KY, product B arrived today"):') || '';
+  const code = codeRaw.trim().toUpperCase();
+  const products = cache.products || [];
+  const match = products.find(p => String(p.code || '').toUpperCase() === code);
+  const name = match?.name || '';
+  _im.adjustments = _im.adjustments || {};
+  const arr = (_im.adjustments[_im.selectedDate] = _im.adjustments[_im.selectedDate] || []);
+  arr.push({ code, qty, note, name });
+  _imSaveAdjustments();
+  renderInvoiceMatch();
+  showToast(`Adjustment recorded (${qty > 0 ? '+' : ''}${qty} ${code})`);
+}
+
+function removeInvoiceAdjustment(idx) {
+  const arr = _im.adjustments?.[_im.selectedDate];
+  if (!arr || idx < 0 || idx >= arr.length) return;
+  arr.splice(idx, 1);
+  if (!arr.length) delete _im.adjustments[_im.selectedDate];
+  _imSaveAdjustments();
+  renderInvoiceMatch();
 }
 
 function onInvoiceFileChosen(e) {
@@ -932,6 +998,7 @@ async function saveInvoiceMatch() {
     invoice_map: _im.invoiceMap,
     price_map: _im.priceMap,
     aggregated: _im.aggregated,
+    adjustments: _im.adjustments?.[_im.selectedDate] || [],
     original_file: _im.pendingFile || null,
     created_at: new Date().toISOString(),
   };
@@ -967,7 +1034,7 @@ async function saveInvoiceMatch() {
     const msg = String(e.message || '');
     if (/supplier_invoices/i.test(msg) && (/relation|does not exist|schema cache/i.test(msg))) {
       showToast('Create table first (see the note below the save button).');
-      alert(`Run this once in Supabase SQL editor:\n\nCREATE TABLE IF NOT EXISTS supplier_invoices (\n  id text PRIMARY KEY,\n  name text NOT NULL,\n  prepared_date date,\n  orders_snapshot jsonb,\n  invoice_text text,\n  invoice_map jsonb,\n  price_map jsonb,\n  aggregated jsonb,\n  original_file jsonb,\n  created_at timestamptz DEFAULT now()\n);\n-- If you already created the table earlier without one of these columns:\nALTER TABLE supplier_invoices ADD COLUMN IF NOT EXISTS original_file jsonb;\nALTER TABLE supplier_invoices ADD COLUMN IF NOT EXISTS price_map jsonb;\n\nALTER TABLE supplier_invoices ENABLE ROW LEVEL SECURITY;\nCREATE POLICY "admin full access" ON supplier_invoices FOR ALL TO authenticated USING (true) WITH CHECK (true);`);
+      alert(`Run this once in Supabase SQL editor:\n\nCREATE TABLE IF NOT EXISTS supplier_invoices (\n  id text PRIMARY KEY,\n  name text NOT NULL,\n  prepared_date date,\n  orders_snapshot jsonb,\n  invoice_text text,\n  invoice_map jsonb,\n  price_map jsonb,\n  aggregated jsonb,\n  adjustments jsonb,\n  original_file jsonb,\n  created_at timestamptz DEFAULT now()\n);\n-- If you already created the table earlier without one of these columns:\nALTER TABLE supplier_invoices ADD COLUMN IF NOT EXISTS original_file jsonb;\nALTER TABLE supplier_invoices ADD COLUMN IF NOT EXISTS price_map jsonb;\nALTER TABLE supplier_invoices ADD COLUMN IF NOT EXISTS adjustments jsonb;\n\nALTER TABLE supplier_invoices ENABLE ROW LEVEL SECURITY;\nCREATE POLICY "admin full access" ON supplier_invoices FOR ALL TO authenticated USING (true) WITH CHECK (true);`);
     } else {
       showToast('Save failed: ' + msg);
     }
@@ -1038,6 +1105,16 @@ function openSavedInvoice(id) {
   _im.aggregated = r.aggregated || [];
   _im.invoiceMap = r.invoice_map || {};
   _im.priceMap = r.price_map || {};
+  // Render the saved adjustments too — read-only when viewing a saved match.
+  const savedAdj = Array.isArray(r.adjustments) ? r.adjustments : [];
+  const adjEl = document.getElementById('im-adjustments-list');
+  if (adjEl) {
+    adjEl.innerHTML = savedAdj.length ? savedAdj.map(a => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line);opacity:.85">
+      <span style="font-family:var(--f-mono,monospace);font-size:12px;min-width:110px">${esc(a.code)}</span>
+      <b style="font-family:var(--f-mono,monospace);color:${a.qty >= 0 ? '#16a34a' : '#dc2626'};min-width:50px;text-align:center">${a.qty >= 0 ? '+' : ''}${a.qty}</b>
+      <span style="flex:1;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.note || '')}</span>
+    </div>`).join('') : '<div style="color:var(--muted);font-size:12px">No adjustments were saved with this match.</div>';
+  }
   // Repopulate the two columns from the snapshot rather than live data.
   const list = r.orders_snapshot || [];
   const rows = list.map(o => {
