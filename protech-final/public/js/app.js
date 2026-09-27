@@ -800,12 +800,18 @@ function renderPriceCompare() {
   const byCode = new Map(products.map(p => [String(p.code || '').toUpperCase(), p]));
   const priceMap = _im.priceMap || {};
   const fmt = n => (Number(n) || 0).toLocaleString('en-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  // Derive per-unit price from the invoice total the way the admin wants:
-  //   invoice_per_unit = الإجمالي ÷ 0.97 ÷ qty
-  // i.e. reverse the 3% discount, then divide by qty. The result equals
-  // Elashry's list-price-per-unit, which is what the system's buy_price
-  // is stored as, so a direct Δ against buy_price is meaningful.
-  const derivePerUnit = (total, qty) => (qty > 0) ? (total / 0.97 / qty) : 0;
+  // Derive per-unit price the way the admin actually pays it:
+  //   invoice_per_unit = سعر القائمة × 0.97  (list minus the 3% supplier
+  //                                            discount)
+  //                    = الإجمالي ÷ qty       (same value, from the total
+  //                                            column that already has -3%)
+  // System buy_price is stored as this discounted per-unit price, so
+  // Δ = invoice_per_unit − system_buy is near zero when the two agree.
+  const derivePerUnit = (list, total, qty) => {
+    if (list > 0) return list * 0.97;
+    if (qty > 0 && total > 0) return total / qty;
+    return 0;
+  };
 
   const rows = (_im.aggregated || []).map(r => {
     const sysProd = byCode.get(String(r.code || '').toUpperCase());
@@ -824,7 +830,7 @@ function renderPriceCompare() {
         <td><span class="badge b-danger">no invoice price</span></td>
       </tr>`;
     }
-    const invPerUnit = derivePerUnit(inv.total, qty);
+    const invPerUnit = derivePerUnit(inv.list, inv.total, qty);
     const delta = invPerUnit - sysBuy;
     const pct = sysBuy > 0 ? delta / sysBuy : 0;
     const tolerant = sysBuy > 0 && (Math.abs(delta) < 1 || Math.abs(pct) < 0.005);
@@ -845,9 +851,9 @@ function renderPriceCompare() {
   const totalInvoice = (_im.aggregated || []).reduce((s, r) => s + (priceMap[r.code]?.total || 0), 0);
   const totalSystem = (_im.aggregated || []).reduce((s, r) => {
     const sb = parseFloat(byCode.get(String(r.code || '').toUpperCase())?.buy_price || 0) || 0;
-    return s + sb * r.qty * 0.97;
+    return s + sb * r.qty;
   }, 0);
-  summary.textContent = `Invoice ${fmt(totalInvoice)} EGP · System (buy × qty × 0.97) ${fmt(totalSystem)} EGP · Δ ${fmt(totalInvoice - totalSystem)} EGP`;
+  summary.textContent = `Invoice ${fmt(totalInvoice)} EGP · System (buy × qty) ${fmt(totalSystem)} EGP · Δ ${fmt(totalInvoice - totalSystem)} EGP`;
   card.style.display = '';
 }
 
