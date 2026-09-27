@@ -390,6 +390,16 @@
       <button class="btn btn-ghost btn-sm" onclick="backToLiveInvoiceMatch()">← Back to live</button>
     </div>
 
+    <!-- Linked customer orders on this invoice — helps you trace the buy
+         price back for a return. Populated only when viewing a saved match. -->
+    <div class="card" id="im-linked-card" style="display:none;margin-top:14px">
+      <div class="card-header"><span class="card-title">🔗 Orders tied to this invoice</span></div>
+      <div style="padding:10px 16px;font-size:12px;color:var(--muted);line-height:1.55">
+        Every customer order that had at least one product on this supplier invoice. Grey chips are naturally on the day's aggregation; orange chips were manually linked via an adjustment (e.g. a battery from returned stock that was originally purchased on this invoice). If any of these orders comes back as a return, you can trace the buy-price to this invoice.
+      </div>
+      <div id="im-linked-orders" style="padding:0 16px 14px"></div>
+    </div>
+
     <!-- Comparison table — shows up after a scan -->
     <div class="card" id="im-compare-card" style="display:none;margin-top:14px">
       <div class="card-header"><span class="card-title">✅ Match check</span>
