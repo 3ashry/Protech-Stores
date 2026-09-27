@@ -691,12 +691,73 @@ function scanInvoice() {
     if (!matchedCode) continue;
     if (_im.invoiceMap[matchedCode]) continue;
 
-    let qty = null;
-    const unitMatch = block.match(/(\d+(?:\.\d+)?)\s*عدد/);
-    if (unitMatch) {
-      const q = Math.round(parseFloat(unitMatch[1]));
-      if (q > 0 && q < 100) qty = q;
+    // Pull every price-shaped number in the block (any digit count,
+    // optional thousands commas, up to 3 decimals). Keep duplicates so a
+    // "830 830" no-discount pair can be spotted for special rows like WAAC.
+    const priceRe = /\b(\d+(?:,\d{3})*(?:\.\d{1,3})?)\b/g;
+    const prices = [];
+    let pm;
+    while ((pm = priceRe.exec(block))) {
+      const num = parseFloat(pm[1].replace(/,/g, ''));
+      // Below 5 → tax %, disc %, small counters. Above 100k → item codes,
+      // SKU-embedded digits.
+      if (num > 5 && num < 100000) prices.push(num);
     }
+    const uniq = Array.from(new Set(prices));
+
+    let qty = null, listPrice = null, invoiceTotal = null;
+
+    // PRIMARY: mathematical pair triangulation.
+    //   total ≈ list × qty × 0.97 where qty is an integer 1..30.
+    // For each ordered pair (a, b) test whether q = round(b / (a×0.97))
+    // reproduces b within 0.5%. Column reorder in the PDF extract
+    // doesn't matter — the math is the same.
+    const validPairs = [];
+    for (const a of uniq) {
+      for (const b of uniq) {
+        if (a === b) continue;
+        const q97 = Math.round(b / (a * 0.97));
+        if (q97 >= 1 && q97 <= 30) {
+          const err = Math.abs(b - a * q97 * 0.97) / b;
+          if (err < 0.005) validPairs.push({ list: a, total: b, qty: q97 });
+        }
+      }
+    }
+    if (validPairs.length) {
+      // Prefer largest list, tie-break smallest qty. Row numbers, item
+      // codes, package sizes can accidentally form a valid pair with the
+      // total at a wild qty like 40/50 — the true list price is almost
+      // always the largest of the valid list-side candidates.
+      validPairs.sort((x, y) => y.list - x.list || x.qty - y.qty);
+      const best = validPairs[0];
+      qty = best.qty;
+      listPrice = best.list;
+      invoiceTotal = best.total;
+    } else {
+      // NO-DISCOUNT CASE: some rows carry a 0% discount (e.g. WAAC row
+      // where list == total). Look for a value that appears twice in
+      // the prices array — that's the (list, total) pair with qty=1.
+      const counts = {};
+      for (const p of prices) counts[p] = (counts[p] || 0) + 1;
+      const doubled = Object.keys(counts).map(Number)
+        .filter(p => counts[p] >= 2 && p > 10 && p < 100000)
+        .sort((a, b) => b - a);
+      if (doubled.length) {
+        qty = 1;
+        listPrice = doubled[0];
+        invoiceTotal = doubled[0];
+      }
+    }
+
+    // FALLBACK 1: "N.NN عدد" anchor if the price math didn't converge.
+    if (qty == null) {
+      const unitMatch = block.match(/(\d+(?:\.\d+)?)\s*عدد/);
+      if (unitMatch) {
+        const q = Math.round(parseFloat(unitMatch[1]));
+        if (q > 0 && q < 100) qty = q;
+      }
+    }
+    // FALLBACK 2: smallest "N.00" (excluding the fixed 3% discount).
     if (qty == null) {
       const nums = [...block.matchAll(/\b(\d{1,2})\.00\b/g)]
         .map(n => parseInt(n[1]))
@@ -705,45 +766,9 @@ function scanInvoice() {
       if (nonThree.length) qty = Math.min(...nonThree);
       else if (nums.length) qty = 3;
     }
-    if (qty != null) _im.invoiceMap[matchedCode] = qty;
 
-    // Also pull the per-line list price and الإجمالي (total after 3%
-    // discount = list * qty * 0.97). Parse every price-shaped number
-    // in the block (>= 100, may or may not have thousands commas),
-    // then find the pair (a, b) where b ≈ a * qty * 0.97 within
-    // a small tolerance. `\d+` (not `\d{1,3}`) so 4+ digit prices
-    // without commas — 6471.00, 8105.00 — get picked up too.
-    if (qty != null && qty > 0) {
-      const priceRe = /\b(\d+(?:,\d{3})*(?:\.\d{1,2})?)\b/g;
-      const prices = [];
-      let pm;
-      while ((pm = priceRe.exec(block))) {
-        const num = parseFloat(pm[1].replace(/,/g, ''));
-        if (num >= 100) prices.push(num);
-      }
-      let listPrice = null, invoiceTotal = null;
-      const unique = Array.from(new Set(prices));
-      const expectedMul = qty * 0.97;
-      for (const a of unique) {
-        for (const b of unique) {
-          if (a === b) continue;
-          const expected = a * expectedMul;
-          const err = Math.abs(b - expected) / expected;
-          if (err < 0.01) { listPrice = a; invoiceTotal = b; break; }
-        }
-        if (listPrice != null) break;
-      }
-      // Fallback for qty=1 rows where the two candidates might tie:
-      // largest = list, second-largest ≈ list*0.97 = total.
-      if (listPrice == null && qty === 1 && unique.length >= 2) {
-        const sorted = unique.slice().sort((a, b) => b - a);
-        const err = Math.abs(sorted[1] - sorted[0] * 0.97) / (sorted[0] * 0.97);
-        if (err < 0.01) { listPrice = sorted[0]; invoiceTotal = sorted[1]; }
-      }
-      if (listPrice != null) {
-        _im.priceMap[matchedCode] = { list: listPrice, total: invoiceTotal, qty };
-      }
-    }
+    if (qty != null) _im.invoiceMap[matchedCode] = qty;
+    if (listPrice != null) _im.priceMap[matchedCode] = { list: listPrice, total: invoiceTotal, qty };
   }
 
   // 5. Render right-hand totals + comparison card.
