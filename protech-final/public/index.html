@@ -343,7 +343,17 @@
           <div class="empty"><div class="empty-icon">🗓️</div>Select a date to see orders</div>
         </div>
         <div style="padding:14px 16px;border-top:1px solid var(--line)">
-          <div style="font-weight:800;font-size:13px;margin-bottom:8px">🧮 Totals to order from Elashry</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;flex-wrap:wrap">
+            <div style="font-weight:800;font-size:13px">⚙️ Manual adjustments</div>
+            <button class="btn btn-ghost btn-sm" onclick="addInvoiceAdjustment()">+ Add / − Subtract</button>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.5">
+            Use this when an order was split across two supplier invoices — a product picked up yesterday but the order not fully prepared until today. Positive qty adds to today's totals; negative subtracts.
+          </div>
+          <div id="im-adjustments-list" style="font-size:13px"></div>
+        </div>
+        <div style="padding:14px 16px;border-top:1px solid var(--line)">
+          <div style="font-weight:800;font-size:13px;margin-bottom:8px">🧮 Totals to match against Elashry's invoice</div>
           <div id="im-orders-totals" style="font-size:13px;color:var(--muted)">—</div>
         </div>
       </div>
