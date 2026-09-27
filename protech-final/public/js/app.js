@@ -577,12 +577,18 @@ function renderInvoiceMatch() {
   // Render the adjustments list.
   const adjEl = document.getElementById('im-adjustments-list');
   if (adjEl) {
-    adjEl.innerHTML = adj.length ? adj.map((a, i) => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line)">
-      <span style="font-family:var(--f-mono,monospace);font-size:12px;min-width:110px">${esc(a.code)}</span>
-      <b style="font-family:var(--f-mono,monospace);color:${a.qty >= 0 ? '#16a34a' : '#dc2626'};min-width:50px;text-align:center">${a.qty >= 0 ? '+' : ''}${a.qty}</b>
-      <span style="flex:1;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.note || '')}</span>
-      <button class="btn btn-ghost btn-xs" onclick="removeInvoiceAdjustment(${i})" title="Remove">✕</button>
-    </div>`).join('') : '<div style="color:var(--muted);font-size:12px">No adjustments — the totals below come straight from the prepared orders above.</div>';
+    adjEl.innerHTML = adj.length ? adj.map((a, i) => {
+      const orderChip = a.order_code
+        ? `<span class="badge b-orange" style="font-size:10px">↔ ${esc(a.order_code)}</span>`
+        : '';
+      return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line);flex-wrap:wrap">
+        <span style="font-family:var(--f-mono,monospace);font-size:12px;min-width:110px">${esc(a.code)}</span>
+        <b style="font-family:var(--f-mono,monospace);color:${a.qty >= 0 ? '#16a34a' : '#dc2626'};min-width:50px;text-align:center">${a.qty >= 0 ? '+' : ''}${a.qty}</b>
+        ${orderChip}
+        <span style="flex:1;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0">${esc(a.note || '')}</span>
+        <button class="btn btn-ghost btn-xs" onclick="removeInvoiceAdjustment(${i})" title="Remove">✕</button>
+      </div>`;
+    }).join('') : '<div style="color:var(--muted);font-size:12px">No adjustments — the totals below come straight from the prepared orders above.</div>';
   }
   const totalUnits = _im.aggregated.reduce((s, r) => s + r.qty, 0);
   document.getElementById('im-day-summary').textContent = `${list.length} prepared · ${_im.aggregated.length} SKUs · ${totalUnits} pieces`;
@@ -604,17 +610,24 @@ function addInvoiceAdjustment() {
   const qtyRaw = prompt('Qty change — positive to ADD to today\'s totals, negative to SUBTRACT (e.g. +2 or -1):');
   const qty = parseInt(qtyRaw);
   if (!qty) { showToast('Invalid qty — nothing added'); return; }
-  const note = prompt('Note — where this adjustment comes from (e.g. "from ORD-052KY, product B arrived today"):') || '';
+  const orderCodeRaw = prompt('Customer order code this ties to (optional, e.g. ORD-052KY). Leaving this empty just adjusts the totals without linking to a specific order.');
+  const orderCode = (orderCodeRaw || '').trim().toUpperCase();
+  const note = prompt('Note (optional, e.g. "2A battery from returned stock, originally on this invoice"):') || '';
   const code = codeRaw.trim().toUpperCase();
   const products = cache.products || [];
   const match = products.find(p => String(p.code || '').toUpperCase() === code);
   const name = match?.name || '';
+  // Validate the order code if provided — warn on typo but keep the value.
+  if (orderCode) {
+    const found = (cache.orders || []).some(o => String(o.code || '').toUpperCase() === orderCode);
+    if (!found) showToast(`No order matches "${orderCode}" — saving the link anyway.`);
+  }
   _im.adjustments = _im.adjustments || {};
   const arr = (_im.adjustments[_im.selectedDate] = _im.adjustments[_im.selectedDate] || []);
-  arr.push({ code, qty, note, name });
+  arr.push({ code, qty, note, name, order_code: orderCode });
   _imSaveAdjustments();
   renderInvoiceMatch();
-  showToast(`Adjustment recorded (${qty > 0 ? '+' : ''}${qty} ${code})`);
+  showToast(`Adjustment recorded${orderCode ? ' · linked to ' + orderCode : ''}`);
 }
 
 function removeInvoiceAdjustment(idx) {
@@ -1109,11 +1122,32 @@ function openSavedInvoice(id) {
   const savedAdj = Array.isArray(r.adjustments) ? r.adjustments : [];
   const adjEl = document.getElementById('im-adjustments-list');
   if (adjEl) {
-    adjEl.innerHTML = savedAdj.length ? savedAdj.map(a => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line);opacity:.85">
-      <span style="font-family:var(--f-mono,monospace);font-size:12px;min-width:110px">${esc(a.code)}</span>
-      <b style="font-family:var(--f-mono,monospace);color:${a.qty >= 0 ? '#16a34a' : '#dc2626'};min-width:50px;text-align:center">${a.qty >= 0 ? '+' : ''}${a.qty}</b>
-      <span style="flex:1;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.note || '')}</span>
-    </div>`).join('') : '<div style="color:var(--muted);font-size:12px">No adjustments were saved with this match.</div>';
+    adjEl.innerHTML = savedAdj.length ? savedAdj.map(a => {
+      const orderChip = a.order_code
+        ? `<span class="badge b-orange" style="font-size:10px">↔ ${esc(a.order_code)}</span>`
+        : '';
+      return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line);opacity:.9;flex-wrap:wrap">
+        <span style="font-family:var(--f-mono,monospace);font-size:12px;min-width:110px">${esc(a.code)}</span>
+        <b style="font-family:var(--f-mono,monospace);color:${a.qty >= 0 ? '#16a34a' : '#dc2626'};min-width:50px;text-align:center">${a.qty >= 0 ? '+' : ''}${a.qty}</b>
+        ${orderChip}
+        <span style="flex:1;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0">${esc(a.note || '')}</span>
+      </div>`;
+    }).join('') : '<div style="color:var(--muted);font-size:12px">No adjustments were saved with this match.</div>';
+  }
+  // Render the "linked orders" summary — every customer order tied to
+  // this supplier invoice (either naturally, via the day's aggregation,
+  // or manually, via an adjustment's order_code).
+  const naturalLinks = (r.orders_snapshot || []).map(o => String(o.code || '').toUpperCase()).filter(Boolean);
+  const manualLinks = savedAdj.map(a => String(a.order_code || '').toUpperCase()).filter(Boolean);
+  const allLinks = Array.from(new Set([...naturalLinks, ...manualLinks]));
+  const linkedEl = document.getElementById('im-linked-orders');
+  if (linkedEl) {
+    linkedEl.innerHTML = allLinks.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px">
+      ${allLinks.map(c => {
+        const isManual = manualLinks.includes(c) && !naturalLinks.includes(c);
+        return `<span class="badge ${isManual ? 'b-warning' : 'b-gray'}" style="font-size:11px">${esc(c)}${isManual ? ' · manual' : ''}</span>`;
+      }).join('')}
+    </div>` : '<div style="color:var(--muted);font-size:12px">No orders linked to this invoice.</div>';
   }
   // Repopulate the two columns from the snapshot rather than live data.
   const list = r.orders_snapshot || [];
@@ -1159,6 +1193,8 @@ function openSavedInvoice(id) {
   const hasFile = !!(r.original_file && r.original_file.data_url);
   dl.style.display = hasFile ? '' : 'none';
   dl.textContent = hasFile ? `⬇ ${r.original_file.name || 'Download original'}` : '';
+  const linkedCard = document.getElementById('im-linked-card');
+  if (linkedCard) linkedCard.style.display = '';
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -1180,6 +1216,8 @@ function backToLiveInvoiceMatch() {
   _im.viewingSaved = null;
   _im.pendingFile = null;
   document.getElementById('im-viewing-saved').style.display = 'none';
+  const linkedCard = document.getElementById('im-linked-card');
+  if (linkedCard) linkedCard.style.display = 'none';
   document.getElementById('im-invoice-text').value = '';
   document.getElementById('im-invoice-file').value = '';
   _im.invoiceMap = {};
