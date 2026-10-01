@@ -7,6 +7,11 @@
 // - Tries to read the actual shipping fee from Bosta's pricing if present (usually empty).
 import { tgNotifyStatusChange, tgSendDailySummary, tgConfigured } from './_telegram.js';
 
+// Vercel: tell the platform we need the full function-duration window.
+// The default on Pro is 10s and the sync (hundreds of per-order Bosta
+// calls) runs well beyond that. 300s is the Pro ceiling.
+export const config = { maxDuration: 300 };
+
 const BOSTA_API_KEY = process.env.BOSTA_API_KEY;
 const BOSTA_BASE_URL = process.env.BOSTA_BASE_URL || 'https://app.bosta.co/api/v2';
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -1084,23 +1089,28 @@ export default async function handler(req, res) {
       return false;
     };
     // Category A — stored bosta_id, straight detail lookup.
+    // Capped at 100 per run so the sync fits inside Vercel's 300s window
+    // (each call is a Bosta API round-trip; 100 × ~500ms ≈ 50s). Older
+    // candidates will be picked up by subsequent cron runs.
     const backfillCandidates = (orders || []).filter(o =>
       o.bosta_id
       && !isTerminal(o)
       && !seenIds.has(o.bosta_id)
-    ).slice(0, 200);
+    ).slice(0, 100);
     // Category B — no bosta_id (or bosta_id already handled), have
-    // ship_code, and tracking not in search results. Look up the
-    // delivery by paginating the search filtered to that tracking
-    // number, then run the same mapState + fee logic. Capped tighter
-    // than category A because each lookup does up to 15 search calls.
+    // ship_code, and tracking not in search results. Each lookup does up
+    // to 15 search calls so this cap is tighter.
     const shipCodeCandidates = (orders || []).filter(o =>
       !!o.ship_code
       && !isTerminal(o)
       && !seenTracks.has(o.ship_code)
       && !(o.bosta_id && seenIds.has(o.bosta_id))
       && !backfillCandidates.includes(o)
-    ).slice(0, 30);
+    ).slice(0, 10);
+    // Wall-clock budget — leave 20s headroom before Vercel kills the fn.
+    const BUDGET_MS = 270_000;
+    const startMs = Date.now();
+    const outOfBudget = () => (Date.now() - startMs) > BUDGET_MS;
     const backfillChanges = [];
     const backfillErrors = [];
 
@@ -1121,7 +1131,9 @@ export default async function handler(req, res) {
       }
       return null;
     }
+    let backfillBudgetAbort = false;
     for (const o of backfillCandidates) {
+      if (outOfBudget()) { backfillBudgetAbort = true; break; }
       try {
         const r = await fetch(`${BOSTA_BASE_URL}/deliveries/business/${encodeURIComponent(o.bosta_id)}`, {
           headers: { Authorization: BOSTA_API_KEY },
@@ -1186,7 +1198,9 @@ export default async function handler(req, res) {
     // the row so future syncs pick it up in category A, then run the
     // exact same status/fee logic.
     const shipCodeChanges = [];
+    let shipCodeBudgetAbort = false;
     for (const o of shipCodeCandidates) {
+      if (outOfBudget()) { shipCodeBudgetAbort = true; break; }
       try {
         const hit = await findByTracking(o.ship_code);
         if (!hit) { backfillErrors.push({ code: o.code, why: 'tracking not found in Bosta search' }); continue; }
@@ -1269,7 +1283,7 @@ export default async function handler(req, res) {
       tgSent.skipped = true;
     }
 
-    const result = { ok: true, buildMarker: 'v9-rto-flag', bostaDeliveries: deliveries.length, ordersChecked: (orders || []).length, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8), detailFetchStats, backfill: { checked: backfillCandidates.length, updated: backfillChanges.length, changes: backfillChanges.slice(0, 20), errors: backfillErrors.slice(0, 20) }, shipCodeBackfill: { checked: shipCodeCandidates.length, updated: shipCodeChanges.length, changes: shipCodeChanges.slice(0, 20) }, telegram: tgSent, onlyTrace };
+    const result = { ok: true, buildMarker: 'v10-budget-cap', bostaDeliveries: deliveries.length, ordersChecked: (orders || []).length, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8), detailFetchStats, backfill: { checked: backfillCandidates.length, updated: backfillChanges.length, changes: backfillChanges.slice(0, 20), errors: backfillErrors.slice(0, 20), budgetAborted: backfillBudgetAbort }, shipCodeBackfill: { checked: shipCodeCandidates.length, updated: shipCodeChanges.length, changes: shipCodeChanges.slice(0, 20), budgetAborted: shipCodeBudgetAbort }, telegram: tgSent, onlyTrace, elapsedMs: Date.now() - startMs };
     console.log('sync-status', JSON.stringify(result));
     return res.status(200).json(result);
   } catch (e) {

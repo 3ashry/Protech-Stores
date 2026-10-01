@@ -22,8 +22,22 @@ jobs:
         run: |
           if [ "$SCHEDULE_HOUR" = "0 18 * * *" ]; then
             echo "Evening run — running sync + daily Telegram summary"
-            curl -fsS -X POST "https://protech-stores.vercel.app/api/sync-status?summary=1"
+            URL="https://protech-stores.vercel.app/api/sync-status?summary=1"
           else
             echo "Regular sync"
-            curl -fsS -X POST "https://protech-stores.vercel.app/api/sync-status"
+            URL="https://protech-stores.vercel.app/api/sync-status"
           fi
+          # 310s client timeout (Vercel's hard function limit is 300s + a
+          # tiny edge-proxy allowance). -S shows errors but we don't -f —
+          # a 504 means the function hit its budget cap and already made
+          # progress on the orders it had time for. Flagging the whole
+          # workflow failed on that would spam the inbox for runs that
+          # actually did their job.
+          HTTP_CODE=$(curl -sS -o /tmp/sync.out -w "%{http_code}" --max-time 310 -X POST "$URL" || echo "000")
+          echo "HTTP $HTTP_CODE"
+          cat /tmp/sync.out || true
+          case "$HTTP_CODE" in
+            2*) exit 0 ;;
+            504|000) echo "::warning::Sync hit the Vercel duration cap or network timeout. Partial progress likely — next cron will continue." ; exit 0 ;;
+            *) echo "::error::Sync returned HTTP $HTTP_CODE" ; exit 1 ;;
+          esac
