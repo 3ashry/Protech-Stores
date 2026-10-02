@@ -5,6 +5,7 @@
 // Environment Variables). Never hardcode keys here — this file is in source control.
 import { tgNotifyOrder } from './_telegram.js';
 import { sendPushForOrder } from './_push.js';
+import { sendConfirmTemplate, waConfigured } from './_wa.js';
 
 const BOSTA_API_KEY = process.env.BOSTA_API_KEY;
 const BOSTA_BASE_URL = process.env.BOSTA_BASE_URL || 'https://app.bosta.co/api/v2';
@@ -385,6 +386,40 @@ export default async function handler(req, res) {
       const r2 = await patchOrder({ calc_shipping: shippingCost });
       if (!r2.ok) console.warn('calc_shipping not saved (column missing?):', await r2.text());
     } catch (e) { console.warn('calc_shipping patch failed:', e.message); }
+
+    // 3) Fire the WhatsApp confirmation RIGHT NOW (awaited so Vercel
+    //    doesn't terminate the serverless function before Meta's API
+    //    responds). The storefront doesn't block on this /api/bosta
+    //    call so the extra second it adds is invisible to the customer.
+    //    Previously the message waited 6 hours via wa-cron; the shop
+    //    owner wants customers to get the "you ordered X — Confirm /
+    //    Cancel" template immediately on checkout. Mark wa_sent_at on
+    //    success so wa-cron's eventual sweep doesn't send a duplicate.
+    if (waConfigured()) {
+      try {
+        const rr = await sbFetch(`orders?id=eq.${encodeURIComponent(orderId)}&select=code,products`);
+        const [row] = (await rr.json().catch(() => [])) || [];
+        const orderForWa = {
+          customer_name: customerName,
+          products: row?.products || [],
+          est_shipping: shippingCost,
+          total,
+          allow_open: !!allowOpen,
+          ship_code: trackingNumber,
+          phone,
+          code: row?.code || orderId,
+        };
+        const sent = await sendConfirmTemplate(orderForWa);
+        if (sent?.ok) {
+          await patchOrder({ wa_msg_id: sent.msgId, wa_sent_at: new Date().toISOString() })
+            .catch(() => {});
+        } else {
+          console.warn('WA confirm failed:', JSON.stringify(sent?.error || sent));
+        }
+      } catch (e) {
+        console.warn('WA confirm exception:', e && e.message);
+      }
+    }
 
     return res.status(200).json({ success: true, trackingNumber, shippingCost });
 
