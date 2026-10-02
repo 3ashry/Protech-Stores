@@ -395,6 +395,7 @@ export default async function handler(req, res) {
     //    owner wants customers to get the "you ordered X — Confirm /
     //    Cancel" template immediately on checkout. Mark wa_sent_at on
     //    success so wa-cron's eventual sweep doesn't send a duplicate.
+    let waResult = { skipped: true, reason: 'wa not configured' };
     if (waConfigured()) {
       try {
         const rr = await sbFetch(`orders?id=eq.${encodeURIComponent(orderId)}&select=code,products`);
@@ -411,17 +412,26 @@ export default async function handler(req, res) {
         };
         const sent = await sendConfirmTemplate(orderForWa);
         if (sent?.ok) {
+          waResult = { sent: true, msgId: sent.msgId };
           await patchOrder({ wa_msg_id: sent.msgId, wa_sent_at: new Date().toISOString() })
             .catch(() => {});
         } else {
-          console.warn('WA confirm failed:', JSON.stringify(sent?.error || sent));
+          // Surface the Meta error in BOTH the Vercel function log and the
+          // JSON response so a quick DevTools Network peek tells the admin
+          // exactly what Meta rejected (missing template approval, parameter
+          // mismatch, recipient not on allow-list in dev mode, etc).
+          console.error('bosta.js WA confirm failed:', JSON.stringify(sent?.error || sent));
+          waResult = { sent: false, error: sent?.error || sent };
         }
       } catch (e) {
-        console.warn('WA confirm exception:', e && e.message);
+        console.error('bosta.js WA confirm exception:', e && e.message);
+        waResult = { sent: false, exception: String(e && e.message || e) };
       }
+    } else {
+      console.warn('bosta.js: WA_TOKEN or WA_PHONE_NUMBER_ID not set — skipping WhatsApp send');
     }
 
-    return res.status(200).json({ success: true, trackingNumber, shippingCost });
+    return res.status(200).json({ success: true, trackingNumber, shippingCost, whatsapp: waResult });
 
   } catch (e) {
     console.error('bosta.js exception:', e.message);

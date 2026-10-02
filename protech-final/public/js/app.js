@@ -1807,6 +1807,7 @@ function renderOrders() {
         <button class="btn btn-ghost btn-xs" onclick="viewOrder('${o.id}')">View</button>
         <button class="btn btn-dark btn-xs" onclick="editOrder('${o.id}')">Edit</button>
         <button class="btn ${o.sent_to_picker_at ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="toggleSentToPicker('${o.id}', ${!!o.sent_to_picker_at})" title="${o.sent_to_picker_at ? 'إلغاء الإرسال للتجهيز' : 'إرسال للتجهيز'}">${o.sent_to_picker_at ? '📤 تم الإرسال' : '📦 إرسال للتجهيز'}</button>
+        <button class="btn btn-ghost btn-xs" onclick="resendWhatsApp('${o.id}')" title="${o.wa_sent_at ? 'Already sent — resend anyway' : 'Send the WhatsApp confirmation template now'}">${o.wa_sent_at ? '💬 WA ✓' : '💬 WA'}</button>
         <button class="btn btn-danger btn-xs" onclick="delOrder('${o.id}')">Delete</button>
       </div></td>
     </tr>`).join('') : `<tr><td colspan="6"><div class="empty"><div class="empty-icon">🛒</div>${rawQ ? 'No orders match “' + esc(rawQ) + '”' : 'No orders yet'}</div></td></tr>`;
@@ -2061,6 +2062,38 @@ window.openPickupPanel = openPickupPanel;
 window.closePickupPanel = closePickupPanel;
 window.generatePickupSheet = generatePickupSheet;
 window.clearPickup = clearPickup;
+
+async function resendWhatsApp(id) {
+  const order = cache.orders.find(o => o.id === id);
+  if (!order) return;
+  const warn = order.wa_sent_at
+    ? 'This order already had a WhatsApp confirmation sent. Resend anyway?'
+    : 'Send the WhatsApp confirmation template to ' + (order.phone || 'the customer') + '?';
+  if (!confirm(warn)) return;
+  showToast('Sending WhatsApp…');
+  try {
+    const res = await fetch('/api/wa-confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderId: id }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (res.ok && d.success) {
+      const i = cache.orders.findIndex(o => o.id === id);
+      if (i >= 0) cache.orders[i].wa_sent_at = new Date().toISOString();
+      renderOrders();
+      showToast('WhatsApp sent ✓ · msg ' + (d.messageId || '').slice(-6));
+      return;
+    }
+    const meta = d?.details?.error || d?.details || d;
+    const code = meta?.code ?? meta?.error_subcode;
+    const msg = meta?.message || meta?.error_user_msg || JSON.stringify(d);
+    showToast('WA failed: ' + (code ? '#' + code + ' ' : '') + String(msg).slice(0, 160));
+    console.error('resendWhatsApp failed:', d);
+  } catch (e) {
+    showToast('WA request failed: ' + e.message);
+  }
+}
 
 async function syncFromBosta() {
   showToast('Syncing from Bosta…');
