@@ -221,7 +221,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Server not configured' });
   }
 
-  const { orderId, customerName, phone, city, address, notes, total, allowOpen } = req.body || {};
+  const { orderId, customerName, phone, secondPhone, city, address, notes, total, allowOpen } = req.body || {};
 
   if (!orderId || !customerName || !phone || !city || !address || !total) {
     return res.status(400).json({ error: 'Missing required fields' });
@@ -261,12 +261,22 @@ export default async function handler(req, res) {
   const firstName = nameParts[0] || customerName;
   const lastName = nameParts.slice(1).join(' ') || '-';
 
-  let formattedPhone = phone.trim().replace(/\s+/g, '');
-  if (formattedPhone.startsWith('0')) {
-    formattedPhone = '+2' + formattedPhone;
-  } else if (!formattedPhone.startsWith('+')) {
-    formattedPhone = '+2' + formattedPhone;
-  }
+  const formatEgyPhone = (raw) => {
+    let s = String(raw || '').trim().replace(/\s+/g, '');
+    if (!s) return '';
+    if (s.startsWith('0')) return '+2' + s;
+    if (!s.startsWith('+')) return '+2' + s;
+    return s;
+  };
+  const formattedPhone = formatEgyPhone(phone);
+  // Second phone is optional. Normalise with the same +2 prefix as the main
+  // phone and drop it if it ends up identical to the main number (Bosta
+  // rejects deliveries whose primary and secondary phones match).
+  const formattedSecondPhone = (() => {
+    const s = formatEgyPhone(secondPhone);
+    if (!s || s === formattedPhone) return null;
+    return s;
+  })();
 
   // Real Bosta formula (matches dashboard breakdown):
   //   COD            = customer's total (which already = subtotal + shipping)
@@ -300,6 +310,7 @@ export default async function handler(req, res) {
       firstName,
       lastName,
       phone: formattedPhone,
+      ...(formattedSecondPhone ? { secondPhone: formattedSecondPhone } : {}),
     },
     businessReference: orderId,  // Links Bosta shipment back to our order
     notes: notes || '',

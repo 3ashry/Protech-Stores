@@ -409,7 +409,7 @@ export default async function handler(req, res) {
       // first invocation. Anything unprocessed rolls to the next tick
       // (client runs this every 5 min). Order-by created_at.desc so the
       // freshest / most likely to have drift are checked first.
-      const orders = await sbGet('orders?select=id,code,total,allow_open,phone,address,city,bosta_id,bosta_synced_snapshot&status=eq.Processing&bosta_id=not.is.null&order=created_at.desc&limit=30');
+      const orders = await sbGet('orders?select=id,code,total,allow_open,phone,second_phone,address,city,bosta_id,bosta_synced_snapshot&status=eq.Processing&bosta_id=not.is.null&order=created_at.desc&limit=30');
       const normPhone = (p) => {
         let s = String(p || '').trim().replace(/[\s()-]/g, '');
         if (!s) return '';
@@ -422,10 +422,14 @@ export default async function handler(req, res) {
       const results = { checked: 0, pushed: 0, unchanged: 0, seeded: 0, errors: [], changes: [] };
       for (const o of (orders || [])) {
         results.checked++;
+        const secondPhoneNorm = o.second_phone ? normPhone(o.second_phone) : '';
         const current = {
           cod:        Math.round((Number(o.total) || 0) * 100) / 100,
           allow_open: !!o.allow_open,
           phone:      normPhone(o.phone),
+          // Drop second_phone when it ends up identical to the main phone —
+          // Bosta rejects duplicates and the data is noise.
+          second_phone: (secondPhoneNorm && secondPhoneNorm !== normPhone(o.phone)) ? secondPhoneNorm : '',
           address:    String(o.address || '').trim(),
         };
         const last = (o.bosta_synced_snapshot && typeof o.bosta_synced_snapshot === 'object')
@@ -443,7 +447,7 @@ export default async function handler(req, res) {
         }
         // Diff — only fields that actually changed.
         const changed = {};
-        for (const k of ['cod', 'allow_open', 'phone', 'address']) {
+        for (const k of ['cod', 'allow_open', 'phone', 'second_phone', 'address']) {
           if (String(current[k]) !== String(last[k] ?? '')) changed[k] = current[k];
         }
         if (!Object.keys(changed).length) { results.unchanged++; continue; }
@@ -451,7 +455,14 @@ export default async function handler(req, res) {
         const payload = {};
         if ('cod' in changed) payload.cod = current.cod;
         if ('allow_open' in changed) payload.allowToOpenPackage = current.allow_open;
-        if ('phone' in changed) payload.receiver = { phone: current.phone };
+        if ('phone' in changed || 'second_phone' in changed) {
+          // Bosta's PUT merges receiver, but sending both keeps us consistent
+          // when either side drifted — and we always drop the second_phone key
+          // from the payload if it's empty so Bosta clears any previously-set
+          // secondary number instead of keeping stale data.
+          payload.receiver = { phone: current.phone };
+          if (current.second_phone) payload.receiver.secondPhone = current.second_phone;
+        }
         if ('address' in changed) payload.dropOffAddress = { firstLine: current.address, secondLine: current.address };
         try {
           const br = await fetch(`${BOSTA_BASE_URL}/deliveries/${encodeURIComponent(o.bosta_id)}`, {
