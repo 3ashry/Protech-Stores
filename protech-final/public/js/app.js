@@ -745,6 +745,25 @@ function scanInvoice() {
   _im.invoiceMap = {};
   _im.priceMap = {};
 
+  // 2.5. Pull the invoice serial number ("مسلسل اذن البيع") out of the
+  //      header. pdf.js often extracts the label and its number separated
+  //      by whitespace or newlines; the number is the first digit run
+  //      that follows the Arabic label (with/without hamza variations).
+  //      User can override via the input afterwards.
+  try {
+    const serialMatch = norm.match(/مسلسل\s*(?:إ|أ|ا)?ذ[نهة]?\s*ا?ل?بيع[^0-9]{0,40}(\d{3,})/)
+      || norm.match(/(?:إ|أ|ا)?ذن\s*بيع[^0-9]{0,40}(\d{3,})/);
+    if (serialMatch) {
+      const detected = serialMatch[1];
+      // Don't clobber a serial the user already typed by hand.
+      if (!_im.invoiceSerial || !document.getElementById('im-invoice-serial')?.dataset.manual) {
+        _im.invoiceSerial = detected;
+        const el = document.getElementById('im-invoice-serial');
+        if (el) el.value = detected;
+      }
+    }
+  } catch {}
+
   // 3. Split the invoice into "row blocks". Elashry invoices have a
   //    checkbox character "ü" at the start of every row. If pdf.js
   //    extracts them, one block per row is the cleanest cut. If ü isn't
@@ -886,6 +905,49 @@ function scanInvoice() {
   showToast(`Scanned · ${matchedCount}/${codes.length} codes matched`);
 }
 
+function onInvoiceSerialInput(e) {
+  const v = String(e.target.value || '').trim();
+  _im.invoiceSerial = v;
+  // Flag so the next scan doesn't overwrite what the admin typed manually.
+  if (v) e.target.dataset.manual = '1'; else delete e.target.dataset.manual;
+}
+
+// Edit the detected quantity for one SKU before saving — lets the admin
+// correct any mis-parsed row. Also updates priceMap.qty so the invoice
+// total/price-check stays consistent with the new quantity.
+function editInvoiceQty(code, raw) {
+  const n = parseInt(String(raw || '').replace(/\D/g, ''), 10);
+  if (!Number.isFinite(n) || n < 0) return;
+  _im.invoiceMap = _im.invoiceMap || {};
+  _im.priceMap = _im.priceMap || {};
+  if (n === 0) {
+    delete _im.invoiceMap[code];
+    if (_im.priceMap[code]) _im.priceMap[code].qty = 0;
+  } else {
+    _im.invoiceMap[code] = n;
+    if (_im.priceMap[code]) {
+      _im.priceMap[code].qty = n;
+      if (_im.priceMap[code].list) {
+        _im.priceMap[code].total = Math.round(_im.priceMap[code].list * n * 0.97 * 100) / 100;
+      }
+    }
+  }
+  renderInvoiceCompare();
+}
+
+// Edit the invoice per-unit price (what Elashry charged after the fixed
+// 3% discount — i.e. list × 0.97). Stored back as list = unit / 0.97 so
+// the saved record and the propagate-to-orders step both stay consistent.
+function editInvoiceUnitPrice(code, raw) {
+  const v = parseFloat(String(raw || '').replace(/,/g, ''));
+  if (!Number.isFinite(v) || v <= 0) return;
+  const list = v / 0.97;
+  _im.priceMap = _im.priceMap || {};
+  const qty = (_im.priceMap[code]?.qty) || _im.invoiceMap?.[code] || 1;
+  _im.priceMap[code] = { list, total: Math.round(list * qty * 0.97 * 100) / 100, qty };
+  renderInvoiceCompare();
+}
+
 function renderPriceCompare() {
   const card = document.getElementById('im-price-card');
   const body = document.getElementById('im-price-tbody');
@@ -908,18 +970,23 @@ function renderPriceCompare() {
     return 0;
   };
 
+  const readonly = !!_im.viewingSaved;
   const rows = (_im.aggregated || []).map(r => {
     const sysProd = byCode.get(String(r.code || '').toUpperCase());
     const sysBuy = parseFloat(sysProd?.buy_price || 0) || 0;
     const inv = priceMap[r.code];
     const qty = r.qty || 0;
+    const codeAttr = esc(r.code).replace(/'/g, "\\'");
+    const unitInput = (value) => readonly
+      ? `<span style="font-family:var(--f-mono,monospace);font-weight:700;color:#0891b2">${value === '' ? '—' : fmt(value)}</span>`
+      : `<input type="number" min="0" step="0.01" value="${value === '' ? '' : (Math.round(value * 100) / 100)}" onchange="editInvoiceUnitPrice('${codeAttr}', this.value)" placeholder="—" style="width:100px;padding:4px 6px;border:1.5px solid var(--line);border-radius:6px;font-family:var(--f-mono,monospace);font-size:13px;text-align:center;background:var(--bg);color:#0891b2;font-weight:700">`;
     if (!inv) {
       return `<tr>
         <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(r.code)}</td>
         <td style="font-size:12px;color:var(--muted)">${esc(r.name || '')}</td>
         <td style="text-align:center;font-family:var(--f-mono,monospace)">${qty}</td>
         <td style="text-align:center;font-family:var(--f-mono,monospace)">${sysBuy ? fmt(sysBuy) : '—'}</td>
-        <td style="text-align:center;color:var(--muted)">—</td>
+        <td style="text-align:center">${unitInput('')}</td>
         <td style="text-align:center;color:var(--muted)">—</td>
         <td style="text-align:center;color:var(--muted)">—</td>
         <td><span class="badge b-danger">no invoice price</span></td>
@@ -936,7 +1003,7 @@ function renderPriceCompare() {
       <td style="font-size:12px;color:var(--muted)">${esc(r.name || '')}</td>
       <td style="text-align:center;font-family:var(--f-mono,monospace)">${qty}</td>
       <td style="text-align:center;font-family:var(--f-mono,monospace)">${sysBuy ? fmt(sysBuy) : '—'}</td>
-      <td style="text-align:center;font-family:var(--f-mono,monospace);font-weight:700;color:#0891b2">${fmt(invPerUnit)}</td>
+      <td style="text-align:center">${unitInput(invPerUnit)}</td>
       <td style="text-align:center;font-family:var(--f-mono,monospace);font-weight:700;color:${tolerant ? '#16a34a' : (delta > 0 ? '#F26A21' : '#dc2626')}">${sysBuy ? (delta > 0 ? '+' + fmt(delta) : fmt(delta)) : '—'}</td>
       <td style="text-align:center;font-family:var(--f-mono,monospace);color:#F26A21">${fmt(inv.total)}</td>
       <td><span class="badge ${cls}">${label}</span></td>
@@ -957,16 +1024,21 @@ function renderInvoiceCompare() {
   const body = document.getElementById('im-compare-tbody');
   const summary = document.getElementById('im-compare-summary');
   if (!card || !body) return;
+  const readonly = !!_im.viewingSaved;
   const rows = (_im.aggregated || []).map(r => {
     const inv = _im.invoiceMap[r.code] || 0;
     const delta = inv - r.qty;
     const cls = inv === 0 ? 'b-danger' : delta === 0 ? 'b-success' : 'b-warning';
     const label = inv === 0 ? 'missing' : delta === 0 ? '✓ match' : delta > 0 ? `+${delta} extra` : `${delta} short`;
+    const codeAttr = esc(r.code).replace(/'/g, "\\'");
+    const invCell = readonly
+      ? `<span style="font-family:var(--f-mono,monospace)">${inv || '—'}</span>`
+      : `<input type="number" min="0" step="1" value="${inv || ''}" onchange="editInvoiceQty('${codeAttr}', this.value)" style="width:68px;padding:4px 6px;border:1.5px solid var(--line);border-radius:6px;font-family:var(--f-mono,monospace);font-size:13px;text-align:center;background:var(--bg)">`;
     return `<tr>
       <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(r.code)}</td>
       <td style="font-size:12px;color:var(--muted)">${esc(r.name || '')}</td>
       <td style="text-align:center;font-family:var(--f-mono,monospace)">${r.qty}</td>
-      <td style="text-align:center;font-family:var(--f-mono,monospace)">${inv || '—'}</td>
+      <td style="text-align:center">${invCell}</td>
       <td style="text-align:center;font-family:var(--f-mono,monospace);font-weight:700;color:${delta === 0 ? '#16a34a' : delta > 0 ? '#F26A21' : '#dc2626'}">${inv === 0 ? '—' : delta > 0 ? '+' + delta : delta}</td>
       <td><span class="badge ${cls}">${label}</span></td>
     </tr>`;
@@ -983,9 +1055,12 @@ function renderInvoiceCompare() {
 function clearInvoiceScan() {
   document.getElementById('im-invoice-text').value = '';
   document.getElementById('im-invoice-file').value = '';
+  const serialEl = document.getElementById('im-invoice-serial');
+  if (serialEl) { serialEl.value = ''; delete serialEl.dataset.manual; serialEl.readOnly = false; }
   _im.invoiceMap = {};
   _im.priceMap = {};
   _im.pendingFile = null;
+  _im.invoiceSerial = '';
   document.getElementById('im-invoice-totals').innerHTML = 'Hit <b>Scan</b> after pasting the invoice.';
   document.getElementById('im-compare-card').style.display = 'none';
   const pc = document.getElementById('im-price-card');
@@ -1004,7 +1079,12 @@ async function saveInvoiceMatch() {
   if (!_im.invoiceMap || !Object.keys(_im.invoiceMap).length) {
     if (!confirm('No matches detected yet — save anyway?')) return;
   }
-  const defaultName = `Elashry — ${_im.selectedDate}`;
+  // Pull the latest serial value from the input before stashing — covers
+  // the case where the admin typed/pasted it after a scan without blurring.
+  const serialEl = document.getElementById('im-invoice-serial');
+  if (serialEl) _im.invoiceSerial = String(serialEl.value || '').trim();
+  const serialHint = _im.invoiceSerial ? ` (#${_im.invoiceSerial})` : '';
+  const defaultName = `Elashry — ${_im.selectedDate}${serialHint}`;
   const name = (prompt('Save as (invoice name):', defaultName) || '').trim();
   if (!name) return;
 
@@ -1029,6 +1109,7 @@ async function saveInvoiceMatch() {
     aggregated: _im.aggregated,
     adjustments: _im.adjustments?.[_im.selectedDate] || [],
     original_file: _im.pendingFile || null,
+    invoice_serial: _im.invoiceSerial || null,
     created_at: new Date().toISOString(),
   };
 
@@ -1119,7 +1200,7 @@ async function saveInvoiceMatch() {
     const msg = String(e.message || '');
     if (/supplier_invoices/i.test(msg) && (/relation|does not exist|schema cache/i.test(msg))) {
       showToast('Create table first (see the note below the save button).');
-      alert(`Run this once in Supabase SQL editor:\n\nCREATE TABLE IF NOT EXISTS supplier_invoices (\n  id text PRIMARY KEY,\n  name text NOT NULL,\n  prepared_date date,\n  orders_snapshot jsonb,\n  invoice_text text,\n  invoice_map jsonb,\n  price_map jsonb,\n  aggregated jsonb,\n  adjustments jsonb,\n  original_file jsonb,\n  created_at timestamptz DEFAULT now()\n);\n-- If you already created the table earlier without one of these columns:\nALTER TABLE supplier_invoices ADD COLUMN IF NOT EXISTS original_file jsonb;\nALTER TABLE supplier_invoices ADD COLUMN IF NOT EXISTS price_map jsonb;\nALTER TABLE supplier_invoices ADD COLUMN IF NOT EXISTS adjustments jsonb;\n\nALTER TABLE supplier_invoices ENABLE ROW LEVEL SECURITY;\nCREATE POLICY "admin full access" ON supplier_invoices FOR ALL TO authenticated USING (true) WITH CHECK (true);`);
+      alert(`Run this once in Supabase SQL editor:\n\nCREATE TABLE IF NOT EXISTS supplier_invoices (\n  id text PRIMARY KEY,\n  name text NOT NULL,\n  prepared_date date,\n  orders_snapshot jsonb,\n  invoice_text text,\n  invoice_map jsonb,\n  price_map jsonb,\n  aggregated jsonb,\n  adjustments jsonb,\n  original_file jsonb,\n  invoice_serial text,\n  created_at timestamptz DEFAULT now()\n);\n-- If you already created the table earlier without one of these columns:\nALTER TABLE supplier_invoices ADD COLUMN IF NOT EXISTS original_file jsonb;\nALTER TABLE supplier_invoices ADD COLUMN IF NOT EXISTS price_map jsonb;\nALTER TABLE supplier_invoices ADD COLUMN IF NOT EXISTS adjustments jsonb;\nALTER TABLE supplier_invoices ADD COLUMN IF NOT EXISTS invoice_serial text;\n\nALTER TABLE supplier_invoices ENABLE ROW LEVEL SECURITY;\nCREATE POLICY "admin full access" ON supplier_invoices FOR ALL TO authenticated USING (true) WITH CHECK (true);`);
     } else {
       showToast('Save failed: ' + msg);
     }
@@ -1136,7 +1217,7 @@ async function loadSavedInvoices() {
     _im.saved = [];
     // Table probably missing — show a hint row rather than a scary error.
     if (/relation|does not exist|schema cache|supplier_invoices/i.test(String(e.message || ''))) {
-      tbody.innerHTML = '<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--muted)">Table not created yet — hit 💾 Save once to see the SQL you need.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" style="padding:20px;text-align:center;color:var(--muted)">Table not created yet — hit 💾 Save once to see the SQL you need.</td></tr>';
       return;
     }
   }
@@ -1154,7 +1235,7 @@ function renderSavedInvoices() {
       || String(r.created_at || '').includes(q);
   });
   if (!filtered.length) {
-    tbody.innerHTML = `<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--muted)">${q ? 'No matches for "' + esc(q) + '"' : 'No saved invoices yet — scan a match then hit 💾 Save.'}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" style="padding:20px;text-align:center;color:var(--muted)">${q ? 'No matches for "' + esc(q) + '"' : 'No saved invoices yet — scan a match then hit 💾 Save.'}</td></tr>`;
     return;
   }
   tbody.innerHTML = filtered.map(r => {
@@ -1171,6 +1252,7 @@ function renderSavedInvoices() {
     const dLabel = mismatches === 0 ? '✓ all match' : `${mismatches} off`;
     return `<tr>
       <td><b>${esc(r.name)}</b></td>
+      <td style="font-family:var(--f-mono,monospace);font-size:12px;color:#92400e">${r.invoice_serial ? '#' + esc(r.invoice_serial) : '—'}</td>
       <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(r.prepared_date || '—')}</td>
       <td style="font-family:var(--f-mono,monospace);font-size:12px;color:var(--muted)">${esc(savedAt)}</td>
       <td style="text-align:center;font-family:var(--f-mono,monospace)">${skus}</td>
@@ -1190,6 +1272,11 @@ function openSavedInvoice(id) {
   _im.aggregated = r.aggregated || [];
   _im.invoiceMap = r.invoice_map || {};
   _im.priceMap = r.price_map || {};
+  _im.invoiceSerial = r.invoice_serial || '';
+  const serialEl = document.getElementById('im-invoice-serial');
+  if (serialEl) { serialEl.value = _im.invoiceSerial; serialEl.readOnly = true; }
+  const serialBadge = document.getElementById('im-viewing-saved-serial');
+  if (serialBadge) serialBadge.textContent = _im.invoiceSerial ? `· مسلسل ${_im.invoiceSerial}` : '';
   // Render the saved adjustments too — read-only when viewing a saved match.
   const savedAdj = Array.isArray(r.adjustments) ? r.adjustments : [];
   const adjEl = document.getElementById('im-adjustments-list');
@@ -1276,9 +1363,18 @@ function downloadSavedOriginal() {
     showToast('No original file archived for this match');
     return;
   }
+  // Rename the download using the invoice serial so returned-to-admin files
+  // are self-labelled (e.g. "invoice-12345.pdf"). Falls back to the stored
+  // filename when no serial is recorded.
+  const origName = r.original_file.name || 'invoice';
+  const ext = (origName.match(/\.[a-z0-9]+$/i) || [''])[0];
+  const base = ext ? origName.slice(0, -ext.length) : origName;
+  const fileName = r.invoice_serial
+    ? `invoice-${String(r.invoice_serial).replace(/[^0-9A-Za-z_-]/g, '')}${ext || ''}`
+    : `${base}${ext || ''}`;
   const a = document.createElement('a');
   a.href = r.original_file.data_url;
-  a.download = r.original_file.name || 'invoice';
+  a.download = fileName;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -1287,7 +1383,12 @@ function downloadSavedOriginal() {
 function backToLiveInvoiceMatch() {
   _im.viewingSaved = null;
   _im.pendingFile = null;
+  _im.invoiceSerial = '';
   document.getElementById('im-viewing-saved').style.display = 'none';
+  const serialBadge = document.getElementById('im-viewing-saved-serial');
+  if (serialBadge) serialBadge.textContent = '';
+  const serialEl = document.getElementById('im-invoice-serial');
+  if (serialEl) { serialEl.value = ''; delete serialEl.dataset.manual; serialEl.readOnly = false; }
   const linkedCard = document.getElementById('im-linked-card');
   if (linkedCard) linkedCard.style.display = 'none';
   document.getElementById('im-invoice-text').value = '';
