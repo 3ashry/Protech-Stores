@@ -1059,6 +1059,62 @@ async function saveInvoiceMatch() {
     }
     (_im.saved = _im.saved || []).unshift(record);
     renderSavedInvoices();
+
+    // ── Apply this invoice's per-unit prices to every linked order ──
+    // Treats the saved invoice as authoritative: for every product line
+    // in every linked order whose code matches an invoice SKU, overwrite
+    // buy_price to list × 0.97 (what the admin actually paid Elashry
+    // after the 3% discount) and stamp supplier_invoice_id for an audit
+    // trail. "Linked" = (a) orders in the day's aggregation and (b)
+    // orders referenced by an adjustment's order_code.
+    try {
+      const priceMap = _im.priceMap || {};
+      if (Object.keys(priceMap).length) {
+        const naturalOrders = list;
+        const adjOrderCodes = new Set(
+          (_im.adjustments?.[_im.selectedDate] || [])
+            .map(a => String(a.order_code || '').toUpperCase().trim())
+            .filter(Boolean)
+        );
+        const manualOrders = (cache.orders || []).filter(o =>
+          adjOrderCodes.has(String(o.code || '').toUpperCase())
+        );
+        const linkedOrders = [...naturalOrders];
+        for (const o of manualOrders) {
+          if (!linkedOrders.some(x => x.id === o.id)) linkedOrders.push(o);
+        }
+        let ordersUpdated = 0, linesUpdated = 0;
+        for (const o of linkedOrders) {
+          const items = Array.isArray(o.products) ? o.products : [];
+          let changed = false;
+          const patched = items.map(p => {
+            const codeU = String(p.code || '').toUpperCase();
+            const info = priceMap[codeU] || priceMap[p.code];
+            if (!info || !info.list) return p;
+            const newBuy = Math.round(info.list * 0.97 * 100) / 100;
+            const oldBuy = parseFloat(p.buy_price || 0) || 0;
+            if (Math.abs(newBuy - oldBuy) < 0.01 && p.supplier_invoice_id === record.id) return p;
+            changed = true;
+            linesUpdated++;
+            return { ...p, buy_price: newBuy, supplier_invoice_id: record.id };
+          });
+          if (!changed) continue;
+          try {
+            await dbUpdate('orders', o.id, { products: patched });
+            const idx = cache.orders.findIndex(x => x.id === o.id);
+            if (idx >= 0) cache.orders[idx].products = patched;
+            ordersUpdated++;
+          } catch (e) {
+            console.warn('order buy_price update failed for', o.code, e.message);
+          }
+        }
+        if (linesUpdated) {
+          showToast(`Buy prices updated: ${linesUpdated} line${linesUpdated === 1 ? '' : 's'} across ${ordersUpdated} order${ordersUpdated === 1 ? '' : 's'} ✓`);
+        }
+      }
+    } catch (e) {
+      console.warn('apply invoice prices failed:', e && e.message);
+    }
   } catch (e) {
     const msg = String(e.message || '');
     if (/supplier_invoices/i.test(msg) && (/relation|does not exist|schema cache/i.test(msg))) {
