@@ -1011,6 +1011,21 @@ export default async function handler(req, res) {
   const alsoSummary = req.query?.summary === '1' || req.query?.summary === 'true';
 
   try {
+    // Wall-clock budget — Vercel kills the function at 300s. Keep a 40s
+    // headroom for DB writes + Telegram fan-out + building the response.
+    // ALL loops below (main status loop + the two backfill loops) check
+    // outOfBudget() and short-circuit when it fires. Declared at the top
+    // of the try block so every loop can see it.
+    const BUDGET_MS = 260_000;
+    const startMs = Date.now();
+    const outOfBudget = () => (Date.now() - startMs) > BUDGET_MS;
+    // Per-run cap on the "detail re-fetch" calls fired for every
+    // in-transit-looking order from the search hit. Each call is a Bosta
+    // round-trip (~500ms); when the shop is busy there can be hundreds of
+    // in-transit orders at once, enough to burn the whole budget just on
+    // this step. Orders not re-fetched in this run get picked up by the
+    // next cron.
+    const DETAIL_FETCH_CAP = 120;
     const deliveries = await fetchAllDeliveries();
     const byRef = {}, byTrack = {};
     const unknownStates = new Set();
@@ -1052,11 +1067,13 @@ export default async function handler(req, res) {
       // Whenever the search hit maps to In Transit / Processing, re-fetch
       // the detail endpoint (which has deliveryAttemptsLength and
       // cod_collectedAmount) and re-map — this is the only way to tell a
-      // real in-transit trip from a return leg.
+      // real in-transit trip from a return leg. Capped at DETAIL_FETCH_CAP
+      // per run and short-circuited once the function budget runs out so
+      // slow Bosta responses can't push us past the 300s Vercel limit.
       const isInTransitLike = mapped === 'In Transit' || mapped === 'Processing';
       const bostaIdForDetail = o.bosta_id || d._id;
       if (trace) trace.steps.push({ step: 'inTransitLike?', isInTransitLike, bostaIdForDetail });
-      if (isInTransitLike && bostaIdForDetail) {
+      if (isInTransitLike && bostaIdForDetail && !outOfBudget() && detailFetchStats.attempted < DETAIL_FETCH_CAP) {
         detailFetchStats.attempted++;
         try {
           const dr = await fetch(`${BOSTA_BASE_URL}/deliveries/business/${encodeURIComponent(bostaIdForDetail)}`, {
@@ -1206,10 +1223,8 @@ export default async function handler(req, res) {
       && !(o.bosta_id && seenIds.has(o.bosta_id))
       && !backfillCandidates.includes(o)
     ).slice(0, 10);
-    // Wall-clock budget — leave 20s headroom before Vercel kills the fn.
-    const BUDGET_MS = 270_000;
-    const startMs = Date.now();
-    const outOfBudget = () => (Date.now() - startMs) > BUDGET_MS;
+    // Budget guard declared at the top of the try block — same instance,
+    // kept here as a reminder that the backfill loops read it too.
     const backfillChanges = [];
     const backfillErrors = [];
 
@@ -1382,7 +1397,7 @@ export default async function handler(req, res) {
       tgSent.skipped = true;
     }
 
-    const result = { ok: true, buildMarker: 'v10-budget-cap', bostaDeliveries: deliveries.length, ordersChecked: (orders || []).length, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8), detailFetchStats, backfill: { checked: backfillCandidates.length, updated: backfillChanges.length, changes: backfillChanges.slice(0, 20), errors: backfillErrors.slice(0, 20), budgetAborted: backfillBudgetAbort }, shipCodeBackfill: { checked: shipCodeCandidates.length, updated: shipCodeChanges.length, changes: shipCodeChanges.slice(0, 20), budgetAborted: shipCodeBudgetAbort }, telegram: tgSent, onlyTrace, elapsedMs: Date.now() - startMs };
+    const result = { ok: true, buildMarker: 'v11-main-loop-budget', bostaDeliveries: deliveries.length, ordersChecked: (orders || []).length, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8), detailFetchStats, detailFetchCap: DETAIL_FETCH_CAP, backfill: { checked: backfillCandidates.length, updated: backfillChanges.length, changes: backfillChanges.slice(0, 20), errors: backfillErrors.slice(0, 20), budgetAborted: backfillBudgetAbort }, shipCodeBackfill: { checked: shipCodeCandidates.length, updated: shipCodeChanges.length, changes: shipCodeChanges.slice(0, 20), budgetAborted: shipCodeBudgetAbort }, telegram: tgSent, onlyTrace, elapsedMs: Date.now() - startMs };
     console.log('sync-status', JSON.stringify(result));
     return res.status(200).json(result);
   } catch (e) {
