@@ -35,12 +35,13 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') return res.status(405).end();
 
-  // Immediate order-confirmation sending is DISABLED. Confirmations are sent ~6h
-  // after the order by the scheduled sender (/api/wa-cron), which waits for the
-  // Bosta ship code. Cached storefront builds may still call this endpoint at
-  // checkout — return a no-op so no message is sent before the ship code exists.
-  return res.status(200).json({ disabled: true, note: 'confirmation is sent by the 6h scheduler (wa-cron)' });
-
+  // Manual WhatsApp confirmation sender — admin dashboard POSTs here to
+  // force-fire the template on any order (e.g. the storefront's auto-send
+  // failed, Meta rejected the previous attempt, or we're testing the
+  // chain). Also handy for retrying when the first auto-send happened
+  // before the admin fixed a bad env var. The automatic path still fires
+  // on checkout from /api/bosta and the delayed path still fires from
+  // wa-cron at the 6h mark — both skip orders where wa_sent_at is set.
   /* eslint-disable no-unreachable */
   if (!WA_TOKEN || !WA_PHONE_NUMBER_ID || !SUPABASE_URL || !SUPABASE_KEY) {
     console.error('wa-confirm: missing env config');
