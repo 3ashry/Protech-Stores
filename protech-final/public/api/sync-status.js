@@ -812,29 +812,60 @@ export default async function handler(req, res) {
           })) : [],
         } });
       }
-      if (op === 'unmark') {
-        // Undo: move an order back from Ready → Preparing. Clears
-        // picker_prepared_at so the row shows up in the Preparing queue
-        // again on the picker's next refresh. Same auth as op=mark.
-        const orderId = (req.query?.orderId || '').toString();
-        if (!/^[A-Za-z0-9_-]+$/.test(orderId)) return res.status(400).json({ error: 'Bad orderId' });
-        const r = await fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
-          method: 'PATCH',
-          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-          body: JSON.stringify({ picker_prepared_at: null }),
-        });
-        if (!r.ok) return res.status(502).json({ error: 'DB write failed', detail: await r.text() });
-        return res.status(200).json({ ok: true });
-      }
       if (op === 'mark') {
         const orderId = (req.query?.orderId || '').toString();
         if (!/^[A-Za-z0-9_-]+$/.test(orderId)) return res.status(400).json({ error: 'Bad orderId' });
-        const r = await fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
+        // Stamp both the when (picker_prepared_at) and the who
+        // (picker_prepared_by) so payroll can attribute each packaged
+        // order back to the picker who confirmed it. If the DB doesn't
+        // have the column yet, retry without it so the mark still saves.
+        const patch = { picker_prepared_at: new Date().toISOString(), picker_prepared_by: acct.username };
+        let r = await fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
           method: 'PATCH',
           headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-          body: JSON.stringify({ picker_prepared_at: new Date().toISOString() }),
+          body: JSON.stringify(patch),
         });
-        if (!r.ok) return res.status(502).json({ error: 'DB write failed', detail: await r.text() });
+        if (!r.ok) {
+          const txt = await r.text().catch(() => '');
+          if (/picker_prepared_by/i.test(txt) && /column/i.test(txt)) {
+            const { picker_prepared_by: _drop, ...fallback } = patch;
+            r = await fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
+              method: 'PATCH',
+              headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+              body: JSON.stringify(fallback),
+            });
+            if (!r.ok) return res.status(502).json({ error: 'DB write failed', detail: await r.text() });
+          } else {
+            return res.status(502).json({ error: 'DB write failed', detail: txt });
+          }
+        }
+        return res.status(200).json({ ok: true });
+      }
+      if (op === 'unmark') {
+        // Undo: clear both the timestamp and the attribution. If the
+        // column doesn't exist yet the retry drops it from the patch.
+        const orderId = (req.query?.orderId || '').toString();
+        if (!/^[A-Za-z0-9_-]+$/.test(orderId)) return res.status(400).json({ error: 'Bad orderId' });
+        const patch = { picker_prepared_at: null, picker_prepared_by: null };
+        let r = await fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
+          method: 'PATCH',
+          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+          body: JSON.stringify(patch),
+        });
+        if (!r.ok) {
+          const txt = await r.text().catch(() => '');
+          if (/picker_prepared_by/i.test(txt) && /column/i.test(txt)) {
+            const { picker_prepared_by: _drop, ...fallback } = patch;
+            r = await fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
+              method: 'PATCH',
+              headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+              body: JSON.stringify(fallback),
+            });
+            if (!r.ok) return res.status(502).json({ error: 'DB write failed', detail: await r.text() });
+          } else {
+            return res.status(502).json({ error: 'DB write failed', detail: txt });
+          }
+        }
         return res.status(200).json({ ok: true });
       }
       return res.status(400).json({ error: 'Unknown op. Use list|today|mark' });
@@ -915,7 +946,64 @@ export default async function handler(req, res) {
         if (!r.ok) return res.status(502).json({ error: 'DB delete failed', detail: await r.text() });
         return res.status(200).json({ ok: true });
       }
-      return res.status(400).json({ error: 'Unknown op. Use list|save|delete|login' });
+      if (op === 'payroll') {
+        // ?month=YYYY-MM — returns the total number of orders packaged in
+        // the given calendar month (UTC) plus a per-picker breakdown by
+        // username. For months BEFORE picker_prepared_by was introduced
+        // the per-picker map will be empty / only hold the current admin
+        // if an older row happened to have a value — the total is still
+        // accurate because it's derived from picker_prepared_at alone.
+        const monthStr = (req.query?.month || '').toString();
+        const m = /^(\d{4})-(\d{2})$/.exec(monthStr);
+        if (!m) return res.status(400).json({ error: 'month must be YYYY-MM' });
+        const year = parseInt(m[1]);
+        const monthIdx = parseInt(m[2]) - 1;
+        const startOfMonth = new Date(Date.UTC(year, monthIdx, 1, 0, 0, 0));
+        const startNextMonth = new Date(Date.UTC(year, monthIdx + 1, 1, 0, 0, 0));
+        // Try to pull picker_prepared_by along with the row. If the
+        // column doesn't exist yet, retry without it so the total still
+        // comes back — the per-picker breakdown will just be empty.
+        let selectCols = 'id,picker_prepared_at,picker_prepared_by';
+        let url = `${SUPABASE_URL}/rest/v1/orders?select=${selectCols}`
+          + `&picker_prepared_at=gte.${encodeURIComponent(startOfMonth.toISOString())}`
+          + `&picker_prepared_at=lt.${encodeURIComponent(startNextMonth.toISOString())}`
+          + `&limit=10000`;
+        let r = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+        let rows;
+        if (!r.ok) {
+          const txt = await r.text().catch(() => '');
+          if (/picker_prepared_by/i.test(txt) && /column/i.test(txt)) {
+            selectCols = 'id,picker_prepared_at';
+            url = `${SUPABASE_URL}/rest/v1/orders?select=${selectCols}`
+              + `&picker_prepared_at=gte.${encodeURIComponent(startOfMonth.toISOString())}`
+              + `&picker_prepared_at=lt.${encodeURIComponent(startNextMonth.toISOString())}`
+              + `&limit=10000`;
+            r = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+            if (!r.ok) return res.status(502).json({ error: 'DB read failed', detail: await r.text() });
+            rows = await r.json().catch(() => []);
+          } else {
+            return res.status(502).json({ error: 'DB read failed', detail: txt });
+          }
+        } else {
+          rows = await r.json().catch(() => []);
+        }
+        const byPicker = {};
+        let unattributed = 0;
+        for (const row of (rows || [])) {
+          const who = (row.picker_prepared_by || '').toString().trim();
+          if (!who) { unattributed++; continue; }
+          byPicker[who] = (byPicker[who] || 0) + 1;
+        }
+        return res.status(200).json({
+          ok: true,
+          month: monthStr,
+          total: Array.isArray(rows) ? rows.length : 0,
+          byPicker,
+          unattributed,
+          columnPresent: selectCols.includes('picker_prepared_by'),
+        });
+      }
+      return res.status(400).json({ error: 'Unknown op. Use list|save|delete|login|payroll' });
     } catch (e) { return res.status(500).json({ error: e.message }); }
   }
 

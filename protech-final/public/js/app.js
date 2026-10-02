@@ -5119,6 +5119,13 @@ async function loadAccounts() {
     accountsCache.rows = j.accounts || [];
     accountsCache.loaded = true;
     renderAccounts();
+    // Seed the month picker to current month on first open, then auto-load.
+    const monthEl = document.getElementById('payroll-month');
+    if (monthEl && !monthEl.value) {
+      const now = new Date();
+      monthEl.value = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+    }
+    loadPayroll();
   } catch (e) {
     host.innerHTML = `<div style="padding:20px;color:var(--danger)">${esc(e.message)}</div>
       <div style="padding:0 20px 20px"><button class="btn btn-ghost btn-sm" onclick="loadAccounts()">إعادة المحاولة</button></div>`;
@@ -5164,9 +5171,38 @@ function renderAccounts() {
     </div>`;
 }
 
+async function loadPayroll() {
+  const host = document.getElementById('payroll-body');
+  const monthEl = document.getElementById('payroll-month');
+  if (!host || !monthEl) return;
+  const month = monthEl.value;
+  if (!month) { host.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted)">Pick a month.</div>'; return; }
+  host.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted)">جاري التحميل…</div>';
+  try {
+    const j = await acctApi('payroll', { month });
+    if (j.__cancelled) { host.innerHTML = '<div style="padding:20px;color:var(--muted)">أدخل رمز المسؤول للمتابعة.</div>'; return; }
+    const total = j.total || 0;
+    const byPicker = j.byPicker || {};
+    const unattributed = j.unattributed || 0;
+    const columnPresent = j.columnPresent !== false;
+    const accounts = (accountsCache.rows || []).filter(a => a.role === 'picker');
+    const extraUsernames = Object.keys(byPicker).filter(u => !accounts.some(a => a.username === u));
+    const combined = [
+      ...accounts.map(a => ({ username: a.username, label: a.label || '', count: byPicker[a.username] || 0, known: true, active: a.active !== false })),
+      ...extraUsernames.map(u => ({ username: u, label: '(not in current accounts)', count: byPicker[u] || 0, known: false, active: false })),
+    ].sort((a, b) => b.count - a.count || a.username.localeCompare(b.username));
+    const [yearStr, monthStr] = month.split('-');
+    const monthName = new Date(Date.UTC(+yearStr, +monthStr - 1, 1)).toLocaleString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' });
+    const columnWarning = columnPresent ? '' : `<div style="margin-top:10px;padding:10px 12px;background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;font-size:12px;color:#92400e;line-height:1.5">⚠️ The <code>picker_prepared_by</code> column isn't on your <code>orders</code> table yet, so per-picker attribution isn't available. The <b>total count is accurate</b>. Run this once in Supabase SQL editor to enable per-picker tracking for new orders:<pre style="margin:8px 0 0;padding:8px 10px;background:#fff;border-radius:6px;font-family:monospace;font-size:11px;white-space:pre-wrap;color:#111">ALTER TABLE orders ADD COLUMN IF NOT EXISTS picker_prepared_by text;</pre></div>`;
+    const unattributedNote = unattributed > 0 && columnPresent ? `<div style="margin-top:10px;padding:8px 10px;background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;font-size:12px;color:#92400e">ℹ️ ${unattributed} order${unattributed === 1 ? '' : 's'} this month ${unattributed === 1 ? 'was' : 'were'} prepared before per-picker attribution was turned on. They're counted in the total but not in any picker's row.</div>` : '';
+    host.innerHTML = `<div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:14px"><div style="font-size:30px;font-weight:900;color:#10b981;font-family:var(--f-mono,monospace)">${total}</div><div style="color:var(--muted);font-size:13px">orders packaged in <b>${esc(monthName)}</b></div></div>${combined.length ? `<div class="table-wrap"><table><thead><tr><th>Picker</th><th>Label</th><th style="text-align:center">Orders packaged</th><th style="text-align:center">% of total</th><th></th></tr></thead><tbody>${combined.map(p => { const pct = total ? Math.round((p.count / total) * 100) : 0; return `<tr${p.active ? '' : ' style="opacity:.6"'}><td><b>${esc(p.username)}</b></td><td style="color:var(--muted);font-size:12px">${esc(p.label)}</td><td style="text-align:center;font-family:var(--f-mono,monospace);font-weight:700;font-size:16px;color:#10b981">${p.count}</td><td style="text-align:center;font-family:var(--f-mono,monospace);color:var(--muted)">${pct}%</td><td>${p.known ? '' : '<span class="badge b-gray" style="font-size:10px">removed</span>'}</td></tr>`; }).join('')}</tbody></table></div>` : '<div style="padding:14px;color:var(--muted);text-align:center">No pickers set up yet.</div>'}${unattributedNote}${columnWarning}`;
+  } catch (e) {
+    host.innerHTML = `<div style="padding:14px;color:#dc2626;font-size:13px">خطأ: ${esc(e.message)}</div><div style="padding:0 14px 14px"><button class="btn btn-ghost btn-sm" onclick="loadPayroll()">إعادة المحاولة</button></div>`;
+  }
+}
+
 function openAccountEditor(existing) {
   const a = existing || { id: '', username: '', pin: '', role: 'picker', label: '', active: true };
-  const overlay = document.getElementById('overlay');
   overlay.innerHTML = `
     <div style="background:#fff;border-radius:14px;max-width:460px;width:92%;padding:24px;max-height:90vh;overflow:auto">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px">
