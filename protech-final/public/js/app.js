@@ -707,21 +707,37 @@ function scanInvoice() {
   const upper = norm.toUpperCase();
 
   // 2. Elashry's invoice PDF has Latin codes inside RTL Arabic text, so
-  //    pdf.js extracts them with the letter-prefix and digit-suffix swapped
-  //    ("TMT516003" comes out as "516003TMT"). Build a variant map that
-  //    accepts either orientation and resolves back to the canonical code.
+  //    pdf.js extracts Latin codes embedded in RTL Arabic text with their
+  //    letter/digit RUNS reversed as whole segments — not just letters-
+  //    then-digits swapped. "TMT516003" (2 runs) comes out as "516003TMT",
+  //    but "TACIM72PH265" (4 runs: TACIM, 72, PH, 265) comes out as
+  //    "265PH72TACIM" (reversed run order). The variant builder below
+  //    reverses the run array for every code so both orientations resolve
+  //    back to the canonical code.
+  //
+  //    Also handles combo SKUs with "+" by splitting on it, adding each
+  //    half's variants, and adding the parts-reversed combo form (e.g.
+  //    "TG1091366+TG10911576" also as "TG10911576+TG1091366").
+  const reverseRuns = (s) => {
+    const runs = s.match(/[A-Za-z]+|\d+/g);
+    return runs ? runs.reverse().join('') : s;
+  };
+  const addVariants = (map, upperCode, canonical) => {
+    map.set(upperCode, canonical);
+    const rev = reverseRuns(upperCode);
+    if (rev && rev !== upperCode) map.set(rev, canonical);
+  };
   const variants = new Map();  // upperVariant → canonicalCode
   for (const code of codes) {
-    variants.set(code.toUpperCase(), code);
-    const m = code.match(/^([A-Za-z]+)(\d+)$/);
-    if (m) variants.set((m[2] + m[1]).toUpperCase(), code);
-    // Some codes have "+" (e.g. combined SKUs). Split, try each half's
-    // reversed form too, so a partial mention still identifies the row.
+    const upper = code.toUpperCase();
+    addVariants(variants, upper, code);
     if (code.includes('+')) {
-      for (const part of code.split('+').map(s => s.trim()).filter(Boolean)) {
-        variants.set(part.toUpperCase(), code);
-        const pm = part.match(/^([A-Za-z]+)(\d+)$/);
-        if (pm) variants.set((pm[2] + pm[1]).toUpperCase(), code);
+      const parts = code.split('+').map(s => s.trim()).filter(Boolean);
+      for (const part of parts) addVariants(variants, part.toUpperCase(), code);
+      // Combo form with parts reversed (sometimes the invoice lists the
+      // halves in the other order).
+      if (parts.length > 1) {
+        addVariants(variants, parts.slice().reverse().join('+').toUpperCase(), code);
       }
     }
   }
