@@ -373,6 +373,12 @@
             <button class="btn btn-dark btn-sm" onclick="saveInvoiceMatch()">💾 Save</button>
             <button class="btn btn-ghost btn-sm" onclick="clearInvoiceScan()">Clear</button>
           </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <label for="im-invoice-serial" style="font-weight:700;font-size:12px;white-space:nowrap">📄 مسلسل اذن البيع</label>
+            <input type="text" id="im-invoice-serial" oninput="onInvoiceSerialInput(event)"
+              placeholder="يُستخرج تلقائياً من الـ PDF — عدّله لو احتجت"
+              style="flex:1;min-width:160px;padding:8px 10px;border:1.5px solid var(--line);border-radius:8px;font-family:var(--f-mono,monospace);font-size:13px;background:var(--bg)">
+          </div>
           <textarea id="im-invoice-text" rows="10" placeholder="Paste supplier invoice text here…"
             style="width:100%;padding:10px 12px;border:1.5px solid var(--line);border-radius:8px;font-family:var(--f-mono,monospace);font-size:12px;background:var(--bg);resize:vertical;min-height:180px"></textarea>
         </div>
@@ -385,7 +391,7 @@
 
     <!-- Banner when viewing a saved match instead of the live day. -->
     <div id="im-viewing-saved" style="display:none;margin:10px 0;padding:10px 14px;background:#fef3c7;border:1.5px solid #fcd34d;border-radius:10px;font-size:13px;font-weight:700;align-items:center;gap:10px;flex-wrap:wrap">
-      <span style="flex:1">📂 Viewing saved match: <span id="im-viewing-saved-name"></span></span>
+      <span style="flex:1">📂 Viewing saved match: <span id="im-viewing-saved-name"></span><span id="im-viewing-saved-serial" style="margin-inline-start:10px;font-family:var(--f-mono,monospace);color:#92400e"></span></span>
       <button class="btn btn-primary btn-sm" id="im-download-original" onclick="downloadSavedOriginal()" style="display:none">⬇ Download original</button>
       <button class="btn btn-ghost btn-sm" onclick="backToLiveInvoiceMatch()">← Back to live</button>
     </div>
@@ -448,8 +454,8 @@
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Name</th><th>Prepared</th><th>Saved</th><th style="text-align:center">SKUs</th><th style="text-align:center">Δ</th><th></th></tr></thead>
-          <tbody id="im-saved-tbody"><tr><td colspan="6" style="padding:20px;text-align:center;color:var(--muted)">Loading…</td></tr></tbody>
+          <thead><tr><th>Name</th><th>Serial</th><th>Prepared</th><th>Saved</th><th style="text-align:center">SKUs</th><th style="text-align:center">Δ</th><th></th></tr></thead>
+          <tbody id="im-saved-tbody"><tr><td colspan="7" style="padding:20px;text-align:center;color:var(--muted)">Loading…</td></tr></tbody>
         </table>
       </div>
     </div>
