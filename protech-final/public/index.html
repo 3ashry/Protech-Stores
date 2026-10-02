@@ -479,6 +479,26 @@
       <div class="card-header"><span class="card-title">All accounts</span></div>
       <div id="accounts-body" style="padding:12px"></div>
     </div>
+
+    <!-- 💰 Monthly packaging stats — total orders packaged + per-picker breakdown -->
+    <div class="card" style="border:1.5px solid #10b981">
+      <div class="card-header" style="background:#ecfdf5;flex-wrap:wrap;gap:10px">
+        <span class="card-title">💰 Packaging payroll</span>
+        <div style="display:flex;gap:8px;align-items:center;margin-inline-start:auto;flex-wrap:wrap">
+          <label style="font-size:12px;color:var(--muted);text-transform:none;letter-spacing:0;font-weight:normal;margin-bottom:0">Month:</label>
+          <input type="month" id="payroll-month" onchange="loadPayroll()"
+            style="padding:7px 10px;border:1.5px solid var(--line);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg)">
+          <button class="btn btn-ghost btn-sm" onclick="loadPayroll()">🔄</button>
+        </div>
+      </div>
+      <div style="padding:10px 16px;font-size:12px;color:var(--muted);line-height:1.55">
+        Total orders packaged in the selected month, and the per-picker breakdown by username. Per-picker attribution started when the <code>picker_prepared_by</code> column was added — older months show a total only.
+      </div>
+      <div id="payroll-body" style="padding:0 16px 16px;font-size:14px">
+        <div style="padding:20px;text-align:center;color:var(--muted)">Pick a month to load the stats.</div>
+      </div>
+    </div>
+
     <div class="card">
       <div class="card-header"><span class="card-title">How it works</span></div>
       <div style="padding:14px;line-height:1.7;color:#4b5563;font-size:14px">
