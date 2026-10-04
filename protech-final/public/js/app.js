@@ -356,6 +356,16 @@ function renderAll() {
   if (typeof cartsCache !== 'undefined' && cartsCache.loaded) renderAbandonedCarts();
 }
 
+// Modal save-paths rebuild every section via renderAll() and the browser
+// snaps the viewport back to the top because the orders table briefly
+// collapses to its initial height. Snapshot the scroll position and
+// restore it on the next frame so the admin stays on the same row.
+function renderAllKeepScroll() {
+  const y = window.scrollY;
+  renderAll();
+  requestAnimationFrame(() => window.scrollTo(0, y));
+}
+
 // ── HOME ──
 function renderHome() {
   const orders = cache.orders;
@@ -2437,7 +2447,7 @@ async function saveOrder() {
         await dbUpdate('products', cache.products[pi].id, { qty: newQty });
       }
     }
-    closeModal(); renderAll();
+    closeModal(); renderAllKeepScroll();
   } catch (e) { showToast('Error: ' + e.message); }
 }
 
@@ -2470,7 +2480,7 @@ async function cancelOrder(id) {
     await dbDelete('orders', id);
     cache.orders = cache.orders.filter(x => x.id !== id);
     showToast('Order cancelled — stock restored & order deleted ✓');
-    closeModal(); renderAll();
+    closeModal(); renderAllKeepScroll();
   } catch (e) { showToast('Error: ' + e.message); }
 }
 
@@ -2491,7 +2501,7 @@ async function confirmWarehouse(id) {
     const i = cache.orders.findIndex(x => x.id === id);
     if (i >= 0) cache.orders[i].warehouse_confirmed = true;
     showToast('Stock restored to inventory ✓');
-    closeModal(); renderAll();
+    closeModal(); renderAllKeepScroll();
   } catch (e) { showToast('Error: ' + e.message); }
 }
 
@@ -2514,7 +2524,7 @@ async function undoWarehouse(id) {
     const i = cache.orders.findIndex(x => x.id === id);
     if (i >= 0) cache.orders[i].warehouse_confirmed = false;
     showToast('Reverted — marked as not yet received');
-    closeModal(); renderAll();
+    closeModal(); renderAllKeepScroll();
   } catch (e) { showToast('Error: ' + e.message); }
 }
 
@@ -2534,13 +2544,7 @@ async function saveOrderBuyPrices(id) {
     const i = cache.orders.findIndex(x => x.id === id);
     if (i >= 0) cache.orders[i].products = newProducts;
     showToast('Buy prices updated for this order ✓');
-    // Snapshot where the admin was in the list before renderAll() rebuilds
-    // every section (which otherwise snaps the viewport back to the top).
-    // We restore scroll on the next frame so the browser doesn't fight us.
-    const prevScroll = window.scrollY;
-    closeModal();
-    renderAll();
-    requestAnimationFrame(() => window.scrollTo(0, prevScroll));
+    closeModal(); renderAllKeepScroll();
   } catch (e) { showToast('Error: ' + e.message); }
 }
 
@@ -2676,7 +2680,7 @@ async function saveDetail(id) {
     await dbUpdate('orders', id, { actual_shipping, cancel_reason, status, allow_open });
     const i = cache.orders.findIndex(x => x.id === id);
     if (i >= 0) cache.orders[i] = { ...cache.orders[i], actual_shipping, cancel_reason, status, allow_open };
-    showToast('Order updated ✓'); closeModal(); renderAll();
+    showToast('Order updated ✓'); closeModal(); renderAllKeepScroll();
   } catch (e) { showToast('Error: ' + e.message); }
 }
 
@@ -2691,7 +2695,7 @@ async function setConfirm(id, confirmed) {
     const i = cache.orders.findIndex(x => x.id === id);
     if (i >= 0) cache.orders[i] = { ...cache.orders[i], customer_confirmed: true };
     showToast('Order confirmed ✓');
-    closeModal(); renderAll();
+    closeModal(); renderAllKeepScroll();
   } catch (e) { showToast('Error: ' + e.message); }
 }
 
