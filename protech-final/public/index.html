@@ -229,11 +229,6 @@
         <span>↶ تراجع</span>
         <span id="orders-undo-fab-label" style="font-weight:500;color:var(--muted);font-size:12px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
       </button>
-      <button type="button" id="warehouse-fab" onclick="openWarehouseReturnsPopup()"
-        style="display:none;align-items:center;gap:10px;padding:14px 20px;border:0;border-radius:999px;background:#0891b2;color:#fff;font-weight:800;font-size:14px;box-shadow:0 10px 24px rgba(8,145,178,.35);cursor:pointer">
-        <span>📥 في المخزن</span>
-        <span id="warehouse-fab-count" style="min-width:22px;height:22px;padding:0 6px;border-radius:999px;background:#fff;color:#0891b2;font-size:12px;font-weight:800;display:inline-flex;align-items:center;justify-content:center">0</span>
-      </button>
       <button type="button" id="elashry-fab" onclick="openElashryReturnsPopup()"
         style="display:inline-flex;align-items:center;gap:10px;padding:14px 20px;border:0;border-radius:999px;background:#F26A21;color:#fff;font-weight:800;font-size:14px;box-shadow:0 10px 24px rgba(242,106,33,.35);cursor:pointer">
         <span>📦 قائمة الأشري</span>
@@ -888,22 +883,6 @@
       <button class="close-btn" onclick="closeModal()">✕</button>
     </div>
     <div id="m-elashry-body" style="padding:4px 2px"></div>
-  </div>
-</div>
-
-<!-- Warehouse-received returns — opened from the 📥 في المخزن FAB.
-     Per-row ♻️ reuse (keep in stock, record buy price) and 📤 send
-     to Elashry (same stamp used by the Elashry popup) actions. Both
-     stamp supplier_return_* fields so the history list below is
-     identical in both popups. Rendered inside #m-warehouse-body. -->
-<div id="tpl-warehouse-returns" style="display:none">
-  <div class="modal" style="max-width:1000px">
-    <span class="modal-handle"></span>
-    <div class="modal-header">
-      <span class="modal-title">📥 المرتجعات في المخزن</span>
-      <button class="close-btn" onclick="closeModal()">✕</button>
-    </div>
-    <div id="m-warehouse-body" style="padding:4px 2px"></div>
   </div>
 </div>
 
