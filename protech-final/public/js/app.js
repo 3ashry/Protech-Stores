@@ -2869,7 +2869,12 @@ function returnsAwaitingSupplier() {
         returnedDate: o.date || o.returned_at || '',
         lineIdx: idx,
         code: p.code || '',
-        name: p.name || sysProd?.name || p.code || '(بدون اسم)',
+        // Prefer the live inventory name — the View modal (viewOrder) does
+        // the same, and when a product has been renamed since the order was
+        // placed the stale snapshot on the order line is confusing (admin
+        // sees one name in View and a different one here). Falls back to
+        // the snapshot and then the code.
+        name: sysProd?.name || p.name || p.code || '(بدون اسم)',
         qty: parseInt(p.qty || 1),
         buyPrice: lineBuyPrice(p, products),
         status: p.supplier_return_status || null,
@@ -3135,7 +3140,7 @@ function returnsInWarehouseNotYetListed() {
         returnedDate: o.date || '',
         lineIdx: idx,
         code: p.code,
-        name: p.name || sysProd?.name || p.code,
+        name: sysProd?.name || p.name || p.code,
         qty: parseInt(p.qty || 1),
         buyPrice: lineBuyPrice(p, products),
       });
@@ -3173,7 +3178,7 @@ function returnsInWarehouse() {
         returnedDate: o.date || '',
         lineIdx: idx,
         code: p.code,
-        name: p.name || sysProd?.name || p.code,
+        name: sysProd?.name || p.name || p.code,
         qty: parseInt(p.qty || 1),
         buyPrice: lineBuyPrice(p, products),
         inElashryList: !!o.pending_elashry_at,
@@ -3203,7 +3208,7 @@ function returnsSentToSupplier() {
         sentAt: p.supplier_return_sent_at || '',
         lineIdx: idx,
         code: p.code,
-        name: p.name || (products.find(pp => pp.code === p.code)?.name) || p.code,
+        name: (products.find(pp => pp.code === p.code)?.name) || p.name || p.code,
         qty: parseInt(p.qty || 1),
         buyPrice: parseFloat(p.supplier_return_buy_price ?? lineBuyPrice(p, products)) || 0,
       });
