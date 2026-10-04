@@ -1981,6 +1981,7 @@ function renderOrders() {
     </tr>`).join('') : `<tr><td colspan="6"><div class="empty"><div class="empty-icon">🛒</div>${rawQ ? 'No orders match “' + esc(rawQ) + '”' : 'No orders yet'}</div></td></tr>`;
   renderPickupBadge();
   renderElashryFab();
+  renderWarehouseFab();
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2587,6 +2588,7 @@ async function confirmWarehouse(id) {
     if (i >= 0) cache.orders[i].warehouse_confirmed = true;
     showToast('Stock restored to inventory ✓');
     closeModal(); renderAllKeepScroll();
+    renderWarehouseFab();
     pushUndo(`أُعيد للمخزن · ${order.code || ''}`, async () => {
       // Revert stock: subtract exactly what we added.
       for (const { productId, pi, added } of stockDeltas) {
@@ -2599,6 +2601,7 @@ async function confirmWarehouse(id) {
       const i2 = cache.orders.findIndex(x => x.id === id);
       if (i2 >= 0) cache.orders[i2].warehouse_confirmed = prevWh ?? false;
       renderAllKeepScroll();
+      renderWarehouseFab();
     });
   } catch (e) { showToast('Error: ' + e.message); }
 }
@@ -2627,6 +2630,7 @@ async function undoWarehouse(id) {
     if (i >= 0) cache.orders[i].warehouse_confirmed = false;
     showToast('Reverted — marked as not yet received');
     closeModal(); renderAllKeepScroll();
+    renderWarehouseFab();
     pushUndo(`تراجع عن الإرجاع للمخزن · ${order.code || ''}`, async () => {
       // Revert stock: add back exactly what we subtracted.
       for (const { productId, pi, removed } of stockDeltas) {
@@ -2639,6 +2643,7 @@ async function undoWarehouse(id) {
       const i2 = cache.orders.findIndex(x => x.id === id);
       if (i2 >= 0) cache.orders[i2].warehouse_confirmed = prevWh ?? true;
       renderAllKeepScroll();
+      renderWarehouseFab();
     });
   } catch (e) { showToast('Error: ' + e.message); }
 }
@@ -2942,6 +2947,174 @@ function isElashryPopupOpen() {
   return !!document.getElementById('m-elashry-body');
 }
 
+function isWarehousePopupOpen() {
+  return !!document.getElementById('m-warehouse-body');
+}
+
+// Open the warehouse-returns popup from the sticky 📥 FAB.
+function openWarehouseReturnsPopup() {
+  showModal('tpl-warehouse-returns');
+  renderWarehousePopup();
+}
+window.openWarehouseReturnsPopup = openWarehouseReturnsPopup;
+
+function renderWarehouseFab() {
+  const btn = document.getElementById('warehouse-fab');
+  const badge = document.getElementById('warehouse-fab-count');
+  if (!btn || !badge) return;
+  const total = returnsInWarehouse().reduce((s, l) => s + l.qty, 0);
+  badge.textContent = String(total);
+  btn.style.display = total > 0 ? 'inline-flex' : 'none';
+}
+window.renderWarehouseFab = renderWarehouseFab;
+
+// The warehouse popup lists every unit physically on the admin's shelves
+// (status=Returned AND warehouse_confirmed=true AND not yet reused/sent_back).
+// Two per-row actions:
+//   ♻️ أعد الاستخدام  — mark as reused in another order (keeps the unit
+//                         in inventory; stamps buy_price for the audit log).
+//   📤 أعد لأشري      — mark as sent back to the supplier; stamps the
+//                         current buy_price and the send-timestamp;
+//                         appears in the history list below.
+// The history list below is the same supplier_return_status='sent_back'
+// view the Elashry popup shows, so both popups stay consistent.
+function renderWarehousePopup() {
+  const body = document.getElementById('m-warehouse-body');
+  if (!body) return;
+  const lines = returnsInWarehouse();
+  const sent = returnsSentToSupplier();
+
+  const totalUnits = lines.reduce((s, l) => s + l.qty, 0);
+  const byCode = new Map();
+  for (const l of lines) {
+    const row = byCode.get(l.code) || { code: l.code, name: l.name, qty: 0 };
+    row.qty += l.qty;
+    byCode.set(l.code, row);
+  }
+  const agg = Array.from(byCode.values()).sort((a, b) => b.qty - a.qty);
+
+  const header = `
+    <div style="padding:0 14px 10px;font-size:12px;color:var(--muted);line-height:1.55">
+      كل القطع التي استلمتها في المخزن من مرتجعات العملاء ولم تُقرر مصيرها بعد. اختار لكل قطعة: <b>♻️ أعد الاستخدام</b> لتبقى في المخزون وتُستخدم في طلب جديد بنفس سعر الشراء، أو <b>📤 أعد لأشري</b> لتُرسَل للمورد بسعر شرائها الحالي (تظهر في السجل بالأسفل).
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:0 14px 10px">
+      <span style="flex:1;font-size:12px;color:var(--muted);font-weight:600">${lines.length} سطر · ${agg.length} SKU · ${totalUnits} قطعة</span>
+    </div>`;
+
+  const main = !lines.length
+    ? '<div class="empty" style="margin:20px 0"><div class="empty-icon">📥</div>لا توجد مرتجعات في المخزن حالياً<br><span style="font-size:12px;color:var(--muted);font-weight:400">المرتجعات تظهر هنا بعد الضغط على ✅ تم الاستلام في المخزن من شاشة الطلب</span></div>'
+    : `<div class="table-wrap" style="margin:0 2px">
+        <table>
+          <thead><tr>
+            <th>Code</th><th>Product</th><th style="text-align:center">Qty</th>
+            <th>Buy price</th><th>Source order</th><th>Customer</th>
+            <th>Returned</th><th style="text-align:center">Actions</th>
+          </tr></thead>
+          <tbody>${lines.map(l => `
+            <tr>
+              <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(l.code)}</td>
+              <td>${esc(l.name)}${l.inElashryList ? ' <span class="badge b-warning" style="font-size:10px">في قائمة الأشري</span>' : ''}</td>
+              <td style="text-align:center;font-family:var(--f-mono,monospace);font-weight:700">× ${l.qty}</td>
+              <td style="font-family:var(--f-mono,monospace)">EGP ${fmt(l.buyPrice)}</td>
+              <td><span class="badge b-orange">${esc(l.orderCode || '—')}</span></td>
+              <td style="font-size:12px">${esc(l.customer)}</td>
+              <td style="font-family:var(--f-mono,monospace);font-size:12px;color:var(--muted)">${esc(l.returnedDate)}</td>
+              <td style="text-align:center;white-space:nowrap">
+                <button class="btn btn-dark btn-xs" title="أعد الاستخدام — تبقى في المخزون بنفس سعر الشراء" onclick="reuseWarehouseReturn('${l.orderId}', ${l.lineIdx})">♻️ أعد الاستخدام</button>
+                <button class="btn btn-primary btn-xs" title="أعد لأشري بسعر الشراء الحالي" onclick="markReturnSentToElashry('${l.orderId}', ${l.lineIdx})">📤 أعد لأشري</button>
+              </td>
+            </tr>`).join('')}</tbody>
+          <tfoot>
+            <tr><th colspan="8" style="padding:12px 10px;background:var(--bg-2);text-align:start;font-size:13px;color:var(--ink-2)">📊 الإجمالي حسب المنتج (${agg.length} SKU · ${totalUnits} قطعة)</th></tr>
+            ${agg.map(r => `
+              <tr style="background:var(--bg-2)">
+                <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(r.code)}</td>
+                <td colspan="2">${esc(r.name)}</td>
+                <td colspan="5" style="text-align:end;font-family:var(--f-mono,monospace);font-weight:700;color:#0891b2">× ${r.qty}</td>
+              </tr>`).join('')}
+          </tfoot>
+        </table>
+      </div>`;
+
+  const sentUnits = sent.reduce((s, l) => s + l.qty, 0);
+  const sentValue = sent.reduce((s, l) => s + l.qty * l.buyPrice, 0);
+  const sentSection = sent.length ? `
+    <div style="margin:18px 14px 4px;display:flex;flex-wrap:wrap;align-items:center;gap:8px">
+      <span style="font-weight:800;font-size:13px">📜 تم إرسالها لأشري</span>
+      <span style="font-size:12px;color:var(--muted)">${sent.length} سطر · ${sentUnits} قطعة · EGP ${fmt(sentValue)}</span>
+    </div>
+    <div class="table-wrap" style="margin:0 2px;opacity:.92">
+      <table style="font-size:12px">
+        <thead><tr>
+          <th>Code</th><th>Product</th><th style="text-align:center">Qty</th>
+          <th>Buy price</th><th>Source order</th><th>Sent at</th><th></th>
+        </tr></thead>
+        <tbody>${sent.map(l => `
+          <tr>
+            <td style="font-family:var(--f-mono,monospace)">${esc(l.code)}</td>
+            <td>${esc(l.name)}</td>
+            <td style="text-align:center;font-family:var(--f-mono,monospace);font-weight:700">× ${l.qty}</td>
+            <td style="font-family:var(--f-mono,monospace)">EGP ${fmt(l.buyPrice)}</td>
+            <td><span class="badge b-orange">${esc(l.orderCode || '—')}</span></td>
+            <td style="font-family:var(--f-mono,monospace);color:var(--muted)">${esc(String(l.sentAt).slice(0, 16).replace('T', ' '))}</td>
+            <td style="text-align:center"><button class="btn btn-ghost btn-xs" title="رجّع إلى المخزن" onclick="unmarkReturnSentToElashry('${l.orderId}', ${l.lineIdx})">↶ تراجع</button></td>
+          </tr>`).join('')}</tbody>
+      </table>
+    </div>` : '';
+
+  body.innerHTML = header + main + sentSection;
+}
+
+// Reuse-in-another-order: mark the line as reused AND stamp a buy_price
+// snapshot so later reports can see exactly what the admin considered
+// the value of the reused unit at that moment. Separate from the plain
+// markReturnReused (which the Elashry popup's ✕ button uses with just a
+// confirm) because the user explicitly asked for "same buying price and
+// same everything" to be preserved on reuse.
+async function reuseWarehouseReturn(orderId, lineIdx) {
+  const o = cache.orders.find(x => x.id === orderId);
+  if (!o) return;
+  const items = Array.isArray(o.products) ? o.products.slice() : [];
+  if (lineIdx < 0 || lineIdx >= items.length) return;
+  const line = items[lineIdx];
+  if (!line) return;
+  const bp = lineBuyPrice(line, cache.products || []);
+  const prev = { ...line };
+  if (!confirm(`♻️ "${line.name || line.code}" × ${line.qty || 1} سيتم استخدامه مرة أخرى بسعر شراء EGP ${fmt(bp)}.\nيبقى في المخزون — متابعة؟`)) return;
+  items[lineIdx] = {
+    ...line,
+    supplier_return_status: 'reused',
+    supplier_return_buy_price: bp,
+    supplier_return_sent_at: new Date().toISOString(),
+  };
+  try {
+    await dbUpdate('orders', orderId, { products: items });
+    const i = cache.orders.findIndex(x => x.id === orderId);
+    if (i >= 0) cache.orders[i].products = items;
+    if (isElashryPopupOpen()) renderElashryPopup();
+    if (isWarehousePopupOpen()) renderWarehousePopup();
+    renderOrders();
+    renderElashryFab();
+    renderWarehouseFab();
+    pushUndo(`أُعيد استخدامه · ${line.name || line.code}`, async () => {
+      const o2 = cache.orders.find(x => x.id === orderId);
+      if (!o2) return;
+      const items2 = Array.isArray(o2.products) ? o2.products.slice() : [];
+      items2[lineIdx] = prev;
+      await dbUpdate('orders', orderId, { products: items2 });
+      const i2 = cache.orders.findIndex(x => x.id === orderId);
+      if (i2 >= 0) cache.orders[i2].products = items2;
+      if (isElashryPopupOpen()) renderElashryPopup();
+      if (isWarehousePopupOpen()) renderWarehousePopup();
+      renderOrders();
+      renderElashryFab();
+      renderWarehouseFab();
+    });
+    showToast(`♻️ ${line.name || line.code} · EGP ${fmt(bp)}`);
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+window.reuseWarehouseReturn = reuseWarehouseReturn;
+
 // Returned orders physically received at the admin's warehouse that
 // are not yet in the Elashry pending list. These are the "في المخزن"
 // candidates — admin should push them to the Elashry list (or reuse
@@ -2971,6 +3144,40 @@ function returnsInWarehouseNotYetListed() {
         name: p.name || sysProd?.name || p.code,
         qty: parseInt(p.qty || 1),
         buyPrice: lineBuyPrice(p, products),
+      });
+    });
+  }
+  return out;
+}
+
+// Every physical warehouse-held return still awaiting disposition —
+// whether or not it has been pushed to the Elashry list yet. This is
+// what the 📥 في المخزن popup shows, because once a unit is physically
+// in the admin's warehouse they want to decide its fate from one view:
+// reuse it in another order, or hand it back to Elashry. Lines already
+// closed out (reused/sent_back) are excluded.
+function returnsInWarehouse() {
+  const products = cache.products || [];
+  const rets = (cache.orders || []).filter(o =>
+    o.status === 'Returned' && o.warehouse_confirmed === true
+  );
+  const out = [];
+  for (const o of rets) {
+    const items = Array.isArray(o.products) ? o.products : [];
+    items.forEach((p, idx) => {
+      if (p.supplier_return_status === 'reused' || p.supplier_return_status === 'sent_back') return;
+      const sysProd = products.find(pp => pp.code === p.code);
+      out.push({
+        orderId: o.id,
+        orderCode: o.code,
+        customer: o.customer_name || '',
+        returnedDate: o.date || '',
+        lineIdx: idx,
+        code: p.code,
+        name: p.name || sysProd?.name || p.code,
+        qty: parseInt(p.qty || 1),
+        buyPrice: lineBuyPrice(p, products),
+        inElashryList: !!o.pending_elashry_at,
       });
     });
   }
@@ -3011,7 +3218,6 @@ function returnsSentToSupplier() {
 function renderElashryPopup() {
   const body = document.getElementById('m-elashry-body');
   if (!body) return;
-  const warehouse = returnsInWarehouseNotYetListed();
   const lines = returnsAwaitingSupplier();
   const sent = returnsSentToSupplier();
   // Aggregate pending by product code for the per-SKU totals footer.
@@ -3096,41 +3302,7 @@ function renderElashryPopup() {
       </table>
     </div>` : '';
 
-  // "في المخزن" section — warehouse-received returns not yet pushed to
-  // the Elashry list. One row per product line; the + button adds the
-  // parent ORDER to the pending list (pending_elashry_at is per-order,
-  // so every line of that order lands in pending in one shot).
-  const whUnits = warehouse.reduce((s, l) => s + l.qty, 0);
-  const whOrderIds = Array.from(new Set(warehouse.map(l => l.orderId)));
-  const warehouseSection = warehouse.length ? `
-    <div style="margin:4px 14px 8px;display:flex;flex-wrap:wrap;align-items:center;gap:8px">
-      <span style="font-weight:800;font-size:13px">📥 في المخزن — لم تُضَف للقائمة بعد</span>
-      <span style="font-size:12px;color:var(--muted)">${warehouse.length} سطر · ${whOrderIds.length} طلب · ${whUnits} قطعة</span>
-      <button class="btn btn-dark btn-xs" style="margin-inline-start:auto" onclick="addAllWarehouseReturnsToElashry()" title="أضف كل الطلبات المرتجعة الموجودة في المخزن إلى قائمة الأشري">+ أضف الكل</button>
-    </div>
-    <div class="table-wrap" style="margin:0 2px">
-      <table style="font-size:12px">
-        <thead><tr>
-          <th>Code</th><th>Product</th><th style="text-align:center">Qty</th>
-          <th>Buy price</th><th>Source order</th><th>Customer</th>
-          <th>Returned</th><th style="text-align:center"></th>
-        </tr></thead>
-        <tbody>${warehouse.map(l => `
-          <tr>
-            <td style="font-family:var(--f-mono,monospace)">${esc(l.code)}</td>
-            <td>${esc(l.name)}</td>
-            <td style="text-align:center;font-family:var(--f-mono,monospace);font-weight:700">× ${l.qty}</td>
-            <td style="font-family:var(--f-mono,monospace)">EGP ${fmt(l.buyPrice)}</td>
-            <td><span class="badge b-orange">${esc(l.orderCode || '—')}</span></td>
-            <td>${esc(l.customer)}</td>
-            <td style="font-family:var(--f-mono,monospace);color:var(--muted)">${esc(l.returnedDate)}</td>
-            <td style="text-align:center"><button class="btn btn-primary btn-xs" title="أضف هذا الطلب إلى قائمة الأشري" onclick="toggleElashryReturn('${l.orderId}', false)">+ أرسل للقائمة</button></td>
-          </tr>`).join('')}</tbody>
-      </table>
-    </div>
-    <div style="height:1px;background:var(--line);margin:14px 14px 10px"></div>` : '';
-
-  body.innerHTML = header + warehouseSection + pendingSection + sentSection;
+  body.innerHTML = header + pendingSection + sentSection;
 }
 
 // Bulk-add every warehouse-received-but-unlisted return to the Elashry
@@ -3154,7 +3326,9 @@ async function addAllWarehouseReturnsToElashry() {
     renderOrders();
     if (typeof renderReturns === 'function') renderReturns();
     if (isElashryPopupOpen()) renderElashryPopup();
+    if (isWarehousePopupOpen()) renderWarehousePopup();
     renderElashryFab();
+    renderWarehouseFab();
     pushUndo(`أُضيف للقائمة · ${orderIds.length} طلب`, async () => {
       for (const { id, prev } of snapshots) {
         try {
@@ -3166,7 +3340,9 @@ async function addAllWarehouseReturnsToElashry() {
       renderOrders();
       if (typeof renderReturns === 'function') renderReturns();
       if (isElashryPopupOpen()) renderElashryPopup();
+      if (isWarehousePopupOpen()) renderWarehousePopup();
       renderElashryFab();
+      renderWarehouseFab();
     });
     showToast(`✓ أُضيف ${orderIds.length} طلب لقائمة الأشري`);
   } catch (e) { showToast('Error: ' + e.message); }
@@ -3226,7 +3402,9 @@ async function _setReturnLineStatus(orderId, lineIdx, status) {
     const prevScroll = window.scrollY;
     renderReturns();
     if (isElashryPopupOpen()) renderElashryPopup();
+    if (isWarehousePopupOpen()) renderWarehousePopup();
     renderElashryFab();
+    renderWarehouseFab();
     requestAnimationFrame(() => window.scrollTo(0, prevScroll));
   } catch (e) {
     showToast('Error: ' + e.message);
@@ -3256,7 +3434,9 @@ async function toggleElashryReturn(orderId, isCurrentlyPending) {
     renderOrders();
     if (typeof renderReturns === 'function') renderReturns();
     if (isElashryPopupOpen()) renderElashryPopup();
+    if (isWarehousePopupOpen()) renderWarehousePopup();
     renderElashryFab();
+    renderWarehouseFab();
     requestAnimationFrame(() => window.scrollTo(0, prevScroll));
     // Record undo. Revert flips pending_elashry_at back to the value it
     // had before this click.
@@ -3272,7 +3452,9 @@ async function toggleElashryReturn(orderId, isCurrentlyPending) {
         renderOrders();
         if (typeof renderReturns === 'function') renderReturns();
         if (isElashryPopupOpen()) renderElashryPopup();
+        if (isWarehousePopupOpen()) renderWarehousePopup();
         renderElashryFab();
+        renderWarehouseFab();
       }
     );
     showToast(isCurrentlyPending ? 'أُخرج من قائمة الأشري' : '✓ أُضيف لقائمة الأشري');
@@ -3308,6 +3490,7 @@ async function markReturnReused(orderId, lineIdx) {
     const i = cache.orders.findIndex(x => x.id === orderId);
     if (i >= 0) cache.orders[i].products = items;
     if (isElashryPopupOpen()) renderElashryPopup();
+    if (isWarehousePopupOpen()) renderWarehousePopup();
     renderOrders();
   });
   showToast('✓ أُخرج من قائمة أشري');
@@ -3339,6 +3522,7 @@ async function markReturnSentToElashry(orderId, lineIdx) {
     const i = cache.orders.findIndex(x => x.id === orderId);
     if (i >= 0) cache.orders[i].products = items;
     if (isElashryPopupOpen()) renderElashryPopup();
+    if (isWarehousePopupOpen()) renderWarehousePopup();
     renderOrders();
     renderElashryFab();
     pushUndo(`أُرسلت لأشري · ${line.name || line.code}`, async () => {
@@ -3350,6 +3534,7 @@ async function markReturnSentToElashry(orderId, lineIdx) {
       const i2 = cache.orders.findIndex(x => x.id === orderId);
       if (i2 >= 0) cache.orders[i2].products = items2;
       if (isElashryPopupOpen()) renderElashryPopup();
+      if (isWarehousePopupOpen()) renderWarehousePopup();
       renderOrders();
       renderElashryFab();
     });
@@ -3396,6 +3581,7 @@ async function markAllReturnsSentToElashry() {
       snapshots.push({ orderId, prev });
     }
     if (isElashryPopupOpen()) renderElashryPopup();
+    if (isWarehousePopupOpen()) renderWarehousePopup();
     renderOrders();
     renderElashryFab();
     pushUndo(`أُرسلت للكل · ${total} قطعة`, async () => {
@@ -3409,6 +3595,7 @@ async function markAllReturnsSentToElashry() {
         if (ci >= 0) cache.orders[ci].products = items2;
       }
       if (isElashryPopupOpen()) renderElashryPopup();
+      if (isWarehousePopupOpen()) renderWarehousePopup();
       renderOrders();
       renderElashryFab();
     });
@@ -3440,6 +3627,7 @@ async function unmarkReturnSentToElashry(orderId, lineIdx) {
     const i = cache.orders.findIndex(x => x.id === orderId);
     if (i >= 0) cache.orders[i].products = items;
     if (isElashryPopupOpen()) renderElashryPopup();
+    if (isWarehousePopupOpen()) renderWarehousePopup();
     renderOrders();
     renderElashryFab();
     pushUndo(`تراجع عن الإرسال · ${line.name || line.code}`, async () => {
@@ -3451,6 +3639,7 @@ async function unmarkReturnSentToElashry(orderId, lineIdx) {
       const i2 = cache.orders.findIndex(x => x.id === orderId);
       if (i2 >= 0) cache.orders[i2].products = items2;
       if (isElashryPopupOpen()) renderElashryPopup();
+      if (isWarehousePopupOpen()) renderWarehousePopup();
       renderOrders();
       renderElashryFab();
     });
