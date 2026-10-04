@@ -2042,8 +2042,25 @@ async function toggleSentToPicker(orderId, isCurrentlySent) {
       }
     }
     const i = cache.orders.findIndex(o => o.id === orderId);
+    const prevValue = i >= 0 ? cache.orders[i].sent_to_picker_at : null;
     if (i >= 0) cache.orders[i].sent_to_picker_at = newValue;
     renderOrders();
+    pushUndo(
+      isCurrentlySent
+        ? `أُلغي الإرسال للتجهيز · ${cache.orders[i]?.code || ''}`
+        : `أُرسلت للتجهيز · ${cache.orders[i]?.code || ''}`,
+      async () => {
+        const r = await fetch(`${SUPPLIER_SB_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
+          method: 'PATCH',
+          headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+          body: JSON.stringify({ sent_to_picker_at: prevValue }),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const i2 = cache.orders.findIndex(o => o.id === orderId);
+        if (i2 >= 0) cache.orders[i2].sent_to_picker_at = prevValue;
+        renderOrders();
+      }
+    );
     showToast(isCurrentlySent ? 'أُلغي الإرسال' : '📦 تم الإرسال للتجهيز');
   } catch (e) { showToast('Error: ' + e.message); }
 }
@@ -2260,8 +2277,25 @@ async function toggleRevised(orderId, isCurrentlyRevised) {
       }
     }
     const i = cache.orders.findIndex(o => o.id === orderId);
+    const prevValue = i >= 0 ? cache.orders[i].revised_at : null;
     if (i >= 0) cache.orders[i].revised_at = newValue;
     renderOrders();
+    pushUndo(
+      isCurrentlyRevised
+        ? `أُلغيت المراجعة · ${cache.orders[i]?.code || ''}`
+        : `حُدد كمُراجَع · ${cache.orders[i]?.code || ''}`,
+      async () => {
+        const r = await fetch(`${SUPPLIER_SB_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
+          method: 'PATCH',
+          headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+          body: JSON.stringify({ revised_at: prevValue }),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const i2 = cache.orders.findIndex(o => o.id === orderId);
+        if (i2 >= 0) cache.orders[i2].revised_at = prevValue;
+        renderOrders();
+      }
+    );
     showToast(isCurrentlyRevised ? 'أُلغيت المراجعة' : '✓ تم تحديده كمُراجَع');
   } catch (e) { showToast('Error: ' + e.message); }
 }
@@ -2761,6 +2795,44 @@ function returnsAwaitingSupplier() {
   return out;
 }
 
+// ── Simple session-scoped undo stack ──────────────────────────────
+// Each entry: { label, revert: async () => void }. Mutators call
+// pushUndo(label, revertFn) immediately after a successful write;
+// the floating ↶ button on the orders screen pops the top entry and
+// runs revert(). State is in-memory only, cleared on page reload —
+// that's intentional: undo is for "oh, wrong row" within a session,
+// not for long-term rollback.
+const _undoStack = [];
+const UNDO_LIMIT = 25;
+function pushUndo(label, revert) {
+  _undoStack.push({ label, revert });
+  if (_undoStack.length > UNDO_LIMIT) _undoStack.shift();
+  renderUndoFab();
+}
+function renderUndoFab() {
+  const btn = document.getElementById('orders-undo-fab');
+  const lbl = document.getElementById('orders-undo-fab-label');
+  if (!btn) return;
+  const top = _undoStack[_undoStack.length - 1];
+  if (!top) { btn.style.display = 'none'; return; }
+  btn.style.display = 'inline-flex';
+  if (lbl) lbl.textContent = top.label || '';
+}
+async function undoLastOrdersAction() {
+  const top = _undoStack.pop();
+  if (!top) return;
+  renderUndoFab();
+  try {
+    await top.revert();
+    showToast('✓ تم التراجع');
+  } catch (e) {
+    _undoStack.push(top);
+    renderUndoFab();
+    showToast('Undo failed: ' + e.message);
+  }
+}
+window.undoLastOrdersAction = undoLastOrdersAction;
+
 // Open the Elashry pending-returns list as a modal, triggered by the
 // sticky floating button pinned to the bottom of the Orders screen. All
 // the real rendering happens in renderElashryPopup(), which is also what
@@ -2794,11 +2866,43 @@ function isElashryPopupOpen() {
   return !!document.getElementById('m-elashry-body');
 }
 
+// Lines already physically delivered to Elashry — marked sent_back with
+// the buy_price snapshot the admin considered current at the moment of
+// return. These populate the smaller history table under the pending
+// list in the popup, newest first.
+function returnsSentToSupplier() {
+  const products = cache.products || [];
+  const rets = (cache.orders || []).filter(o => o.status === 'Returned');
+  const out = [];
+  for (const o of rets) {
+    const items = Array.isArray(o.products) ? o.products : [];
+    items.forEach((p, idx) => {
+      if (p.supplier_return_status !== 'sent_back') return;
+      out.push({
+        orderId: o.id,
+        orderCode: o.code,
+        customer: o.customer_name || '',
+        returnedDate: o.date || '',
+        sentAt: p.supplier_return_sent_at || '',
+        lineIdx: idx,
+        code: p.code,
+        name: p.name || (products.find(pp => pp.code === p.code)?.name) || p.code,
+        qty: parseInt(p.qty || 1),
+        buyPrice: parseFloat(p.supplier_return_buy_price ?? lineBuyPrice(p, products)) || 0,
+      });
+    });
+  }
+  // Newest first by sentAt.
+  out.sort((a, b) => String(b.sentAt).localeCompare(String(a.sentAt)));
+  return out;
+}
+
 function renderElashryPopup() {
   const body = document.getElementById('m-elashry-body');
   if (!body) return;
   const lines = returnsAwaitingSupplier();
-  // Aggregate by product code for the per-SKU totals footer.
+  const sent = returnsSentToSupplier();
+  // Aggregate pending by product code for the per-SKU totals footer.
   const byCode = new Map();
   for (const l of lines) {
     const row = byCode.get(l.code) || { code: l.code, name: l.name, qty: 0 };
@@ -2813,50 +2917,74 @@ function renderElashryPopup() {
       <span style="flex:1;font-size:12px;color:var(--muted);font-weight:600">${lines.length} سطر · ${agg.length} SKU · ${totalUnits} قطعة</span>
       <button class="btn btn-primary btn-sm" onclick="sendReturnsToElashryWA()">📲 إرسال للأشري</button>
       <button class="btn btn-ghost btn-sm" onclick="copyReturnsToElashry()">📋 نسخ</button>
+      ${lines.length ? '<button class="btn btn-dark btn-sm" onclick="markAllReturnsSentToElashry()" title="تمييز كل القائمة كمُرسَلة لأشري">📤 تم إرسال الكل</button>' : ''}
     </div>
     <div style="padding:0 14px 10px;font-size:12px;color:var(--muted);line-height:1.55">
-      هذه القائمة تحتوي على الطلبات المرتجعة التي أضفتها من شاشة الطلبات بزر <b>📦 أرسل لقائمة الأشري</b>. زر <b>✕ أُعيد استخدامه</b> يُخرج قطعة واحدة من القائمة لأنك شحنتها لعميل آخر — دون الحاجة لإرسالها لأشري.
+      القائمة أعلاه = الطلبات المرتجعة التي أضفتها بزر <b>📦 أرسل لقائمة الأشري</b>. استخدم <b>📤 تم إرسالها</b> بعد ما توصّلها لأشري فعلياً — تنتقل للقائمة الصغيرة بالأسفل بسعر الشراء الحالي. أو <b>✕ أُعيد استخدامه</b> لو شحنتها لعميل آخر بدلاً من إرجاعها.
     </div>`;
 
-  if (!lines.length) {
-    body.innerHTML = header + '<div class="empty" style="margin:20px 0"><div class="empty-icon">📦</div>لا توجد مرتجعات في القائمة حالياً<br><span style="font-size:12px;color:var(--muted);font-weight:400">افتح شاشة الطلبات واضغط 📦 أرسل لقائمة الأشري على أي طلب مرتجع</span></div>';
-    return;
-  }
+  const pendingSection = !lines.length
+    ? '<div class="empty" style="margin:20px 0"><div class="empty-icon">📦</div>لا توجد مرتجعات في القائمة حالياً<br><span style="font-size:12px;color:var(--muted);font-weight:400">افتح شاشة الطلبات واضغط 📦 أرسل لقائمة الأشري على أي طلب مرتجع</span></div>'
+    : `<div class="table-wrap" style="margin:0 2px">
+        <table>
+          <thead><tr>
+            <th>Code</th><th>Product</th><th style="text-align:center">Qty</th>
+            <th>Buy price</th><th>Source order</th><th>Customer</th>
+            <th>Returned</th><th style="text-align:center">Actions</th>
+          </tr></thead>
+          <tbody>${lines.map(l => `
+            <tr>
+              <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(l.code)}</td>
+              <td>${esc(l.name)}</td>
+              <td style="text-align:center;font-family:var(--f-mono,monospace);font-weight:700">× ${l.qty}</td>
+              <td>EGP ${fmt(l.buyPrice)}</td>
+              <td><span class="badge b-orange">${esc(l.orderCode || '—')}</span></td>
+              <td style="font-size:12px">${esc(l.customer)}</td>
+              <td style="font-family:var(--f-mono,monospace);font-size:12px;color:var(--muted)">${esc(l.returnedDate)}</td>
+              <td style="text-align:center;white-space:nowrap">
+                <button class="btn btn-primary btn-xs" title="تم إرسالها لأشري بسعر الشراء الحالي" onclick="markReturnSentToElashry('${l.orderId}', ${l.lineIdx})">📤 تم إرسالها</button>
+                <button class="btn btn-ghost btn-xs" title="أُعيد استخدامه — لا يُرسل لأشري" onclick="markReturnReused('${l.orderId}', ${l.lineIdx})">✕ أُعيد استخدامه</button>
+              </td>
+            </tr>`).join('')}</tbody>
+          <tfoot>
+            <tr><th colspan="8" style="padding:12px 10px;background:var(--bg-2);text-align:start;font-size:13px;color:var(--ink-2)">📊 الإجمالي حسب المنتج (${agg.length} SKU · ${totalUnits} قطعة)</th></tr>
+            ${agg.map(r => `
+              <tr style="background:var(--bg-2)">
+                <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(r.code)}</td>
+                <td colspan="2">${esc(r.name)}</td>
+                <td colspan="5" style="text-align:end;font-family:var(--f-mono,monospace);font-weight:700;color:#0891b2">× ${r.qty}</td>
+              </tr>`).join('')}
+          </tfoot>
+        </table>
+      </div>`;
 
-  const rows = lines.map(l => `
-    <tr>
-      <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(l.code)}</td>
-      <td>${esc(l.name)}</td>
-      <td style="text-align:center;font-family:var(--f-mono,monospace);font-weight:700">× ${l.qty}</td>
-      <td>EGP ${fmt(l.buyPrice)}</td>
-      <td><span class="badge b-orange">${esc(l.orderCode || '—')}</span></td>
-      <td style="font-size:12px">${esc(l.customer)}</td>
-      <td style="font-family:var(--f-mono,monospace);font-size:12px;color:var(--muted)">${esc(l.returnedDate)}</td>
-      <td style="text-align:center"><button class="btn btn-ghost btn-xs" title="أُعيد استخدامه — لا يُرسل لأشري" onclick="markReturnReused('${l.orderId}', ${l.lineIdx})">✕ أُعيد استخدامه</button></td>
-    </tr>`).join('');
-
-  const footer = `
-    <tr><th colspan="8" style="padding:12px 10px;background:var(--bg-2);text-align:start;font-size:13px;color:var(--ink-2)">📊 الإجمالي حسب المنتج (${agg.length} SKU · ${totalUnits} قطعة)</th></tr>
-    ${agg.map(r => `
-      <tr style="background:var(--bg-2)">
-        <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(r.code)}</td>
-        <td colspan="2">${esc(r.name)}</td>
-        <td colspan="4" style="text-align:end;font-family:var(--f-mono,monospace);font-weight:700;color:#0891b2">× ${r.qty}</td>
-        <td></td>
-      </tr>`).join('')}`;
-
-  body.innerHTML = header + `
-    <div class="table-wrap" style="margin:0 2px">
-      <table>
+  const sentUnits = sent.reduce((s, l) => s + l.qty, 0);
+  const sentValue = sent.reduce((s, l) => s + l.qty * l.buyPrice, 0);
+  const sentSection = sent.length ? `
+    <div style="margin:18px 14px 4px;display:flex;flex-wrap:wrap;align-items:center;gap:8px">
+      <span style="font-weight:800;font-size:13px">📜 تم إرسالها لأشري</span>
+      <span style="font-size:12px;color:var(--muted)">${sent.length} سطر · ${sentUnits} قطعة · EGP ${fmt(sentValue)}</span>
+    </div>
+    <div class="table-wrap" style="margin:0 2px;opacity:.92">
+      <table style="font-size:12px">
         <thead><tr>
           <th>Code</th><th>Product</th><th style="text-align:center">Qty</th>
-          <th>Buy price</th><th>Source order</th><th>Customer</th>
-          <th>Returned</th><th></th>
+          <th>Buy price</th><th>Source order</th><th>Sent at</th><th></th>
         </tr></thead>
-        <tbody>${rows}</tbody>
-        <tfoot>${footer}</tfoot>
+        <tbody>${sent.map(l => `
+          <tr>
+            <td style="font-family:var(--f-mono,monospace)">${esc(l.code)}</td>
+            <td>${esc(l.name)}</td>
+            <td style="text-align:center;font-family:var(--f-mono,monospace);font-weight:700">× ${l.qty}</td>
+            <td style="font-family:var(--f-mono,monospace)">EGP ${fmt(l.buyPrice)}</td>
+            <td><span class="badge b-orange">${esc(l.orderCode || '—')}</span></td>
+            <td style="font-family:var(--f-mono,monospace);color:var(--muted)">${esc(String(l.sentAt).slice(0, 16).replace('T', ' '))}</td>
+            <td style="text-align:center"><button class="btn btn-ghost btn-xs" title="رجّع إلى قائمة الانتظار" onclick="unmarkReturnSentToElashry('${l.orderId}', ${l.lineIdx})">↶ تراجع</button></td>
+          </tr>`).join('')}</tbody>
       </table>
-    </div>`;
+    </div>` : '';
+
+  body.innerHTML = header + pendingSection + sentSection;
 }
 
 // Build the Arabic WhatsApp text that lists every warehouse-held return
@@ -2944,6 +3072,23 @@ async function toggleElashryReturn(orderId, isCurrentlyPending) {
     if (isElashryPopupOpen()) renderElashryPopup();
     renderElashryFab();
     requestAnimationFrame(() => window.scrollTo(0, prevScroll));
+    // Record undo. Revert flips pending_elashry_at back to the value it
+    // had before this click.
+    const prevValue = isCurrentlyPending ? (o.pending_elashry_at || new Date().toISOString()) : null;
+    pushUndo(
+      isCurrentlyPending
+        ? `أُخرج من قائمة الأشري · ${o.code || ''}`
+        : `أُضيف لقائمة الأشري · ${o.code || ''}`,
+      async () => {
+        await dbUpdate('orders', orderId, { pending_elashry_at: prevValue });
+        const i2 = cache.orders.findIndex(x => x.id === orderId);
+        if (i2 >= 0) cache.orders[i2].pending_elashry_at = prevValue;
+        renderOrders();
+        if (typeof renderReturns === 'function') renderReturns();
+        if (isElashryPopupOpen()) renderElashryPopup();
+        renderElashryFab();
+      }
+    );
     showToast(isCurrentlyPending ? 'أُخرج من قائمة الأشري' : '✓ أُضيف لقائمة الأشري');
   } catch (e) {
     const msg = String(e.message || '');
@@ -2962,10 +3107,172 @@ async function markReturnReused(orderId, lineIdx) {
   const line = (o.products || [])[lineIdx];
   if (!line) return;
   if (!confirm(`إخراج "${line.name || line.code}" × ${line.qty || 1} من قائمة المرتجعات؟\n(تم استخدامه في طلب آخر — لن يُرسل لأشري)`)) return;
+  // Snapshot the full line so Undo restores every field (status, buy
+  // price snapshot, sent timestamp — in case Undo is used after a chain
+  // of operations touched the same line).
+  const prev = { ...line };
   await _setReturnLineStatus(orderId, lineIdx, 'reused');
+  pushUndo(`أُعيد استخدامه · ${line.name || line.code}`, async () => {
+    const o2 = cache.orders.find(x => x.id === orderId);
+    if (!o2) return;
+    const items = Array.isArray(o2.products) ? o2.products.slice() : [];
+    if (lineIdx < 0 || lineIdx >= items.length) return;
+    items[lineIdx] = prev;
+    await dbUpdate('orders', orderId, { products: items });
+    const i = cache.orders.findIndex(x => x.id === orderId);
+    if (i >= 0) cache.orders[i].products = items;
+    if (isElashryPopupOpen()) renderElashryPopup();
+    renderOrders();
+  });
   showToast('✓ أُخرج من قائمة أشري');
 }
 window.markReturnReused = markReturnReused;
+
+// Mark a line as physically delivered to Elashry. We ALSO stamp the
+// current buy price onto the line (supplier_return_buy_price) and the
+// moment it happened (supplier_return_sent_at), so the history table
+// below can show what was accepted and when — even if the product's
+// live buy_price changes later. Undo reverts the whole thing.
+async function markReturnSentToElashry(orderId, lineIdx) {
+  const o = cache.orders.find(x => x.id === orderId);
+  if (!o) return;
+  const items = Array.isArray(o.products) ? o.products.slice() : [];
+  if (lineIdx < 0 || lineIdx >= items.length) return;
+  const line = items[lineIdx];
+  if (!line) return;
+  const bp = lineBuyPrice(line, cache.products || []);
+  const prev = { ...line };
+  items[lineIdx] = {
+    ...line,
+    supplier_return_status: 'sent_back',
+    supplier_return_buy_price: bp,
+    supplier_return_sent_at: new Date().toISOString(),
+  };
+  try {
+    await dbUpdate('orders', orderId, { products: items });
+    const i = cache.orders.findIndex(x => x.id === orderId);
+    if (i >= 0) cache.orders[i].products = items;
+    if (isElashryPopupOpen()) renderElashryPopup();
+    renderOrders();
+    renderElashryFab();
+    pushUndo(`أُرسلت لأشري · ${line.name || line.code}`, async () => {
+      const o2 = cache.orders.find(x => x.id === orderId);
+      if (!o2) return;
+      const items2 = Array.isArray(o2.products) ? o2.products.slice() : [];
+      items2[lineIdx] = prev;
+      await dbUpdate('orders', orderId, { products: items2 });
+      const i2 = cache.orders.findIndex(x => x.id === orderId);
+      if (i2 >= 0) cache.orders[i2].products = items2;
+      if (isElashryPopupOpen()) renderElashryPopup();
+      renderOrders();
+      renderElashryFab();
+    });
+    showToast(`📤 ${line.name || line.code} · EGP ${fmt(bp)}`);
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+window.markReturnSentToElashry = markReturnSentToElashry;
+
+// Push every currently-pending line into the "sent to Elashry" history
+// at once, each with its own buy-price snapshot. Confirms with the
+// total piece count. One combined undo entry rolls the whole batch back.
+async function markAllReturnsSentToElashry() {
+  const pending = returnsAwaitingSupplier();
+  if (!pending.length) { showToast('لا توجد مرتجعات في القائمة'); return; }
+  const total = pending.reduce((s, l) => s + l.qty, 0);
+  if (!confirm(`تحديد كل القائمة (${pending.length} سطر · ${total} قطعة) كمُرسَلة لأشري؟`)) return;
+  // Group targets by orderId so we PATCH each order once.
+  const byOrder = new Map();
+  for (const l of pending) {
+    if (!byOrder.has(l.orderId)) byOrder.set(l.orderId, []);
+    byOrder.get(l.orderId).push(l.lineIdx);
+  }
+  const snapshots = []; // for undo
+  const now = new Date().toISOString();
+  try {
+    for (const [orderId, idxs] of byOrder) {
+      const o = cache.orders.find(x => x.id === orderId);
+      if (!o) continue;
+      const items = Array.isArray(o.products) ? o.products.slice() : [];
+      const prev = idxs.map(i => ({ i, line: { ...items[i] } }));
+      for (const i of idxs) {
+        const line = items[i];
+        if (!line) continue;
+        items[i] = {
+          ...line,
+          supplier_return_status: 'sent_back',
+          supplier_return_buy_price: lineBuyPrice(line, cache.products || []),
+          supplier_return_sent_at: now,
+        };
+      }
+      await dbUpdate('orders', orderId, { products: items });
+      const ci = cache.orders.findIndex(x => x.id === orderId);
+      if (ci >= 0) cache.orders[ci].products = items;
+      snapshots.push({ orderId, prev });
+    }
+    if (isElashryPopupOpen()) renderElashryPopup();
+    renderOrders();
+    renderElashryFab();
+    pushUndo(`أُرسلت للكل · ${total} قطعة`, async () => {
+      for (const { orderId, prev } of snapshots) {
+        const o2 = cache.orders.find(x => x.id === orderId);
+        if (!o2) continue;
+        const items2 = Array.isArray(o2.products) ? o2.products.slice() : [];
+        for (const { i, line } of prev) items2[i] = line;
+        await dbUpdate('orders', orderId, { products: items2 });
+        const ci = cache.orders.findIndex(x => x.id === orderId);
+        if (ci >= 0) cache.orders[ci].products = items2;
+      }
+      if (isElashryPopupOpen()) renderElashryPopup();
+      renderOrders();
+      renderElashryFab();
+    });
+    showToast(`📤 أُرسلت ${total} قطعة لأشري ✓`);
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+window.markAllReturnsSentToElashry = markAllReturnsSentToElashry;
+
+// Pull a line back out of the "sent to Elashry" history and into pending.
+// Used by the ↶ تراجع button on each history row (independent of the
+// global undo stack — useful when the admin wants to revert a specific
+// row from an older session). Clears the buy-price/sent-at snapshot too
+// so re-sending stamps the current price fresh.
+async function unmarkReturnSentToElashry(orderId, lineIdx) {
+  const o = cache.orders.find(x => x.id === orderId);
+  if (!o) return;
+  const items = Array.isArray(o.products) ? o.products.slice() : [];
+  if (lineIdx < 0 || lineIdx >= items.length) return;
+  const line = items[lineIdx];
+  if (!line) return;
+  const prev = { ...line };
+  const next = { ...line };
+  delete next.supplier_return_status;
+  delete next.supplier_return_buy_price;
+  delete next.supplier_return_sent_at;
+  items[lineIdx] = next;
+  try {
+    await dbUpdate('orders', orderId, { products: items });
+    const i = cache.orders.findIndex(x => x.id === orderId);
+    if (i >= 0) cache.orders[i].products = items;
+    if (isElashryPopupOpen()) renderElashryPopup();
+    renderOrders();
+    renderElashryFab();
+    pushUndo(`تراجع عن الإرسال · ${line.name || line.code}`, async () => {
+      const o2 = cache.orders.find(x => x.id === orderId);
+      if (!o2) return;
+      const items2 = Array.isArray(o2.products) ? o2.products.slice() : [];
+      items2[lineIdx] = prev;
+      await dbUpdate('orders', orderId, { products: items2 });
+      const i2 = cache.orders.findIndex(x => x.id === orderId);
+      if (i2 >= 0) cache.orders[i2].products = items2;
+      if (isElashryPopupOpen()) renderElashryPopup();
+      renderOrders();
+      renderElashryFab();
+    });
+    showToast('↶ تم رجوعها إلى قائمة الانتظار');
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+window.unmarkReturnSentToElashry = unmarkReturnSentToElashry;
+
 window.sendReturnsToElashryWA = sendReturnsToElashryWA;
 window.copyReturnsToElashry = copyReturnsToElashry;
 
