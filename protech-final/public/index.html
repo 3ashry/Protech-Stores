@@ -199,6 +199,7 @@
       <button class="btn btn-ghost btn-sm" onclick="downloadOrdersFullReportExcel()" style="margin-inline-start:8px">📊 Full Report (Excel)</button>
       <button class="btn btn-ghost btn-sm" onclick="downloadDeliveredOrdersExcel()" style="margin-inline-start:8px">📦 Delivered — Full Report</button>
       <button class="btn btn-ghost btn-sm" onclick="downloadReturnsFullReportExcel()" style="margin-inline-start:8px">↩️ Returns — Full Report</button>
+      <button class="btn btn-ghost btn-sm" onclick="openElashryReturnsPopup()" style="margin-inline-start:8px">📦 قائمة الأشري</button>
     </div>
     <div class="card">
       <div class="card-header" style="flex-wrap:wrap;gap:10px">
@@ -235,39 +236,6 @@
       </div>
     </div>
 
-    <!-- Returns physically back in the admin's warehouse but not yet sent
-         to Elashry. Each row is one product line of a Returned order with
-         warehouse_confirmed=true. The ✕ button marks the line as "reused"
-         (shipped to another customer) so it drops out of the list without
-         going back to the supplier. The Send button copies/opens WhatsApp
-         with the full list the admin should hand to Elashry. -->
-    <div class="card" style="margin-top:14px">
-      <div class="card-header" style="flex-wrap:wrap;gap:8px">
-        <span class="card-title">📦 قائمة المرتجعات للأشري</span>
-        <span id="ret-wh-summary" style="margin-inline-start:auto;font-size:12px;color:var(--muted);font-weight:600"></span>
-        <button class="btn btn-primary btn-sm" onclick="sendReturnsToElashryWA()">📲 إرسال القائمة للأشري</button>
-        <button class="btn btn-ghost btn-sm" onclick="copyReturnsToElashry()">📋 نسخ</button>
-      </div>
-      <div style="padding:10px 16px;font-size:12px;color:var(--muted);line-height:1.55">
-        هذه القائمة تحتوي على الطلبات المرتجعة التي أضفتها يدوياً من شاشة الطلبات بزر <b>📦 أرسل لقائمة الأشري</b>. زر <b>✕ أُعيد استخدامه</b> يُخرج قطعة واحدة من القائمة لأنك شحنتها لعميل آخر — دون الحاجة لإرسالها لأشري.
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr>
-            <th>Code</th>
-            <th>Product</th>
-            <th style="text-align:center">Qty</th>
-            <th>Buy price</th>
-            <th>Source order</th>
-            <th>Customer</th>
-            <th>Returned</th>
-            <th></th>
-          </tr></thead>
-          <tbody id="ret-warehouse-tbody"></tbody>
-          <tfoot id="ret-warehouse-tfoot"></tfoot>
-        </table>
-      </div>
-    </div>
   </div>
 
   <!-- FINANCIALS -->
@@ -884,6 +852,19 @@
       <button class="close-btn" onclick="closeModal()">✕</button>
     </div>
     <div id="m-detail-body"></div>
+  </div>
+</div>
+
+<!-- Elashry pending-returns list — opened from the Orders screen header
+     via openElashryReturnsPopup(). Rendered inside #m-elashry-body. -->
+<div id="tpl-elashry-returns" style="display:none">
+  <div class="modal" style="max-width:1000px">
+    <span class="modal-handle"></span>
+    <div class="modal-header">
+      <span class="modal-title">📦 قائمة المرتجعات للأشري</span>
+      <button class="close-btn" onclick="closeModal()">✕</button>
+    </div>
+    <div id="m-elashry-body" style="padding:4px 2px"></div>
   </div>
 </div>
 
