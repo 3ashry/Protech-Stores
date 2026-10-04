@@ -3422,10 +3422,30 @@ async function toggleElashryReturn(orderId, isCurrentlyPending) {
     if (!confirm(`إضافة طلب ${o.code || ''} إلى قائمة المرتجعات للأشري؟\n(${n} قطعة · ${o.customer_name || ''})`)) return;
   }
   const newValue = isCurrentlyPending ? null : new Date().toISOString();
+  // Snapshot prior line statuses so Undo can restore them even when we
+  // clear them below. On ADD (not currently pending), we also wipe each
+  // line's supplier_return_status so the order shows up fresh in the
+  // popup — otherwise previously-dispositioned lines stay hidden and
+  // the admin sees "nothing in list" even though the row is tagged.
+  const prevProducts = Array.isArray(o.products) ? o.products.map(p => ({ ...p })) : null;
+  const resetProducts = (!isCurrentlyPending && Array.isArray(o.products))
+    ? o.products.map(p => {
+        const q = { ...p };
+        delete q.supplier_return_status;
+        delete q.supplier_return_buy_price;
+        delete q.supplier_return_sent_at;
+        return q;
+      })
+    : null;
   try {
-    await dbUpdate('orders', orderId, { pending_elashry_at: newValue });
+    const patch = { pending_elashry_at: newValue };
+    if (resetProducts) patch.products = resetProducts;
+    await dbUpdate('orders', orderId, patch);
     const i = cache.orders.findIndex(x => x.id === orderId);
-    if (i >= 0) cache.orders[i].pending_elashry_at = newValue;
+    if (i >= 0) {
+      cache.orders[i].pending_elashry_at = newValue;
+      if (resetProducts) cache.orders[i].products = resetProducts;
+    }
     const prevScroll = window.scrollY;
     renderOrders();
     if (typeof renderReturns === 'function') renderReturns();
@@ -3435,16 +3455,23 @@ async function toggleElashryReturn(orderId, isCurrentlyPending) {
     renderWarehouseFab();
     requestAnimationFrame(() => window.scrollTo(0, prevScroll));
     // Record undo. Revert flips pending_elashry_at back to the value it
-    // had before this click.
+    // had before this click AND restores any product-line dispositions
+    // we may have wiped when adding (so a mistaken add + undo gives the
+    // admin back their previous history entries intact).
     const prevValue = isCurrentlyPending ? (o.pending_elashry_at || new Date().toISOString()) : null;
     pushUndo(
       isCurrentlyPending
         ? `أُخرج من قائمة الأشري · ${o.code || ''}`
         : `أُضيف لقائمة الأشري · ${o.code || ''}`,
       async () => {
-        await dbUpdate('orders', orderId, { pending_elashry_at: prevValue });
+        const revertPatch = { pending_elashry_at: prevValue };
+        if (resetProducts && prevProducts) revertPatch.products = prevProducts;
+        await dbUpdate('orders', orderId, revertPatch);
         const i2 = cache.orders.findIndex(x => x.id === orderId);
-        if (i2 >= 0) cache.orders[i2].pending_elashry_at = prevValue;
+        if (i2 >= 0) {
+          cache.orders[i2].pending_elashry_at = prevValue;
+          if (resetProducts && prevProducts) cache.orders[i2].products = prevProducts;
+        }
         renderOrders();
         if (typeof renderReturns === 'function') renderReturns();
         if (isElashryPopupOpen()) renderElashryPopup();
