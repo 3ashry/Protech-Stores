@@ -4448,12 +4448,20 @@ function owesElashry(o) {
   if (o.status === 'Returned' && !o.warehouse_confirmed) return true;
   return false;
 }
-// Use the product's CURRENT buy price (matched by code); fall back to the snapshot
-// stored on the order line only if the product no longer exists in inventory.
+// Prefer the per-order snapshot (orders.products[i].buy_price). It's set
+// explicitly on three paths: order creation (snapshotted from the product's
+// then-current buy price), the view-modal "💾 Save buy prices (this order
+// only)" button, and the invoice-match propagator that writes list × 0.97
+// back to every linked order. Falling back to the product's live buy_price
+// would silently clobber all three, so we only reach for it when the line
+// has no snapshot (missing on legacy orders written before this field
+// existed).
 function lineBuyPrice(p, products) {
+  if (p && p.buy_price != null && p.buy_price !== '' && !isNaN(parseFloat(p.buy_price))) {
+    return parseFloat(p.buy_price) || 0;
+  }
   const pr = products.find(pp => pp.code === p.code);
   if (pr && pr.buy_price != null && pr.buy_price !== '') return parseFloat(pr.buy_price) || 0;
-  if (p && p.buy_price != null && p.buy_price !== '') return parseFloat(p.buy_price) || 0;
   return 0;
 }
 
