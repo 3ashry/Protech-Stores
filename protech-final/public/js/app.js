@@ -2947,38 +2947,20 @@ function isElashryPopupOpen() {
   return !!document.getElementById('m-elashry-body');
 }
 
-function isWarehousePopupOpen() {
-  return !!document.getElementById('m-warehouse-body');
-}
+// Shim: the Elashry popup used to be split from a separate warehouse
+// popup. The split is gone now (everything lives in قائمة الأشري), but
+// mutators still call isWarehousePopupOpen() / renderWarehousePopup() /
+// renderWarehouseFab() alongside their Elashry equivalents. Keep them
+// as no-ops rather than hunting down every call site — net overhead is
+// zero and the mutators stay readable.
+function isWarehousePopupOpen() { return false; }
+function renderWarehousePopup() { /* no-op — see shim comment above */ }
+function renderWarehouseFab() { /* no-op — see shim comment above */ }
 
-// Open the warehouse-returns popup from the sticky 📥 FAB.
-function openWarehouseReturnsPopup() {
-  showModal('tpl-warehouse-returns');
-  renderWarehousePopup();
-}
-window.openWarehouseReturnsPopup = openWarehouseReturnsPopup;
-
-function renderWarehouseFab() {
-  const btn = document.getElementById('warehouse-fab');
-  const badge = document.getElementById('warehouse-fab-count');
-  if (!btn || !badge) return;
-  const total = returnsInWarehouse().reduce((s, l) => s + l.qty, 0);
-  badge.textContent = String(total);
-  btn.style.display = total > 0 ? 'inline-flex' : 'none';
-}
-window.renderWarehouseFab = renderWarehouseFab;
-
-// The warehouse popup lists every unit physically on the admin's shelves
-// (status=Returned AND warehouse_confirmed=true AND not yet reused/sent_back).
-// Two per-row actions:
-//   ♻️ أعد الاستخدام  — mark as reused in another order (keeps the unit
-//                         in inventory; stamps buy_price for the audit log).
-//   📤 أعد لأشري      — mark as sent back to the supplier; stamps the
-//                         current buy_price and the send-timestamp;
-//                         appears in the history list below.
-// The history list below is the same supplier_return_status='sent_back'
-// view the Elashry popup shows, so both popups stay consistent.
-function renderWarehousePopup() {
+// Kept for internal reference by renderElashryPopup only (not called
+// from any UI entry point now that the dedicated warehouse popup is
+// gone).
+function _unusedRenderWarehousePopup() {
   const body = document.getElementById('m-warehouse-body');
   if (!body) return;
   const lines = returnsInWarehouse();
@@ -3240,10 +3222,10 @@ function renderElashryPopup() {
       <span style="flex:1;font-size:12px;color:var(--muted);font-weight:600">${lines.length} سطر · ${agg.length} SKU · ${totalUnits} قطعة</span>
       <button class="btn btn-primary btn-sm" onclick="sendReturnsToElashryWA()">📲 إرسال للأشري</button>
       <button class="btn btn-ghost btn-sm" onclick="copyReturnsToElashry()">📋 نسخ</button>
-      ${lines.length ? '<button class="btn btn-dark btn-sm" onclick="markAllReturnsSentToElashry()" title="تمييز كل القائمة كمُرسَلة لأشري">📤 تم إرسال الكل</button>' : ''}
+      ${lines.length ? '<button class="btn btn-dark btn-sm" onclick="markAllReturnsSentToElashry()" title="تمييز كل القائمة كمُرجَعة للمخزن الرئيسي">🏭 أرجع الكل للمخزن</button>' : ''}
     </div>
     <div style="padding:0 14px 10px;font-size:12px;color:var(--muted);line-height:1.55">
-      القائمة أعلاه = الطلبات المرتجعة التي أضفتها بزر <b>📦 أرسل لقائمة الأشري</b>. استخدم <b>📤 تم إرسالها</b> بعد ما توصّلها لأشري فعلياً — تنتقل للقائمة الصغيرة بالأسفل بسعر الشراء الحالي. أو <b>✕ أُعيد استخدامه</b> لو شحنتها لعميل آخر بدلاً من إرجاعها.
+      كل طلب تضغط <b>📦 بقائمة الأشري</b> على سطره في شاشة الطلبات يظهر هنا تلقائياً. لكل قطعة قراران: <b>💰 بيع</b> تبقى في المخزون لتُباع في طلب جديد بنفس سعر الشراء، أو <b>🏭 رجوع للمخزن الرئيسي</b> تنزل للقائمة بالأسفل بسعر شرائها الحالي.
     </div>`;
 
   const pendingSection = !lines.length
@@ -3265,8 +3247,8 @@ function renderElashryPopup() {
               <td style="font-size:12px">${esc(l.customer)}</td>
               <td style="font-family:var(--f-mono,monospace);font-size:12px;color:var(--muted)">${esc(l.returnedDate)}</td>
               <td style="text-align:center;white-space:nowrap">
-                <button class="btn btn-primary btn-xs" title="تم إرسالها لأشري بسعر الشراء الحالي" onclick="markReturnSentToElashry('${l.orderId}', ${l.lineIdx})">📤 تم إرسالها</button>
-                <button class="btn btn-ghost btn-xs" title="أُعيد استخدامه — لا يُرسل لأشري" onclick="markReturnReused('${l.orderId}', ${l.lineIdx})">✕ أُعيد استخدامه</button>
+                <button class="btn btn-dark btn-xs" title="بيع هذه القطعة — تبقى في المخزون بنفس سعر الشراء" onclick="reuseWarehouseReturn('${l.orderId}', ${l.lineIdx})">💰 بيع</button>
+                <button class="btn btn-primary btn-xs" title="رجوع للمخزن الرئيسي بسعر الشراء الحالي" onclick="markReturnSentToElashry('${l.orderId}', ${l.lineIdx})">🏭 رجوع للمخزن</button>
               </td>
             </tr>`).join('')}</tbody>
           <tfoot>
@@ -3285,14 +3267,14 @@ function renderElashryPopup() {
   const sentValue = sent.reduce((s, l) => s + l.qty * l.buyPrice, 0);
   const sentSection = sent.length ? `
     <div style="margin:18px 14px 4px;display:flex;flex-wrap:wrap;align-items:center;gap:8px">
-      <span style="font-weight:800;font-size:13px">📜 تم إرسالها لأشري</span>
+      <span style="font-weight:800;font-size:13px">🏭 تم إرجاعها للمخزن الرئيسي</span>
       <span style="font-size:12px;color:var(--muted)">${sent.length} سطر · ${sentUnits} قطعة · EGP ${fmt(sentValue)}</span>
     </div>
     <div class="table-wrap" style="margin:0 2px;opacity:.92">
       <table style="font-size:12px">
         <thead><tr>
           <th>Code</th><th>Product</th><th style="text-align:center">Qty</th>
-          <th>Buy price</th><th>Source order</th><th>Sent at</th><th></th>
+          <th>Buy price</th><th>Source order</th><th>Returned at</th><th></th>
         </tr></thead>
         <tbody>${sent.map(l => `
           <tr>
