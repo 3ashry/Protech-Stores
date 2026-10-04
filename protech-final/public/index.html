@@ -199,7 +199,6 @@
       <button class="btn btn-ghost btn-sm" onclick="downloadOrdersFullReportExcel()" style="margin-inline-start:8px">📊 Full Report (Excel)</button>
       <button class="btn btn-ghost btn-sm" onclick="downloadDeliveredOrdersExcel()" style="margin-inline-start:8px">📦 Delivered — Full Report</button>
       <button class="btn btn-ghost btn-sm" onclick="downloadReturnsFullReportExcel()" style="margin-inline-start:8px">↩️ Returns — Full Report</button>
-      <button class="btn btn-ghost btn-sm" onclick="openElashryReturnsPopup()" style="margin-inline-start:8px">📦 قائمة الأشري</button>
     </div>
     <div class="card">
       <div class="card-header" style="flex-wrap:wrap;gap:10px">
@@ -217,6 +216,16 @@
         </table>
       </div>
     </div>
+
+    <!-- Floating "open Elashry list" button pinned to the bottom of the
+         orders screen. Visible only while the orders screen is active
+         (every other .screen is display:none). Badge shows the live
+         piece-count pending Elashry; count updates on every renderOrders. -->
+    <button type="button" id="elashry-fab" onclick="openElashryReturnsPopup()"
+      style="position:fixed;bottom:20px;inset-inline-end:20px;z-index:50;display:inline-flex;align-items:center;gap:10px;padding:14px 20px;border:0;border-radius:999px;background:#F26A21;color:#fff;font-weight:800;font-size:14px;box-shadow:0 10px 24px rgba(242,106,33,.35);cursor:pointer">
+      <span>📦 قائمة الأشري</span>
+      <span id="elashry-fab-count" style="min-width:22px;height:22px;padding:0 6px;border-radius:999px;background:#fff;color:#F26A21;font-size:12px;font-weight:800;display:inline-flex;align-items:center;justify-content:center">0</span>
+    </button>
   </div>
 
   <!-- RETURNS -->

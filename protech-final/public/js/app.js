@@ -1980,6 +1980,7 @@ function renderOrders() {
       </div></td>
     </tr>`).join('') : `<tr><td colspan="6"><div class="empty"><div class="empty-icon">🛒</div>${rawQ ? 'No orders match “' + esc(rawQ) + '”' : 'No orders yet'}</div></td></tr>`;
   renderPickupBadge();
+  renderElashryFab();
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2760,15 +2761,30 @@ function returnsAwaitingSupplier() {
   return out;
 }
 
-// Open the Elashry pending-returns list as a modal from the Orders screen
-// header. All of the real rendering happens in renderElashryPopup(), which
-// is also what the per-row Remove and the orders-row toggle call back into
-// when the popup is already open — so the list stays live without closing.
+// Open the Elashry pending-returns list as a modal, triggered by the
+// sticky floating button pinned to the bottom of the Orders screen. All
+// the real rendering happens in renderElashryPopup(), which is also what
+// the per-row Remove and the orders-row toggle call back into when the
+// popup is already open — so the list stays live without closing.
 function openElashryReturnsPopup() {
   showModal('tpl-elashry-returns');
   renderElashryPopup();
 }
 window.openElashryReturnsPopup = openElashryReturnsPopup;
+
+// Keep the FAB badge in sync with the real pending count. Hidden entirely
+// when nothing is pending so the button doesn't claim screen real estate
+// in the empty state. Called from renderOrders (list redraws) and from
+// the two mutators (toggle + ✕ remove) so every click updates it.
+function renderElashryFab() {
+  const btn = document.getElementById('elashry-fab');
+  const badge = document.getElementById('elashry-fab-count');
+  if (!btn || !badge) return;
+  const total = returnsAwaitingSupplier().reduce((s, l) => s + l.qty, 0);
+  badge.textContent = String(total);
+  btn.style.display = total > 0 ? 'inline-flex' : 'none';
+}
+window.renderElashryFab = renderElashryFab;
 
 // True when the Elashry popup is currently open — handlers use this to
 // refresh its content after they mutate state so the admin sees changes
@@ -2896,6 +2912,7 @@ async function _setReturnLineStatus(orderId, lineIdx, status) {
     const prevScroll = window.scrollY;
     renderReturns();
     if (isElashryPopupOpen()) renderElashryPopup();
+    renderElashryFab();
     requestAnimationFrame(() => window.scrollTo(0, prevScroll));
   } catch (e) {
     showToast('Error: ' + e.message);
@@ -2925,6 +2942,7 @@ async function toggleElashryReturn(orderId, isCurrentlyPending) {
     renderOrders();
     if (typeof renderReturns === 'function') renderReturns();
     if (isElashryPopupOpen()) renderElashryPopup();
+    renderElashryFab();
     requestAnimationFrame(() => window.scrollTo(0, prevScroll));
     showToast(isCurrentlyPending ? 'أُخرج من قائمة الأشري' : '✓ أُضيف لقائمة الأشري');
   } catch (e) {
