@@ -3156,10 +3156,15 @@ function returnsInWarehouseNotYetListed() {
 // in the admin's warehouse they want to decide its fate from one view:
 // reuse it in another order, or hand it back to Elashry. Lines already
 // closed out (reused/sent_back) are excluded.
+//
+// Treats `pending_elashry_at` as equivalent to a physical presence:
+// adding an order to the Elashry list implies the admin has that unit
+// in hand (that's why they're ready to ship it to the supplier), so
+// those orders show up here even if the ✅ Received step was skipped.
 function returnsInWarehouse() {
   const products = cache.products || [];
   const rets = (cache.orders || []).filter(o =>
-    o.status === 'Returned' && o.warehouse_confirmed === true
+    o.status === 'Returned' && (o.warehouse_confirmed === true || !!o.pending_elashry_at)
   );
   const out = [];
   for (const o of rets) {
