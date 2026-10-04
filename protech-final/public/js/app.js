@@ -3243,51 +3243,77 @@ function renderElashryPopup() {
       كل طلب تضغط <b>📦 بقائمة الأشري</b> على سطره في شاشة الطلبات يظهر هنا تلقائياً. لكل قطعة قراران: <b>💰 بيع</b> تبقى في المخزون لتُباع في طلب جديد بنفس سعر الشراء، أو <b>🏭 رجوع للمخزن الرئيسي</b> تنزل للقائمة بالأسفل بسعر شرائها الحالي.
     </div>`;
 
+  // Group pending lines by their source order so each order gets its own
+  // header row with: the order code, customer, how many lines exist on
+  // the order (DB truth), how many are still open, and a 🔄 reset button
+  // that re-opens every dispositioned line of that order. The header's
+  // "N لائحة · M مفتوحة" badge is the diagnostic the admin asked for —
+  // if the DB says the order has only 1 line when they expect 2, it
+  // shows here instead of the UI silently hiding anything.
+  const groups = new Map();
+  for (const l of lines) {
+    if (!groups.has(l.orderId)) {
+      groups.set(l.orderId, { orderId: l.orderId, orderCode: l.orderCode, customer: l.customer, returnedDate: l.returnedDate, items: [] });
+    }
+    groups.get(l.orderId).items.push(l);
+  }
+
+  const renderRow = (l) => {
+    const actions = l.status === 'reused'
+      ? `<span class="badge b-success" style="font-size:11px">💰 مُباع</span>
+         <button class="btn btn-ghost btn-xs" title="إلغاء — رجّع للقائمة" onclick="unmarkReturnSentToElashry('${l.orderId}', ${l.lineIdx})">↶</button>`
+      : l.status === 'sent_back'
+      ? `<span class="badge b-warning" style="font-size:11px">🏭 رجع للمخزن</span>
+         <button class="btn btn-ghost btn-xs" title="إلغاء — رجّع للقائمة" onclick="unmarkReturnSentToElashry('${l.orderId}', ${l.lineIdx})">↶</button>`
+      : `<button class="btn btn-dark btn-xs" title="بيع هذه القطعة — تبقى في المخزون بنفس سعر الشراء" onclick="reuseWarehouseReturn('${l.orderId}', ${l.lineIdx})">💰 بيع</button>
+         <button class="btn btn-primary btn-xs" title="رجوع للمخزن الرئيسي بسعر الشراء الحالي" onclick="markReturnSentToElashry('${l.orderId}', ${l.lineIdx})">🏭 رجوع للمخزن</button>`;
+    return `<tr${l.status ? ' style="opacity:.78"' : ''}>
+      <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(l.code || '—')}</td>
+      <td>${esc(l.name)}</td>
+      <td style="text-align:center;font-family:var(--f-mono,monospace);font-weight:700">× ${l.qty}</td>
+      <td>EGP ${fmt(l.buyPrice)}</td>
+      <td style="font-family:var(--f-mono,monospace);font-size:12px;color:var(--muted)">${esc(l.returnedDate)}</td>
+      <td style="text-align:center;white-space:nowrap">${actions}</td>
+    </tr>`;
+  };
+
   const pendingSection = !lines.length
     ? '<div class="empty" style="margin:20px 0"><div class="empty-icon">📦</div>لا توجد مرتجعات في القائمة حالياً<br><span style="font-size:12px;color:var(--muted);font-weight:400">افتح شاشة الطلبات واضغط 📦 أرسل لقائمة الأشري على أي طلب مرتجع</span></div>'
-    : `<div class="table-wrap" style="margin:0 2px">
+    : Array.from(groups.values()).map(g => {
+        const openCount = g.items.filter(x => !x.status).length;
+        const dispCount = g.items.length - openCount;
+        return `<div style="margin:0 2px 14px">
+          <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 10px;background:var(--bg-2);border-radius:8px 8px 0 0;border:1px solid var(--line);border-bottom:0">
+            <span class="badge b-orange" style="font-size:12px">${esc(g.orderCode || '—')}</span>
+            <span style="font-size:12px;font-weight:700">${esc(g.customer || '')}</span>
+            <span style="font-size:11px;color:var(--muted)">${g.items.length} سطر · ${openCount} مفتوحة${dispCount ? ` · ${dispCount} مُغلقة` : ''}</span>
+            ${dispCount ? `<button class="btn btn-ghost btn-xs" style="margin-inline-start:auto" title="إعادة فتح كل سطور هذا الطلب" onclick="resetOrderLineDispositions('${g.orderId}')">🔄 إعادة فتح الكل</button>` : ''}
+          </div>
+          <div class="table-wrap" style="margin:0">
+            <table style="margin:0">
+              <thead><tr>
+                <th>Code</th><th>Product</th><th style="text-align:center">Qty</th>
+                <th>Buy price</th><th>Returned</th><th style="text-align:center">Actions</th>
+              </tr></thead>
+              <tbody>${g.items.map(renderRow).join('')}</tbody>
+            </table>
+          </div>
+        </div>`;
+      }).join('')
+      + (agg.length ? `
+      <div class="table-wrap" style="margin:0 2px">
         <table>
-          <thead><tr>
-            <th>Code</th><th>Product</th><th style="text-align:center">Qty</th>
-            <th>Buy price</th><th>Source order</th><th>Customer</th>
-            <th>Returned</th><th style="text-align:center">Actions</th>
-          </tr></thead>
-          <tbody>${lines.map(l => {
-            // Dispositioned lines (reused/sent_back) stay visible here as
-            // well, with a status chip in the Actions column and a ↶ to
-            // pull them back to pending — so the admin can always see
-            // every line of an order they added to the list.
-            const actions = l.status === 'reused'
-              ? `<span class="badge b-success" style="font-size:11px">💰 مُباع</span>
-                 <button class="btn btn-ghost btn-xs" title="إلغاء — رجّع للقائمة" onclick="unmarkReturnSentToElashry('${l.orderId}', ${l.lineIdx})">↶</button>`
-              : l.status === 'sent_back'
-              ? `<span class="badge b-warning" style="font-size:11px">🏭 رجع للمخزن</span>
-                 <button class="btn btn-ghost btn-xs" title="إلغاء — رجّع للقائمة" onclick="unmarkReturnSentToElashry('${l.orderId}', ${l.lineIdx})">↶</button>`
-              : `<button class="btn btn-dark btn-xs" title="بيع هذه القطعة — تبقى في المخزون بنفس سعر الشراء" onclick="reuseWarehouseReturn('${l.orderId}', ${l.lineIdx})">💰 بيع</button>
-                 <button class="btn btn-primary btn-xs" title="رجوع للمخزن الرئيسي بسعر الشراء الحالي" onclick="markReturnSentToElashry('${l.orderId}', ${l.lineIdx})">🏭 رجوع للمخزن</button>`;
-            return `
-            <tr${l.status ? ' style="opacity:.78"' : ''}>
-              <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(l.code || '—')}</td>
-              <td>${esc(l.name)}</td>
-              <td style="text-align:center;font-family:var(--f-mono,monospace);font-weight:700">× ${l.qty}</td>
-              <td>EGP ${fmt(l.buyPrice)}</td>
-              <td><span class="badge b-orange">${esc(l.orderCode || '—')}</span></td>
-              <td style="font-size:12px">${esc(l.customer)}</td>
-              <td style="font-family:var(--f-mono,monospace);font-size:12px;color:var(--muted)">${esc(l.returnedDate)}</td>
-              <td style="text-align:center;white-space:nowrap">${actions}</td>
-            </tr>`;
-          }).join('')}</tbody>
           <tfoot>
-            <tr><th colspan="8" style="padding:12px 10px;background:var(--bg-2);text-align:start;font-size:13px;color:var(--ink-2)">📊 الإجمالي حسب المنتج (${agg.length} SKU · ${totalUnits} قطعة)</th></tr>
+            <tr><th colspan="6" style="padding:12px 10px;background:var(--bg-2);text-align:start;font-size:13px;color:var(--ink-2)">📊 الإجمالي حسب المنتج (${agg.length} SKU · ${totalUnits} قطعة مفتوحة)</th></tr>
             ${agg.map(r => `
               <tr style="background:var(--bg-2)">
                 <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(r.code)}</td>
-                <td colspan="2">${esc(r.name)}</td>
-                <td colspan="5" style="text-align:end;font-family:var(--f-mono,monospace);font-weight:700;color:#0891b2">× ${r.qty}</td>
+                <td colspan="3">${esc(r.name)}</td>
+                <td colspan="2" style="text-align:end;font-family:var(--f-mono,monospace);font-weight:700;color:#0891b2">× ${r.qty}</td>
               </tr>`).join('')}
           </tfoot>
         </table>
-      </div>`;
+      </div>` : '');
 
   const sentUnits = sent.reduce((s, l) => s + l.qty, 0);
   const sentValue = sent.reduce((s, l) => s + l.qty * l.buyPrice, 0);
@@ -3647,6 +3673,50 @@ async function markAllReturnsSentToElashry() {
   } catch (e) { showToast('Error: ' + e.message); }
 }
 window.markAllReturnsSentToElashry = markAllReturnsSentToElashry;
+
+// Re-open every closed-out line on one order. Fix path for the case
+// where an order was added to the Elashry list before PR #73 shipped
+// (so line dispositions survived) and the admin can't figure out why
+// the pending list is short. Reversible via Undo.
+async function resetOrderLineDispositions(orderId) {
+  const o = cache.orders.find(x => x.id === orderId);
+  if (!o) return;
+  const items = Array.isArray(o.products) ? o.products.slice() : [];
+  const dispLines = items.filter(p => p && (p.supplier_return_status === 'reused' || p.supplier_return_status === 'sent_back'));
+  if (!dispLines.length) { showToast('لا توجد سطور مُغلقة لإعادة فتحها'); return; }
+  if (!confirm(`إعادة فتح ${dispLines.length} سطر على طلب ${o.code || ''}؟\n(سيُعاد كل شيء لحالته الأولى داخل القائمة)`)) return;
+  const prev = items.map(p => ({ ...p }));
+  const next = items.map(p => {
+    if (!p) return p;
+    const q = { ...p };
+    delete q.supplier_return_status;
+    delete q.supplier_return_buy_price;
+    delete q.supplier_return_sent_at;
+    return q;
+  });
+  try {
+    await dbUpdate('orders', orderId, { products: next });
+    const i = cache.orders.findIndex(x => x.id === orderId);
+    if (i >= 0) cache.orders[i].products = next;
+    if (isElashryPopupOpen()) renderElashryPopup();
+    if (isWarehousePopupOpen()) renderWarehousePopup();
+    renderOrders();
+    renderElashryFab();
+    renderWarehouseFab();
+    pushUndo(`إعادة فتح · ${o.code || ''}`, async () => {
+      await dbUpdate('orders', orderId, { products: prev });
+      const i2 = cache.orders.findIndex(x => x.id === orderId);
+      if (i2 >= 0) cache.orders[i2].products = prev;
+      if (isElashryPopupOpen()) renderElashryPopup();
+      if (isWarehousePopupOpen()) renderWarehousePopup();
+      renderOrders();
+      renderElashryFab();
+      renderWarehouseFab();
+    });
+    showToast(`🔄 أُعيد فتح ${dispLines.length} سطر`);
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+window.resetOrderLineDispositions = resetOrderLineDispositions;
 
 // Pull a line back out of the "sent to Elashry" history and into pending.
 // Used by the ↶ تراجع button on each history row (independent of the
