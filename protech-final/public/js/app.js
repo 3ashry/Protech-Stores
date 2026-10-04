@@ -2301,6 +2301,46 @@ async function toggleRevised(orderId, isCurrentlyRevised) {
 }
 window.toggleRevised = toggleRevised;
 
+// Bulk-clear revised_at on every order currently marked as revised. Admin
+// uses this to reset the whole "مُراجَع" flag back to zero when starting
+// a fresh review pass. Snapshot the per-order prior timestamps so Undo
+// can restore the exact state (not just blanket re-mark everything).
+async function resetAllRevised() {
+  const marked = (cache.orders || []).filter(o => !!o.revised_at);
+  if (!marked.length) { showToast('لا توجد طلبات مُحددة كمُراجَعة حالياً'); return; }
+  if (!confirm(`إعادة ضبط حالة المراجعة لـ ${marked.length} طلب؟\nكل الطلبات سترجع إلى "غير مُراجَع".`)) return;
+  const snapshots = marked.map(o => ({ id: o.id, prev: o.revised_at }));
+  const patch = async (id, value) => {
+    const r = await fetch(`${SUPPLIER_SB_URL}/rest/v1/orders?id=eq.${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify({ revised_at: value }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+  };
+  try {
+    showToast(`جاري إعادة الضبط لـ ${marked.length} طلب…`);
+    for (const o of marked) {
+      await patch(o.id, null);
+      const i = cache.orders.findIndex(x => x.id === o.id);
+      if (i >= 0) cache.orders[i].revised_at = null;
+    }
+    renderOrders();
+    pushUndo(`إعادة ضبط المراجعة · ${marked.length} طلب`, async () => {
+      for (const { id, prev } of snapshots) {
+        try {
+          await patch(id, prev);
+          const i = cache.orders.findIndex(x => x.id === id);
+          if (i >= 0) cache.orders[i].revised_at = prev;
+        } catch (e) { console.warn('restore revised_at failed for', id, e.message); }
+      }
+      renderOrders();
+    });
+    showToast(`✓ تم إعادة ضبط ${marked.length} طلب`);
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+window.resetAllRevised = resetAllRevised;
+
 async function syncFromBosta() {
   showToast('Syncing from Bosta…');
   try {
