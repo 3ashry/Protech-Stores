@@ -105,6 +105,10 @@ function go(id) {
   });
   document.querySelectorAll('#top-nav .nav-tab').forEach((t, i) => t.classList.toggle('active', SCREENS[i] === id));
   document.querySelectorAll('.bnav-btn').forEach((t, i) => t.classList.toggle('active', SCREENS[i] === id));
+  // Sticky orders-screen FABs live at <body> root (above every stacking
+  // context) — toggle their stack visibility based on the active screen.
+  const fabStack = document.getElementById('orders-fab-stack');
+  if (fabStack) fabStack.style.display = id === 'orders' ? 'flex' : 'none';
   renderAll();
 }
 // ═══════════════════════════════════════════════════════════════════
@@ -2935,7 +2939,12 @@ function renderElashryFab() {
   if (!btn || !badge) return;
   const total = returnsAwaitingSupplier().reduce((s, l) => s + l.qty, 0);
   badge.textContent = String(total);
-  btn.style.display = total > 0 ? 'inline-flex' : 'none';
+  // Always visible on the orders screen (it lives inside #screen-orders, so
+  // it's naturally hidden on every other screen). Previously we hid it when
+  // the count was 0 — that cost discoverability when the list was briefly
+  // empty or hadn't been loaded yet, so the admin couldn't find the button
+  // at all. Keep it always in view; the badge communicates the state.
+  btn.style.display = 'inline-flex';
 }
 window.renderElashryFab = renderElashryFab;
 
@@ -6675,3 +6684,21 @@ function _highlightActiveSidebarItem() {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeSidebar();
 });
+
+// First-paint sync for the orders FAB stack. go() handles subsequent
+// screen switches, but on initial load if the orders screen happens
+// to already be active (deep-linked or restored), nothing else makes
+// the sticky stack visible. We also re-render the Elashry badge here
+// so the count is correct the moment orders data lands.
+function _initOrdersFabStack() {
+  const fabStack = document.getElementById('orders-fab-stack');
+  if (!fabStack) return;
+  const ordersActive = document.getElementById('screen-orders')?.classList.contains('active');
+  fabStack.style.display = ordersActive ? 'flex' : 'none';
+  try { renderElashryFab(); } catch {}
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _initOrdersFabStack);
+} else {
+  _initOrdersFabStack();
+}

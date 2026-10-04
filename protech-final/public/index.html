@@ -218,23 +218,6 @@
       </div>
     </div>
 
-    <!-- Floating actions pinned to the bottom of the orders screen.
-         Visible only while the orders screen is active (every other
-         .screen is display:none). The Elashry pill carries a live
-         piece-count badge; the Undo pill appears when there's at least
-         one orders-mutation on the local undo stack. -->
-    <div style="position:fixed;bottom:20px;inset-inline-end:20px;z-index:50;display:flex;flex-direction:column;align-items:flex-end;gap:10px">
-      <button type="button" id="orders-undo-fab" onclick="undoLastOrdersAction()"
-        style="display:none;align-items:center;gap:10px;padding:11px 16px;border:1.5px solid var(--line);border-radius:999px;background:#fff;color:var(--ink);font-weight:700;font-size:13px;box-shadow:0 6px 18px rgba(0,0,0,.08);cursor:pointer">
-        <span>↶ تراجع</span>
-        <span id="orders-undo-fab-label" style="font-weight:500;color:var(--muted);font-size:12px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
-      </button>
-      <button type="button" id="elashry-fab" onclick="openElashryReturnsPopup()"
-        style="display:inline-flex;align-items:center;gap:10px;padding:14px 20px;border:0;border-radius:999px;background:#F26A21;color:#fff;font-weight:800;font-size:14px;box-shadow:0 10px 24px rgba(242,106,33,.35);cursor:pointer">
-        <span>📦 قائمة الأشري</span>
-        <span id="elashry-fab-count" style="min-width:22px;height:22px;padding:0 6px;border-radius:999px;background:#fff;color:#F26A21;font-size:12px;font-weight:800;display:inline-flex;align-items:center;justify-content:center">0</span>
-      </button>
-    </div>
   </div>
 
   <!-- RETURNS -->
@@ -616,6 +599,24 @@
     <button class="btn btn-ghost" style="width:100%;color:#d7d3d3;border-color:rgba(243,242,242,.35)" onclick="doLogout()">Log out</button>
   </div>
 </aside>
+
+<!-- Floating actions for the orders screen. Rendered at <body> root so
+     they stay above every stacking context and aren't affected by any
+     ancestor's transforms, filters or display state. showOrdersFab() is
+     called whenever the active screen changes and keeps them visible
+     only while the orders screen is active. -->
+<div id="orders-fab-stack" style="display:none;position:fixed;bottom:20px;inset-inline-end:20px;z-index:9999;flex-direction:column;align-items:flex-end;gap:10px;pointer-events:none">
+  <button type="button" id="orders-undo-fab" onclick="undoLastOrdersAction()"
+    style="display:none;align-items:center;gap:10px;padding:11px 16px;border:1.5px solid #e5e7eb;border-radius:999px;background:#fff;color:#111;font-weight:700;font-size:13px;box-shadow:0 6px 18px rgba(0,0,0,.08);cursor:pointer;pointer-events:auto">
+    <span>↶ تراجع</span>
+    <span id="orders-undo-fab-label" style="font-weight:500;color:#6b7280;font-size:12px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+  </button>
+  <button type="button" id="elashry-fab" onclick="openElashryReturnsPopup()"
+    style="display:inline-flex;align-items:center;gap:10px;padding:14px 20px;border:0;border-radius:999px;background:#F26A21;color:#fff;font-weight:800;font-size:14px;box-shadow:0 10px 24px rgba(242,106,33,.35);cursor:pointer;pointer-events:auto">
+    <span>📦 قائمة الأشري</span>
+    <span id="elashry-fab-count" style="min-width:22px;height:22px;padding:0 6px;border-radius:999px;background:#fff;color:#F26A21;font-size:12px;font-weight:800;display:inline-flex;align-items:center;justify-content:center">0</span>
+  </button>
+</div>
 
 <!-- MODAL OVERLAY -->
 <div class="modal-overlay" id="overlay" style="display:none" onclick="overlayClick(event)"></div>
