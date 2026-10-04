@@ -2567,13 +2567,19 @@ async function confirmWarehouse(id) {
   if (!confirm('Confirm you have received this order back in your warehouse?')) return;
   const order = cache.orders.find(x => x.id === id);
   if (!order) return;
+  // Snapshot per-product qty before mutation so Undo subtracts the exact
+  // same amount it added (not what the product's qty happens to be later).
+  const prevWh = order.warehouse_confirmed;
+  const stockDeltas = []; // { productId, pi, added }
   try {
     for (const op of (order.products || [])) {
       const pi = cache.products.findIndex(p => p.code === op.code);
       if (pi >= 0) {
-        const restored = parseInt(cache.products[pi].qty || 0) + parseInt(op.qty || 1);
+        const added = parseInt(op.qty || 1);
+        const restored = parseInt(cache.products[pi].qty || 0) + added;
         cache.products[pi].qty = restored;
         await dbUpdate('products', cache.products[pi].id, { qty: restored });
+        stockDeltas.push({ productId: cache.products[pi].id, pi, added });
       }
     }
     await dbUpdate('orders', id, { warehouse_confirmed: true });
@@ -2581,6 +2587,19 @@ async function confirmWarehouse(id) {
     if (i >= 0) cache.orders[i].warehouse_confirmed = true;
     showToast('Stock restored to inventory ✓');
     closeModal(); renderAllKeepScroll();
+    pushUndo(`أُعيد للمخزن · ${order.code || ''}`, async () => {
+      // Revert stock: subtract exactly what we added.
+      for (const { productId, pi, added } of stockDeltas) {
+        const cur = cache.products[pi]?.qty ?? 0;
+        const next = Math.max(0, parseInt(cur) - added);
+        cache.products[pi].qty = next;
+        await dbUpdate('products', productId, { qty: next });
+      }
+      await dbUpdate('orders', id, { warehouse_confirmed: prevWh ?? false });
+      const i2 = cache.orders.findIndex(x => x.id === id);
+      if (i2 >= 0) cache.orders[i2].warehouse_confirmed = prevWh ?? false;
+      renderAllKeepScroll();
+    });
   } catch (e) { showToast('Error: ' + e.message); }
 }
 
@@ -2590,13 +2609,17 @@ async function undoWarehouse(id) {
   if (!confirm('Undo "received in warehouse"? This removes the restored stock and marks it as not yet received.')) return;
   const order = cache.orders.find(x => x.id === id);
   if (!order) return;
+  const prevWh = order.warehouse_confirmed;
+  const stockDeltas = []; // { productId, pi, removed }
   try {
     for (const op of (order.products || [])) {
       const pi = cache.products.findIndex(p => p.code === op.code);
       if (pi >= 0) {
-        const newQty = Math.max(0, parseInt(cache.products[pi].qty || 0) - parseInt(op.qty || 1));
+        const removed = parseInt(op.qty || 1);
+        const newQty = Math.max(0, parseInt(cache.products[pi].qty || 0) - removed);
         cache.products[pi].qty = newQty;
         await dbUpdate('products', cache.products[pi].id, { qty: newQty });
+        stockDeltas.push({ productId: cache.products[pi].id, pi, removed });
       }
     }
     await dbUpdate('orders', id, { warehouse_confirmed: false });
@@ -2604,6 +2627,19 @@ async function undoWarehouse(id) {
     if (i >= 0) cache.orders[i].warehouse_confirmed = false;
     showToast('Reverted — marked as not yet received');
     closeModal(); renderAllKeepScroll();
+    pushUndo(`تراجع عن الإرجاع للمخزن · ${order.code || ''}`, async () => {
+      // Revert stock: add back exactly what we subtracted.
+      for (const { productId, pi, removed } of stockDeltas) {
+        const cur = cache.products[pi]?.qty ?? 0;
+        const next = parseInt(cur) + removed;
+        cache.products[pi].qty = next;
+        await dbUpdate('products', productId, { qty: next });
+      }
+      await dbUpdate('orders', id, { warehouse_confirmed: prevWh ?? true });
+      const i2 = cache.orders.findIndex(x => x.id === id);
+      if (i2 >= 0) cache.orders[i2].warehouse_confirmed = prevWh ?? true;
+      renderAllKeepScroll();
+    });
   } catch (e) { showToast('Error: ' + e.message); }
 }
 
