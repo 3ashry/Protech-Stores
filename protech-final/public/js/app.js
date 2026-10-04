@@ -2942,6 +2942,41 @@ function isElashryPopupOpen() {
   return !!document.getElementById('m-elashry-body');
 }
 
+// Returned orders physically received at the admin's warehouse that
+// are not yet in the Elashry pending list. These are the "في المخزن"
+// candidates — admin should push them to the Elashry list (or reuse
+// them) rather than leaving them untracked. Line-level so the popup
+// section can show per-product details, but add-to-list operates at
+// the parent order (pending_elashry_at is per-order).
+function returnsInWarehouseNotYetListed() {
+  const products = cache.products || [];
+  const rets = (cache.orders || []).filter(o =>
+    o.status === 'Returned' && o.warehouse_confirmed === true && !o.pending_elashry_at
+  );
+  const out = [];
+  for (const o of rets) {
+    const items = Array.isArray(o.products) ? o.products : [];
+    items.forEach((p, idx) => {
+      // Skip anything already closed out from a previous session (shouldn't
+      // happen when !pending_elashry_at, but guard anyway).
+      if (p.supplier_return_status === 'reused' || p.supplier_return_status === 'sent_back') return;
+      const sysProd = products.find(pp => pp.code === p.code);
+      out.push({
+        orderId: o.id,
+        orderCode: o.code,
+        customer: o.customer_name || '',
+        returnedDate: o.date || '',
+        lineIdx: idx,
+        code: p.code,
+        name: p.name || sysProd?.name || p.code,
+        qty: parseInt(p.qty || 1),
+        buyPrice: lineBuyPrice(p, products),
+      });
+    });
+  }
+  return out;
+}
+
 // Lines already physically delivered to Elashry — marked sent_back with
 // the buy_price snapshot the admin considered current at the moment of
 // return. These populate the smaller history table under the pending
@@ -2976,6 +3011,7 @@ function returnsSentToSupplier() {
 function renderElashryPopup() {
   const body = document.getElementById('m-elashry-body');
   if (!body) return;
+  const warehouse = returnsInWarehouseNotYetListed();
   const lines = returnsAwaitingSupplier();
   const sent = returnsSentToSupplier();
   // Aggregate pending by product code for the per-SKU totals footer.
@@ -3060,8 +3096,82 @@ function renderElashryPopup() {
       </table>
     </div>` : '';
 
-  body.innerHTML = header + pendingSection + sentSection;
+  // "في المخزن" section — warehouse-received returns not yet pushed to
+  // the Elashry list. One row per product line; the + button adds the
+  // parent ORDER to the pending list (pending_elashry_at is per-order,
+  // so every line of that order lands in pending in one shot).
+  const whUnits = warehouse.reduce((s, l) => s + l.qty, 0);
+  const whOrderIds = Array.from(new Set(warehouse.map(l => l.orderId)));
+  const warehouseSection = warehouse.length ? `
+    <div style="margin:4px 14px 8px;display:flex;flex-wrap:wrap;align-items:center;gap:8px">
+      <span style="font-weight:800;font-size:13px">📥 في المخزن — لم تُضَف للقائمة بعد</span>
+      <span style="font-size:12px;color:var(--muted)">${warehouse.length} سطر · ${whOrderIds.length} طلب · ${whUnits} قطعة</span>
+      <button class="btn btn-dark btn-xs" style="margin-inline-start:auto" onclick="addAllWarehouseReturnsToElashry()" title="أضف كل الطلبات المرتجعة الموجودة في المخزن إلى قائمة الأشري">+ أضف الكل</button>
+    </div>
+    <div class="table-wrap" style="margin:0 2px">
+      <table style="font-size:12px">
+        <thead><tr>
+          <th>Code</th><th>Product</th><th style="text-align:center">Qty</th>
+          <th>Buy price</th><th>Source order</th><th>Customer</th>
+          <th>Returned</th><th style="text-align:center"></th>
+        </tr></thead>
+        <tbody>${warehouse.map(l => `
+          <tr>
+            <td style="font-family:var(--f-mono,monospace)">${esc(l.code)}</td>
+            <td>${esc(l.name)}</td>
+            <td style="text-align:center;font-family:var(--f-mono,monospace);font-weight:700">× ${l.qty}</td>
+            <td style="font-family:var(--f-mono,monospace)">EGP ${fmt(l.buyPrice)}</td>
+            <td><span class="badge b-orange">${esc(l.orderCode || '—')}</span></td>
+            <td>${esc(l.customer)}</td>
+            <td style="font-family:var(--f-mono,monospace);color:var(--muted)">${esc(l.returnedDate)}</td>
+            <td style="text-align:center"><button class="btn btn-primary btn-xs" title="أضف هذا الطلب إلى قائمة الأشري" onclick="toggleElashryReturn('${l.orderId}', false)">+ أرسل للقائمة</button></td>
+          </tr>`).join('')}</tbody>
+      </table>
+    </div>
+    <div style="height:1px;background:var(--line);margin:14px 14px 10px"></div>` : '';
+
+  body.innerHTML = header + warehouseSection + pendingSection + sentSection;
 }
+
+// Bulk-add every warehouse-received-but-unlisted return to the Elashry
+// pending list. One PATCH per order; one combined undo entry.
+async function addAllWarehouseReturnsToElashry() {
+  const lines = returnsInWarehouseNotYetListed();
+  if (!lines.length) { showToast('لا توجد مرتجعات في المخزن'); return; }
+  const orderIds = Array.from(new Set(lines.map(l => l.orderId)));
+  if (!confirm(`إضافة ${orderIds.length} طلب (${lines.reduce((s,l)=>s+l.qty,0)} قطعة) إلى قائمة الأشري؟`)) return;
+  const now = new Date().toISOString();
+  const snapshots = []; // { id, prev }
+  try {
+    for (const id of orderIds) {
+      const o = cache.orders.find(x => x.id === id);
+      if (!o) continue;
+      snapshots.push({ id, prev: o.pending_elashry_at || null });
+      await dbUpdate('orders', id, { pending_elashry_at: now });
+      const i = cache.orders.findIndex(x => x.id === id);
+      if (i >= 0) cache.orders[i].pending_elashry_at = now;
+    }
+    renderOrders();
+    if (typeof renderReturns === 'function') renderReturns();
+    if (isElashryPopupOpen()) renderElashryPopup();
+    renderElashryFab();
+    pushUndo(`أُضيف للقائمة · ${orderIds.length} طلب`, async () => {
+      for (const { id, prev } of snapshots) {
+        try {
+          await dbUpdate('orders', id, { pending_elashry_at: prev });
+          const i2 = cache.orders.findIndex(x => x.id === id);
+          if (i2 >= 0) cache.orders[i2].pending_elashry_at = prev;
+        } catch (e) { console.warn('restore pending_elashry_at failed for', id, e.message); }
+      }
+      renderOrders();
+      if (typeof renderReturns === 'function') renderReturns();
+      if (isElashryPopupOpen()) renderElashryPopup();
+      renderElashryFab();
+    });
+    showToast(`✓ أُضيف ${orderIds.length} طلب لقائمة الأشري`);
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+window.addAllWarehouseReturnsToElashry = addAllWarehouseReturnsToElashry;
 
 // Build the Arabic WhatsApp text that lists every warehouse-held return
 // grouped by product code, with totals. Returns {text, totalUnits}. Shared
