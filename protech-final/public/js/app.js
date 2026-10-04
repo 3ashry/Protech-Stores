@@ -2722,8 +2722,6 @@ function renderReturns() {
       <td>EGP ${fmt(o.actual_shipping || 0)}</td>
       <td>${esc(o.date)}</td>
     </tr>`).join('') : '<tr><td colspan="5"><div class="empty"><div class="empty-icon">↩️</div>No returns</div></td></tr>';
-
-  renderReturnsWarehouse(inWarehouseLines);
 }
 
 // Collect every returned product line the admin has explicitly added to
@@ -2762,20 +2760,54 @@ function returnsAwaitingSupplier() {
   return out;
 }
 
-function renderReturnsWarehouse(lines = returnsAwaitingSupplier()) {
-  const tbody = document.getElementById('ret-warehouse-tbody');
-  const tfoot = document.getElementById('ret-warehouse-tfoot');
-  const summary = document.getElementById('ret-wh-summary');
-  if (!tbody || !tfoot) return;
+// Open the Elashry pending-returns list as a modal from the Orders screen
+// header. All of the real rendering happens in renderElashryPopup(), which
+// is also what the per-row Remove and the orders-row toggle call back into
+// when the popup is already open — so the list stays live without closing.
+function openElashryReturnsPopup() {
+  showModal('tpl-elashry-returns');
+  renderElashryPopup();
+}
+window.openElashryReturnsPopup = openElashryReturnsPopup;
+
+// True when the Elashry popup is currently open — handlers use this to
+// refresh its content after they mutate state so the admin sees changes
+// immediately. We check for the body ID so an overlay showing something
+// else doesn't accidentally pick up a re-render.
+function isElashryPopupOpen() {
+  return !!document.getElementById('m-elashry-body');
+}
+
+function renderElashryPopup() {
+  const body = document.getElementById('m-elashry-body');
+  if (!body) return;
+  const lines = returnsAwaitingSupplier();
+  // Aggregate by product code for the per-SKU totals footer.
+  const byCode = new Map();
+  for (const l of lines) {
+    const row = byCode.get(l.code) || { code: l.code, name: l.name, qty: 0 };
+    row.qty += l.qty;
+    byCode.set(l.code, row);
+  }
+  const agg = Array.from(byCode.values()).sort((a, b) => b.qty - a.qty);
+  const totalUnits = agg.reduce((s, r) => s + r.qty, 0);
+
+  const header = `
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:0 14px 10px">
+      <span style="flex:1;font-size:12px;color:var(--muted);font-weight:600">${lines.length} سطر · ${agg.length} SKU · ${totalUnits} قطعة</span>
+      <button class="btn btn-primary btn-sm" onclick="sendReturnsToElashryWA()">📲 إرسال للأشري</button>
+      <button class="btn btn-ghost btn-sm" onclick="copyReturnsToElashry()">📋 نسخ</button>
+    </div>
+    <div style="padding:0 14px 10px;font-size:12px;color:var(--muted);line-height:1.55">
+      هذه القائمة تحتوي على الطلبات المرتجعة التي أضفتها من شاشة الطلبات بزر <b>📦 أرسل لقائمة الأشري</b>. زر <b>✕ أُعيد استخدامه</b> يُخرج قطعة واحدة من القائمة لأنك شحنتها لعميل آخر — دون الحاجة لإرسالها لأشري.
+    </div>`;
 
   if (!lines.length) {
-    tbody.innerHTML = '<tr><td colspan="8"><div class="empty"><div class="empty-icon">📦</div>لا توجد مرتجعات في المخزن حالياً</div></td></tr>';
-    tfoot.innerHTML = '';
-    if (summary) summary.textContent = '';
+    body.innerHTML = header + '<div class="empty" style="margin:20px 0"><div class="empty-icon">📦</div>لا توجد مرتجعات في القائمة حالياً<br><span style="font-size:12px;color:var(--muted);font-weight:400">افتح شاشة الطلبات واضغط 📦 أرسل لقائمة الأشري على أي طلب مرتجع</span></div>';
     return;
   }
 
-  tbody.innerHTML = lines.map(l => `
+  const rows = lines.map(l => `
     <tr>
       <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(l.code)}</td>
       <td>${esc(l.name)}</td>
@@ -2787,16 +2819,7 @@ function renderReturnsWarehouse(lines = returnsAwaitingSupplier()) {
       <td style="text-align:center"><button class="btn btn-ghost btn-xs" title="أُعيد استخدامه — لا يُرسل لأشري" onclick="markReturnReused('${l.orderId}', ${l.lineIdx})">✕ أُعيد استخدامه</button></td>
     </tr>`).join('');
 
-  // Aggregate by product code for the footer.
-  const byCode = new Map();
-  for (const l of lines) {
-    const row = byCode.get(l.code) || { code: l.code, name: l.name, qty: 0 };
-    row.qty += l.qty;
-    byCode.set(l.code, row);
-  }
-  const agg = Array.from(byCode.values()).sort((a, b) => b.qty - a.qty);
-  const totalUnits = agg.reduce((s, r) => s + r.qty, 0);
-  tfoot.innerHTML = `
+  const footer = `
     <tr><th colspan="8" style="padding:12px 10px;background:var(--bg-2);text-align:start;font-size:13px;color:var(--ink-2)">📊 الإجمالي حسب المنتج (${agg.length} SKU · ${totalUnits} قطعة)</th></tr>
     ${agg.map(r => `
       <tr style="background:var(--bg-2)">
@@ -2804,12 +2827,20 @@ function renderReturnsWarehouse(lines = returnsAwaitingSupplier()) {
         <td colspan="2">${esc(r.name)}</td>
         <td colspan="4" style="text-align:end;font-family:var(--f-mono,monospace);font-weight:700;color:#0891b2">× ${r.qty}</td>
         <td></td>
-      </tr>`).join('')}
-  `;
+      </tr>`).join('')}`;
 
-  if (summary) {
-    summary.textContent = `${lines.length} سطر · ${agg.length} SKU · ${totalUnits} قطعة في المخزن`;
-  }
+  body.innerHTML = header + `
+    <div class="table-wrap" style="margin:0 2px">
+      <table>
+        <thead><tr>
+          <th>Code</th><th>Product</th><th style="text-align:center">Qty</th>
+          <th>Buy price</th><th>Source order</th><th>Customer</th>
+          <th>Returned</th><th></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot>${footer}</tfoot>
+      </table>
+    </div>`;
 }
 
 // Build the Arabic WhatsApp text that lists every warehouse-held return
@@ -2864,6 +2895,7 @@ async function _setReturnLineStatus(orderId, lineIdx, status) {
     if (i >= 0) cache.orders[i].products = items;
     const prevScroll = window.scrollY;
     renderReturns();
+    if (isElashryPopupOpen()) renderElashryPopup();
     requestAnimationFrame(() => window.scrollTo(0, prevScroll));
   } catch (e) {
     showToast('Error: ' + e.message);
@@ -2892,6 +2924,7 @@ async function toggleElashryReturn(orderId, isCurrentlyPending) {
     const prevScroll = window.scrollY;
     renderOrders();
     if (typeof renderReturns === 'function') renderReturns();
+    if (isElashryPopupOpen()) renderElashryPopup();
     requestAnimationFrame(() => window.scrollTo(0, prevScroll));
     showToast(isCurrentlyPending ? 'أُخرج من قائمة الأشري' : '✓ أُضيف لقائمة الأشري');
   } catch (e) {
