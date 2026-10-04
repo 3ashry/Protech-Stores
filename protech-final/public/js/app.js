@@ -2707,9 +2707,12 @@ function renderReturns() {
   // A return only counts once the order is explicitly set to "Returned".
   const rets = cache.orders.filter(o => o.status === 'Returned');
   const totalShip = rets.reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
+  const inWarehouseLines = returnsAwaitingSupplier();
+  const inWarehouseUnits = inWarehouseLines.reduce((s, l) => s + l.qty, 0);
   document.getElementById('ret-stats').innerHTML = `
     <div class="stat-card red"><div class="stat-val">${rets.length}</div><div class="stat-label">Total Returns</div></div>
-    <div class="stat-card orange"><div class="stat-val">EGP ${fmt(totalShip)}</div><div class="stat-label">Total Return Shipping</div></div>`;
+    <div class="stat-card orange"><div class="stat-val">EGP ${fmt(totalShip)}</div><div class="stat-label">Total Return Shipping</div></div>
+    <div class="stat-card blue"><div class="stat-val">${inWarehouseUnits}</div><div class="stat-label">In warehouse — pending Elashry</div></div>`;
   document.getElementById('ret-tbody').innerHTML = rets.length ? rets.map(o => `
     <tr>
       <td><strong>${esc(o.customer_name)}</strong></td>
@@ -2718,7 +2721,165 @@ function renderReturns() {
       <td>EGP ${fmt(o.actual_shipping || 0)}</td>
       <td>${esc(o.date)}</td>
     </tr>`).join('') : '<tr><td colspan="5"><div class="empty"><div class="empty-icon">↩️</div>No returns</div></td></tr>';
+
+  renderReturnsWarehouse(inWarehouseLines);
 }
+
+// Collect every returned product line that is physically back with the admin
+// (status=Returned AND warehouse_confirmed=true) and hasn't yet been marked
+// as reused or sent back. Each returned entry carries both the order
+// reference and the line index so the toggle-handlers below know which
+// jsonb slot to flip. Used by both the main renderReturns table and the
+// in-warehouse stat tile.
+function returnsAwaitingSupplier() {
+  const products = cache.products || [];
+  const rets = (cache.orders || []).filter(o =>
+    o.status === 'Returned' && o.warehouse_confirmed === true
+  );
+  const out = [];
+  for (const o of rets) {
+    const items = Array.isArray(o.products) ? o.products : [];
+    items.forEach((p, idx) => {
+      // Skip anything the admin has already closed out (reused in another
+      // customer order, or physically sent back to the supplier).
+      if (p.supplier_return_status === 'reused' || p.supplier_return_status === 'sent_back') return;
+      const sysProd = products.find(pp => pp.code === p.code);
+      out.push({
+        orderId: o.id,
+        orderCode: o.code,
+        customer: o.customer_name || '',
+        returnedDate: o.date || o.returned_at || '',
+        lineIdx: idx,
+        code: p.code,
+        name: p.name || sysProd?.name || p.code,
+        qty: parseInt(p.qty || 1),
+        buyPrice: lineBuyPrice(p, products),
+      });
+    });
+  }
+  return out;
+}
+
+function renderReturnsWarehouse(lines = returnsAwaitingSupplier()) {
+  const tbody = document.getElementById('ret-warehouse-tbody');
+  const tfoot = document.getElementById('ret-warehouse-tfoot');
+  const summary = document.getElementById('ret-wh-summary');
+  if (!tbody || !tfoot) return;
+
+  if (!lines.length) {
+    tbody.innerHTML = '<tr><td colspan="8"><div class="empty"><div class="empty-icon">📦</div>لا توجد مرتجعات في المخزن حالياً</div></td></tr>';
+    tfoot.innerHTML = '';
+    if (summary) summary.textContent = '';
+    return;
+  }
+
+  tbody.innerHTML = lines.map(l => `
+    <tr>
+      <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(l.code)}</td>
+      <td>${esc(l.name)}</td>
+      <td style="text-align:center;font-family:var(--f-mono,monospace);font-weight:700">× ${l.qty}</td>
+      <td>EGP ${fmt(l.buyPrice)}</td>
+      <td><span class="badge b-orange">${esc(l.orderCode || '—')}</span></td>
+      <td style="font-size:12px">${esc(l.customer)}</td>
+      <td style="font-family:var(--f-mono,monospace);font-size:12px;color:var(--muted)">${esc(l.returnedDate)}</td>
+      <td style="text-align:center"><button class="btn btn-ghost btn-xs" title="أُعيد استخدامه — لا يُرسل لأشري" onclick="markReturnReused('${l.orderId}', ${l.lineIdx})">✕ أُعيد استخدامه</button></td>
+    </tr>`).join('');
+
+  // Aggregate by product code for the footer.
+  const byCode = new Map();
+  for (const l of lines) {
+    const row = byCode.get(l.code) || { code: l.code, name: l.name, qty: 0 };
+    row.qty += l.qty;
+    byCode.set(l.code, row);
+  }
+  const agg = Array.from(byCode.values()).sort((a, b) => b.qty - a.qty);
+  const totalUnits = agg.reduce((s, r) => s + r.qty, 0);
+  tfoot.innerHTML = `
+    <tr><th colspan="8" style="padding:12px 10px;background:var(--bg-2);text-align:start;font-size:13px;color:var(--ink-2)">📊 الإجمالي حسب المنتج (${agg.length} SKU · ${totalUnits} قطعة)</th></tr>
+    ${agg.map(r => `
+      <tr style="background:var(--bg-2)">
+        <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(r.code)}</td>
+        <td colspan="2">${esc(r.name)}</td>
+        <td colspan="4" style="text-align:end;font-family:var(--f-mono,monospace);font-weight:700;color:#0891b2">× ${r.qty}</td>
+        <td></td>
+      </tr>`).join('')}
+  `;
+
+  if (summary) {
+    summary.textContent = `${lines.length} سطر · ${agg.length} SKU · ${totalUnits} قطعة في المخزن`;
+  }
+}
+
+// Build the Arabic WhatsApp text that lists every warehouse-held return
+// grouped by product code, with totals. Returns {text, totalUnits}. Shared
+// between the "send" and "copy" buttons so the message is identical.
+function buildReturnsToElashryMessage() {
+  const lines = returnsAwaitingSupplier();
+  const byCode = new Map();
+  for (const l of lines) {
+    const row = byCode.get(l.code) || { code: l.code, name: l.name, qty: 0 };
+    row.qty += l.qty;
+    byCode.set(l.code, row);
+  }
+  const agg = Array.from(byCode.values()).sort((a, b) => a.code.localeCompare(b.code));
+  const totalUnits = agg.reduce((s, r) => s + r.qty, 0);
+  const header = 'مرتجعات بروتيك — جاهزة للتسليم:';
+  const body = agg.length
+    ? agg.map(r => `• ${r.code} — ${r.name} × ${r.qty}`).join('\n')
+    : 'لا توجد مرتجعات حالياً.';
+  const footer = agg.length ? `\n\nالإجمالي: ${totalUnits} قطعة عبر ${agg.length} صنف` : '';
+  return { text: `${header}\n\n${body}${footer}`, totalUnits };
+}
+
+function sendReturnsToElashryWA() {
+  const { text, totalUnits } = buildReturnsToElashryMessage();
+  if (!totalUnits) { showToast('لا توجد مرتجعات في المخزن حالياً'); return; }
+  // wa.me without a number opens the WhatsApp contact picker with the
+  // text pre-filled, so the admin picks Elashry's chat and sends.
+  window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+}
+
+function copyReturnsToElashry() {
+  const { text, totalUnits } = buildReturnsToElashryMessage();
+  if (!totalUnits) { showToast('لا توجد مرتجعات في المخزن حالياً'); return; }
+  (navigator.clipboard?.writeText(text) || Promise.reject())
+    .then(() => showToast('نُسخت القائمة للحافظة ✓'))
+    .catch(() => { try { prompt('Copy the returns list:', text); } catch {} });
+}
+
+// Flip the per-line supplier_return_status flag on a Returned order's
+// product line. `status` is 'reused' (shipped to another customer) or
+// 'sent_back' (physically delivered to Elashry) or null to restore.
+async function _setReturnLineStatus(orderId, lineIdx, status) {
+  const o = cache.orders.find(x => x.id === orderId);
+  if (!o) return;
+  const items = Array.isArray(o.products) ? o.products.slice() : [];
+  if (lineIdx < 0 || lineIdx >= items.length) return;
+  items[lineIdx] = { ...items[lineIdx], supplier_return_status: status || undefined };
+  try {
+    await dbUpdate('orders', orderId, { products: items });
+    const i = cache.orders.findIndex(x => x.id === orderId);
+    if (i >= 0) cache.orders[i].products = items;
+    const prevScroll = window.scrollY;
+    renderReturns();
+    requestAnimationFrame(() => window.scrollTo(0, prevScroll));
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+
+async function markReturnReused(orderId, lineIdx) {
+  const o = cache.orders.find(x => x.id === orderId);
+  if (!o) return;
+  const line = (o.products || [])[lineIdx];
+  if (!line) return;
+  if (!confirm(`إخراج "${line.name || line.code}" × ${line.qty || 1} من قائمة المرتجعات؟\n(تم استخدامه في طلب آخر — لن يُرسل لأشري)`)) return;
+  await _setReturnLineStatus(orderId, lineIdx, 'reused');
+  showToast('✓ أُخرج من قائمة أشري');
+}
+window.markReturnReused = markReturnReused;
+window.sendReturnsToElashryWA = sendReturnsToElashryWA;
+window.copyReturnsToElashry = copyReturnsToElashry;
 
 // ── FINANCIALS ──
 function renderFinancials() {

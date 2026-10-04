@@ -234,6 +234,41 @@
         </table>
       </div>
     </div>
+
+    <!-- Returns physically back in the admin's warehouse but not yet sent
+         to Elashry. Each row is one product line of a Returned order with
+         warehouse_confirmed=true. The ✕ button marks the line as "reused"
+         (shipped to another customer) so it drops out of the list without
+         going back to the supplier. The Send button copies/opens WhatsApp
+         with the full list the admin should hand to Elashry. -->
+    <div class="card" style="margin-top:14px">
+      <div class="card-header" style="flex-wrap:wrap;gap:8px">
+        <span class="card-title">📦 المرتجعات في المخزن — جاهزة للأشري</span>
+        <span id="ret-wh-summary" style="margin-inline-start:auto;font-size:12px;color:var(--muted);font-weight:600"></span>
+        <button class="btn btn-primary btn-sm" onclick="sendReturnsToElashryWA()">📲 إرسال القائمة للأشري</button>
+        <button class="btn btn-ghost btn-sm" onclick="copyReturnsToElashry()">📋 نسخ</button>
+      </div>
+      <div style="padding:10px 16px;font-size:12px;color:var(--muted);line-height:1.55">
+        كل الطلبات المرتجعة التي استلمتها في المخزن ولم تُرسل بعد لأشري.
+        زر <b>✕ أُعيد استخدامه</b> يُخرج القطعة من القائمة لأنك شحنتها لعميل آخر — لا تحتاج لإرسالها لأشري.
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Code</th>
+            <th>Product</th>
+            <th style="text-align:center">Qty</th>
+            <th>Buy price</th>
+            <th>Source order</th>
+            <th>Customer</th>
+            <th>Returned</th>
+            <th></th>
+          </tr></thead>
+          <tbody id="ret-warehouse-tbody"></tbody>
+          <tfoot id="ret-warehouse-tfoot"></tfoot>
+        </table>
+      </div>
+    </div>
   </div>
 
   <!-- FINANCIALS -->
