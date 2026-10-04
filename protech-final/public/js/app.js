@@ -2279,7 +2279,23 @@ function openCreateOrder() {
 function editOrder(id) {
   const o = cache.orders.find(x => x.id === id);
   if (!o) return;
-  oPRows = (o.products || [{ code: '', qty: 1, sell_price: '' }]).map(p => ({ ...p }));
+  // Hydrate the price fields from whatever is actually on the saved line.
+  // Storefront orders write the per-unit price into `price` (not
+  // `sell_price`), and legacy or storefront lines may be missing
+  // `buy_price` entirely — in both cases the Edit modal used to show
+  // empty inputs and the admin had to retype values that were already
+  // on file. Fall back to `p.price` for sell and to the product's
+  // current buy_price for buy so the modal opens pre-filled with the
+  // last values the admin would consider "saved".
+  oPRows = (o.products || [{ code: '', qty: 1, sell_price: '' }]).map(p => {
+    const sell = (p.sell_price != null && p.sell_price !== '')
+      ? p.sell_price
+      : (p.price != null && p.price !== '' ? p.price : '');
+    const buy = (p.buy_price != null && p.buy_price !== '')
+      ? p.buy_price
+      : (parseFloat(cache.products.find(pp => pp.code === p.code)?.buy_price || 0) || '');
+    return { ...p, sell_price: sell, buy_price: buy };
+  });
   showModal('tpl-order');
   setTimeout(() => {
     document.getElementById('o-name').value = o.customer_name;
