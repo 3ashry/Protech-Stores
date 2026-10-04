@@ -1960,7 +1960,7 @@ function renderOrders() {
     : '';
   document.getElementById('orders-tbody').innerHTML = visibleOrders.length ? visibleOrders.map(o => `
     <tr${o.status === 'Awaiting Action' ? ' style="background:#fff4f4"' : ''}>
-      <td><span class="badge b-orange">${esc(o.code)}</span> ${orderProgressBadge(o)}${o.allow_open ? ' <span class="badge b-warning" title="يريد فتح الشحنة">📦</span>' : ''}${o.status === 'Returned' && !o.warehouse_confirmed ? ' <span class="badge b-danger" title="مرتجع — لم يُرجع للمخزن بعد">↩️ لم يُرجع للمخزن</span>' : ''}${o.picker_prepared_at ? ' <span class="badge b-success" title="جهّزها موظف التجهيز">✅ جاهز</span>' : ''}${cashCycleBadge(o)}</td>
+      <td><span class="badge b-orange">${esc(o.code)}</span> ${orderProgressBadge(o)}${o.allow_open ? ' <span class="badge b-warning" title="يريد فتح الشحنة">📦</span>' : ''}${o.status === 'Returned' && !o.warehouse_confirmed ? ' <span class="badge b-danger" title="مرتجع — لم يُرجع للمخزن بعد">↩️ لم يُرجع للمخزن</span>' : ''}${o.picker_prepared_at ? ' <span class="badge b-success" title="جهّزها موظف التجهيز">✅ جاهز</span>' : ''}${o.revised_at ? ' <span class="badge b-success" title="تمت مراجعته">📝 مُراجَع</span>' : ''}${cashCycleBadge(o)}</td>
       <td><strong>${esc(o.customer_name)}</strong></td>
       <td>${esc(o.phone)}</td>
       <td>EGP ${fmt(o.total)}</td>
@@ -1974,7 +1974,7 @@ function renderOrders() {
         <button class="btn btn-ghost btn-xs" onclick="viewOrder('${o.id}')">View</button>
         <button class="btn btn-dark btn-xs" onclick="editOrder('${o.id}')">Edit</button>
         <button class="btn ${o.sent_to_picker_at ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="toggleSentToPicker('${o.id}', ${!!o.sent_to_picker_at})" title="${o.sent_to_picker_at ? 'إلغاء الإرسال للتجهيز' : 'إرسال للتجهيز'}">${o.sent_to_picker_at ? '📤 تم الإرسال' : '📦 إرسال للتجهيز'}</button>
-        <button class="btn btn-ghost btn-xs" onclick="resendWhatsApp('${o.id}')" title="${o.wa_sent_at ? 'Already sent — resend anyway' : 'Send the WhatsApp confirmation template now'}">${o.wa_sent_at ? '💬 WA ✓' : '💬 WA'}</button>
+        <button class="btn ${o.revised_at ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="toggleRevised('${o.id}', ${!!o.revised_at})" title="${o.revised_at ? 'إلغاء المراجعة' : 'تحديد كمُراجَع — تمت مراجعة الطلب والتأكد منه'}">${o.revised_at ? '✓ مُراجَع' : '📝 مراجعة'}</button>
         <button class="btn btn-danger btn-xs" onclick="delOrder('${o.id}')">Delete</button>
       </div></td>
     </tr>`).join('') : `<tr><td colspan="6"><div class="empty"><div class="empty-icon">🛒</div>${rawQ ? 'No orders match “' + esc(rawQ) + '”' : 'No orders yet'}</div></td></tr>`;
@@ -2230,37 +2230,40 @@ window.closePickupPanel = closePickupPanel;
 window.generatePickupSheet = generatePickupSheet;
 window.clearPickup = clearPickup;
 
-async function resendWhatsApp(id) {
-  const order = cache.orders.find(o => o.id === id);
-  if (!order) return;
-  const warn = order.wa_sent_at
-    ? 'This order already had a WhatsApp confirmation sent. Resend anyway?'
-    : 'Send the WhatsApp confirmation template to ' + (order.phone || 'the customer') + '?';
-  if (!confirm(warn)) return;
-  showToast('Sending WhatsApp…');
+// Admin flag — stamps revised_at so the orders list carries a visible
+// "✓ مُراجَع" marker. Click again to un-mark. Does not change status,
+// stock, or any customer-facing data; it's purely an internal "I checked
+// this order" tick for the dashboard.
+async function toggleRevised(orderId, isCurrentlyRevised) {
+  const newValue = isCurrentlyRevised ? null : new Date().toISOString();
+  const doPatch = () => fetch(`${SUPPLIER_SB_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
+    method: 'PATCH',
+    headers: { apikey: SUPPLIER_SB_KEY, Authorization: 'Bearer ' + (accessToken || SUPPLIER_SB_KEY), 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+    body: JSON.stringify({ revised_at: newValue }),
+  });
   try {
-    const res = await fetch('/api/wa-confirm', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orderId: id }),
-    });
-    const d = await res.json().catch(() => ({}));
-    if (res.ok && d.success) {
-      const i = cache.orders.findIndex(o => o.id === id);
-      if (i >= 0) cache.orders[i].wa_sent_at = new Date().toISOString();
-      renderOrders();
-      showToast('WhatsApp sent ✓ · msg ' + (d.messageId || '').slice(-6));
-      return;
+    let res = await doPatch();
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      // Table doesn't have the column yet — tell the admin exactly what to run.
+      if (/column.*revised_at|revised_at.*column|schema cache/i.test(txt)) {
+        showToast('Run once in Supabase SQL: ALTER TABLE orders ADD COLUMN revised_at timestamptz;');
+        return;
+      }
+      if (/PGRST303|JWT expired|invalid.*jwt/i.test(txt) && typeof refreshSession === 'function' && await refreshSession()) {
+        res = await doPatch();
+        if (!res.ok) throw new Error(await res.text());
+      } else {
+        throw new Error(txt || `HTTP ${res.status}`);
+      }
     }
-    const meta = d?.details?.error || d?.details || d;
-    const code = meta?.code ?? meta?.error_subcode;
-    const msg = meta?.message || meta?.error_user_msg || JSON.stringify(d);
-    showToast('WA failed: ' + (code ? '#' + code + ' ' : '') + String(msg).slice(0, 160));
-    console.error('resendWhatsApp failed:', d);
-  } catch (e) {
-    showToast('WA request failed: ' + e.message);
-  }
+    const i = cache.orders.findIndex(o => o.id === orderId);
+    if (i >= 0) cache.orders[i].revised_at = newValue;
+    renderOrders();
+    showToast(isCurrentlyRevised ? 'أُلغيت المراجعة' : '✓ تم تحديده كمُراجَع');
+  } catch (e) { showToast('Error: ' + e.message); }
 }
+window.toggleRevised = toggleRevised;
 
 async function syncFromBosta() {
   showToast('Syncing from Bosta…');
