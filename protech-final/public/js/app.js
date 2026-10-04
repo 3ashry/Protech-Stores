@@ -2844,13 +2844,14 @@ function renderReturns() {
     </tr>`).join('') : '<tr><td colspan="5"><div class="empty"><div class="empty-icon">↩️</div>No returns</div></td></tr>';
 }
 
-// Collect every returned product line the admin has explicitly added to
-// the Elashry list — i.e. status=Returned AND pending_elashry_at is set
-// AND the line is not marked as reused/sent_back. Opt-in via the
-// 📦 "أرسل لقائمة الأشري" button on the Orders screen, so the list only
-// holds what the admin has physically reviewed. Each entry carries both
-// the order reference and the line index so the toggle-handlers below
-// know which jsonb slot to flip.
+// Collect every product line of every order in the Elashry list — i.e.
+// status=Returned AND pending_elashry_at is set. The disposition
+// (reused / sent_back / null) travels with each entry so the popup
+// renderer can decide what to show for it; we no longer SKIP dispositioned
+// lines here, because the admin complained a 2-line order was showing
+// only one line in the pending list when the other line still carried
+// an old supplier_return_status. Keeping every line visible with its
+// current state is both the honest answer and the fix.
 function returnsAwaitingSupplier() {
   const products = cache.products || [];
   const rets = (cache.orders || []).filter(o =>
@@ -2860,9 +2861,6 @@ function returnsAwaitingSupplier() {
   for (const o of rets) {
     const items = Array.isArray(o.products) ? o.products : [];
     items.forEach((p, idx) => {
-      // Skip anything the admin has already closed out (reused in another
-      // customer order, or physically sent back to the supplier).
-      if (p.supplier_return_status === 'reused' || p.supplier_return_status === 'sent_back') return;
       const sysProd = products.find(pp => pp.code === p.code);
       out.push({
         orderId: o.id,
@@ -2870,10 +2868,11 @@ function returnsAwaitingSupplier() {
         customer: o.customer_name || '',
         returnedDate: o.date || o.returned_at || '',
         lineIdx: idx,
-        code: p.code,
-        name: p.name || sysProd?.name || p.code,
+        code: p.code || '',
+        name: p.name || sysProd?.name || p.code || '(بدون اسم)',
         qty: parseInt(p.qty || 1),
         buyPrice: lineBuyPrice(p, products),
+        status: p.supplier_return_status || null,
       });
     });
   }
@@ -2937,7 +2936,11 @@ function renderElashryFab() {
   const btn = document.getElementById('elashry-fab');
   const badge = document.getElementById('elashry-fab-count');
   if (!btn || !badge) return;
-  const total = returnsAwaitingSupplier().reduce((s, l) => s + l.qty, 0);
+  // Count only OPEN lines (not yet reused / sent_back). Dispositioned
+  // lines are still visible inside the popup for context, but a badge
+  // that includes them would overstate "pending" and make the admin
+  // chase phantom items.
+  const total = returnsAwaitingSupplier().filter(l => !l.status).reduce((s, l) => s + l.qty, 0);
   badge.textContent = String(total);
   // Always visible on the orders screen (it lives inside #screen-orders, so
   // it's naturally hidden on every other screen). Previously we hid it when
@@ -3216,9 +3219,12 @@ function renderElashryPopup() {
   if (!body) return;
   const lines = returnsAwaitingSupplier();
   const sent = returnsSentToSupplier();
-  // Aggregate pending by product code for the per-SKU totals footer.
+  // "Open" = lines still awaiting a decision. Dispositioned lines (reused
+  // / sent_back) stay in the table for visibility but don't inflate the
+  // SKU totals footer or the header pending-piece count.
+  const open = lines.filter(l => !l.status);
   const byCode = new Map();
-  for (const l of lines) {
+  for (const l of open) {
     const row = byCode.get(l.code) || { code: l.code, name: l.name, qty: 0 };
     row.qty += l.qty;
     byCode.set(l.code, row);
@@ -3246,20 +3252,31 @@ function renderElashryPopup() {
             <th>Buy price</th><th>Source order</th><th>Customer</th>
             <th>Returned</th><th style="text-align:center">Actions</th>
           </tr></thead>
-          <tbody>${lines.map(l => `
-            <tr>
-              <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(l.code)}</td>
+          <tbody>${lines.map(l => {
+            // Dispositioned lines (reused/sent_back) stay visible here as
+            // well, with a status chip in the Actions column and a ↶ to
+            // pull them back to pending — so the admin can always see
+            // every line of an order they added to the list.
+            const actions = l.status === 'reused'
+              ? `<span class="badge b-success" style="font-size:11px">💰 مُباع</span>
+                 <button class="btn btn-ghost btn-xs" title="إلغاء — رجّع للقائمة" onclick="unmarkReturnSentToElashry('${l.orderId}', ${l.lineIdx})">↶</button>`
+              : l.status === 'sent_back'
+              ? `<span class="badge b-warning" style="font-size:11px">🏭 رجع للمخزن</span>
+                 <button class="btn btn-ghost btn-xs" title="إلغاء — رجّع للقائمة" onclick="unmarkReturnSentToElashry('${l.orderId}', ${l.lineIdx})">↶</button>`
+              : `<button class="btn btn-dark btn-xs" title="بيع هذه القطعة — تبقى في المخزون بنفس سعر الشراء" onclick="reuseWarehouseReturn('${l.orderId}', ${l.lineIdx})">💰 بيع</button>
+                 <button class="btn btn-primary btn-xs" title="رجوع للمخزن الرئيسي بسعر الشراء الحالي" onclick="markReturnSentToElashry('${l.orderId}', ${l.lineIdx})">🏭 رجوع للمخزن</button>`;
+            return `
+            <tr${l.status ? ' style="opacity:.78"' : ''}>
+              <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(l.code || '—')}</td>
               <td>${esc(l.name)}</td>
               <td style="text-align:center;font-family:var(--f-mono,monospace);font-weight:700">× ${l.qty}</td>
               <td>EGP ${fmt(l.buyPrice)}</td>
               <td><span class="badge b-orange">${esc(l.orderCode || '—')}</span></td>
               <td style="font-size:12px">${esc(l.customer)}</td>
               <td style="font-family:var(--f-mono,monospace);font-size:12px;color:var(--muted)">${esc(l.returnedDate)}</td>
-              <td style="text-align:center;white-space:nowrap">
-                <button class="btn btn-dark btn-xs" title="بيع هذه القطعة — تبقى في المخزون بنفس سعر الشراء" onclick="reuseWarehouseReturn('${l.orderId}', ${l.lineIdx})">💰 بيع</button>
-                <button class="btn btn-primary btn-xs" title="رجوع للمخزن الرئيسي بسعر الشراء الحالي" onclick="markReturnSentToElashry('${l.orderId}', ${l.lineIdx})">🏭 رجوع للمخزن</button>
-              </td>
-            </tr>`).join('')}</tbody>
+              <td style="text-align:center;white-space:nowrap">${actions}</td>
+            </tr>`;
+          }).join('')}</tbody>
           <tfoot>
             <tr><th colspan="8" style="padding:12px 10px;background:var(--bg-2);text-align:start;font-size:13px;color:var(--ink-2)">📊 الإجمالي حسب المنتج (${agg.length} SKU · ${totalUnits} قطعة)</th></tr>
             ${agg.map(r => `
@@ -3349,7 +3366,9 @@ window.addAllWarehouseReturnsToElashry = addAllWarehouseReturnsToElashry;
 // grouped by product code, with totals. Returns {text, totalUnits}. Shared
 // between the "send" and "copy" buttons so the message is identical.
 function buildReturnsToElashryMessage() {
-  const lines = returnsAwaitingSupplier();
+  // Only pending (undispositioned) lines — a line already marked as
+  // reused/sent_back is not something to request from Elashry again.
+  const lines = returnsAwaitingSupplier().filter(l => !l.status);
   const byCode = new Map();
   for (const l of lines) {
     const row = byCode.get(l.code) || { code: l.code, name: l.name, qty: 0 };
@@ -3570,7 +3589,9 @@ window.markReturnSentToElashry = markReturnSentToElashry;
 // at once, each with its own buy-price snapshot. Confirms with the
 // total piece count. One combined undo entry rolls the whole batch back.
 async function markAllReturnsSentToElashry() {
-  const pending = returnsAwaitingSupplier();
+  // Only touch lines still awaiting a decision — a line already marked
+  // reused/sent_back shouldn't be flipped by the bulk button.
+  const pending = returnsAwaitingSupplier().filter(l => !l.status);
   if (!pending.length) { showToast('لا توجد مرتجعات في القائمة'); return; }
   const total = pending.reduce((s, l) => s + l.qty, 0);
   if (!confirm(`تحديد كل القائمة (${pending.length} سطر · ${total} قطعة) كمُرسَلة لأشري؟`)) return;
