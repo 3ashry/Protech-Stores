@@ -1960,7 +1960,7 @@ function renderOrders() {
     : '';
   document.getElementById('orders-tbody').innerHTML = visibleOrders.length ? visibleOrders.map(o => `
     <tr${o.status === 'Awaiting Action' ? ' style="background:#fff4f4"' : ''}>
-      <td><span class="badge b-orange">${esc(o.code)}</span> ${orderProgressBadge(o)}${o.allow_open ? ' <span class="badge b-warning" title="يريد فتح الشحنة">📦</span>' : ''}${o.status === 'Returned' && !o.warehouse_confirmed ? ' <span class="badge b-danger" title="مرتجع — لم يُرجع للمخزن بعد">↩️ لم يُرجع للمخزن</span>' : ''}${o.picker_prepared_at ? ' <span class="badge b-success" title="جهّزها موظف التجهيز">✅ جاهز</span>' : ''}${o.revised_at ? ' <span class="badge b-success" title="تمت مراجعته">📝 مُراجَع</span>' : ''}${cashCycleBadge(o)}</td>
+      <td><span class="badge b-orange">${esc(o.code)}</span> ${orderProgressBadge(o)}${o.allow_open ? ' <span class="badge b-warning" title="يريد فتح الشحنة">📦</span>' : ''}${o.status === 'Returned' && !o.warehouse_confirmed ? ' <span class="badge b-danger" title="مرتجع — لم يُرجع للمخزن بعد">↩️ لم يُرجع للمخزن</span>' : ''}${o.picker_prepared_at ? ' <span class="badge b-success" title="جهّزها موظف التجهيز">✅ جاهز</span>' : ''}${o.revised_at ? ' <span class="badge b-success" title="تمت مراجعته">📝 مُراجَع</span>' : ''}${o.pending_elashry_at ? ' <span class="badge b-warning" title="في قائمة المرتجعات للأشري">📦 قائمة الأشري</span>' : ''}${cashCycleBadge(o)}</td>
       <td><strong>${esc(o.customer_name)}</strong></td>
       <td>${esc(o.phone)}</td>
       <td>EGP ${fmt(o.total)}</td>
@@ -1975,6 +1975,7 @@ function renderOrders() {
         <button class="btn btn-dark btn-xs" onclick="editOrder('${o.id}')">Edit</button>
         <button class="btn ${o.sent_to_picker_at ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="toggleSentToPicker('${o.id}', ${!!o.sent_to_picker_at})" title="${o.sent_to_picker_at ? 'إلغاء الإرسال للتجهيز' : 'إرسال للتجهيز'}">${o.sent_to_picker_at ? '📤 تم الإرسال' : '📦 إرسال للتجهيز'}</button>
         <button class="btn ${o.revised_at ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="toggleRevised('${o.id}', ${!!o.revised_at})" title="${o.revised_at ? 'إلغاء المراجعة' : 'تحديد كمُراجَع — تمت مراجعة الطلب والتأكد منه'}">${o.revised_at ? '✓ مُراجَع' : '📝 مراجعة'}</button>
+        ${o.status === 'Returned' ? `<button class="btn ${o.pending_elashry_at ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="toggleElashryReturn('${o.id}', ${!!o.pending_elashry_at})" title="${o.pending_elashry_at ? 'إخراج من قائمة الأشري' : 'أضف هذا الطلب إلى قائمة المرتجعات الجاهزة للأشري'}">${o.pending_elashry_at ? '✓ بقائمة الأشري' : '📦 أرسل لقائمة الأشري'}</button>` : ''}
         <button class="btn btn-danger btn-xs" onclick="delOrder('${o.id}')">Delete</button>
       </div></td>
     </tr>`).join('') : `<tr><td colspan="6"><div class="empty"><div class="empty-icon">🛒</div>${rawQ ? 'No orders match “' + esc(rawQ) + '”' : 'No orders yet'}</div></td></tr>`;
@@ -2712,7 +2713,7 @@ function renderReturns() {
   document.getElementById('ret-stats').innerHTML = `
     <div class="stat-card red"><div class="stat-val">${rets.length}</div><div class="stat-label">Total Returns</div></div>
     <div class="stat-card orange"><div class="stat-val">EGP ${fmt(totalShip)}</div><div class="stat-label">Total Return Shipping</div></div>
-    <div class="stat-card blue"><div class="stat-val">${inWarehouseUnits}</div><div class="stat-label">In warehouse — pending Elashry</div></div>`;
+    <div class="stat-card blue"><div class="stat-val">${inWarehouseUnits}</div><div class="stat-label">قطعة في قائمة الأشري</div></div>`;
   document.getElementById('ret-tbody').innerHTML = rets.length ? rets.map(o => `
     <tr>
       <td><strong>${esc(o.customer_name)}</strong></td>
@@ -2725,16 +2726,17 @@ function renderReturns() {
   renderReturnsWarehouse(inWarehouseLines);
 }
 
-// Collect every returned product line that is physically back with the admin
-// (status=Returned AND warehouse_confirmed=true) and hasn't yet been marked
-// as reused or sent back. Each returned entry carries both the order
-// reference and the line index so the toggle-handlers below know which
-// jsonb slot to flip. Used by both the main renderReturns table and the
-// in-warehouse stat tile.
+// Collect every returned product line the admin has explicitly added to
+// the Elashry list — i.e. status=Returned AND pending_elashry_at is set
+// AND the line is not marked as reused/sent_back. Opt-in via the
+// 📦 "أرسل لقائمة الأشري" button on the Orders screen, so the list only
+// holds what the admin has physically reviewed. Each entry carries both
+// the order reference and the line index so the toggle-handlers below
+// know which jsonb slot to flip.
 function returnsAwaitingSupplier() {
   const products = cache.products || [];
   const rets = (cache.orders || []).filter(o =>
-    o.status === 'Returned' && o.warehouse_confirmed === true
+    o.status === 'Returned' && !!o.pending_elashry_at
   );
   const out = [];
   for (const o of rets) {
@@ -2867,6 +2869,41 @@ async function _setReturnLineStatus(orderId, lineIdx, status) {
     showToast('Error: ' + e.message);
   }
 }
+
+// Toggle whether a Returned order is on the "pending Elashry" list that
+// renders on the Returns screen. Admin clicks the 📦 button on the row
+// after physically receiving the return — that signals it's ready to
+// ship back to the supplier. Clicking again withdraws it (useful when
+// the admin changes their mind or the goods never actually arrived).
+async function toggleElashryReturn(orderId, isCurrentlyPending) {
+  const o = cache.orders.find(x => x.id === orderId);
+  if (!o) return;
+  if (!isCurrentlyPending) {
+    const n = Array.isArray(o.products)
+      ? o.products.reduce((s, p) => s + parseInt(p.qty || 1), 0)
+      : 0;
+    if (!confirm(`إضافة طلب ${o.code || ''} إلى قائمة المرتجعات للأشري؟\n(${n} قطعة · ${o.customer_name || ''})`)) return;
+  }
+  const newValue = isCurrentlyPending ? null : new Date().toISOString();
+  try {
+    await dbUpdate('orders', orderId, { pending_elashry_at: newValue });
+    const i = cache.orders.findIndex(x => x.id === orderId);
+    if (i >= 0) cache.orders[i].pending_elashry_at = newValue;
+    const prevScroll = window.scrollY;
+    renderOrders();
+    if (typeof renderReturns === 'function') renderReturns();
+    requestAnimationFrame(() => window.scrollTo(0, prevScroll));
+    showToast(isCurrentlyPending ? 'أُخرج من قائمة الأشري' : '✓ أُضيف لقائمة الأشري');
+  } catch (e) {
+    const msg = String(e.message || '');
+    if (/column.*pending_elashry_at|pending_elashry_at.*column|schema cache/i.test(msg)) {
+      showToast('Run once in Supabase SQL: ALTER TABLE orders ADD COLUMN pending_elashry_at timestamptz;');
+    } else {
+      showToast('Error: ' + msg);
+    }
+  }
+}
+window.toggleElashryReturn = toggleElashryReturn;
 
 async function markReturnReused(orderId, lineIdx) {
   const o = cache.orders.find(x => x.id === orderId);
