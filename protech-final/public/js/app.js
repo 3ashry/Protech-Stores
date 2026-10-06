@@ -4992,6 +4992,106 @@ function downloadDeliveredOrdersExcel() {
   showToast(`Delivered Excel: ${closed.length} finalised · ${open.length} estimated ✓`);
 }
 
+// Workbook with one sheet per calendar month of Delivered orders, newest
+// → oldest, plus a Summary sheet at the front. Per-row columns match
+// downloadDeliveredOrdersExcel so each month is read the same way as the
+// combined report — just scoped to that month, with its own subtotal.
+function downloadDeliveredByMonthExcel() {
+  const products = cache.products || [];
+  const delivered = (cache.orders || []).filter(o => o.status === 'Delivered');
+  if (!delivered.length) { showToast('No delivered orders to export'); return; }
+
+  const toRow = (o) => {
+    const buyCost = (Array.isArray(o.products) ? o.products : [])
+      .reduce((a, p) => a + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0);
+    const collected = parseFloat(o.total || 0);
+    const shipping = parseFloat(o.actual_shipping || 0);
+    return {
+      'Order Code': o.code || '',
+      'Date': String(o.created_at || o.date || '').slice(0, 10),
+      'Customer': o.customer_name || '',
+      'Phone': o.phone || '',
+      'City': o.city || '',
+      'Shipping Code': o.ship_code || '',
+      'Cash Cycle': o.cash_cycle_closed === true ? 'Closed (final)' : 'Open (estimated)',
+      'Total Collected (EGP)': collected,
+      'Actual Shipping (EGP)': shipping,
+      'Buying Cost (EGP)': Math.round(buyCost * 100) / 100,
+      'Net (Collected − Shipping − Buy) (EGP)': Math.round((collected - shipping - buyCost) * 100) / 100,
+    };
+  };
+  const monthKey = (o) => {
+    // Prefer created_at (ISO), fall back to date (YYYY-MM-DD or similar).
+    const raw = String(o.created_at || o.date || '').slice(0, 7);
+    return /^\d{4}-\d{2}$/.test(raw) ? raw : 'unknown';
+  };
+
+  // Bucket orders into {month → rows[]}, oldest within each bucket.
+  const buckets = new Map();
+  for (const o of delivered) {
+    const key = monthKey(o);
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(o);
+  }
+  const months = Array.from(buckets.keys()).sort().reverse(); // newest month first
+  const byDate = (a, b) => String(a.created_at || a.date || '').localeCompare(String(b.created_at || b.date || ''));
+
+  const wb = XLSX.utils.book_new();
+
+  // Summary sheet first — one row per month with the three big numbers.
+  const summaryRows = months.map(m => {
+    const rows = buckets.get(m).map(toRow);
+    const collected = rows.reduce((a, r) => a + r['Total Collected (EGP)'], 0);
+    const shipping = rows.reduce((a, r) => a + r['Actual Shipping (EGP)'], 0);
+    const buy = rows.reduce((a, r) => a + r['Buying Cost (EGP)'], 0);
+    const net = rows.reduce((a, r) => a + r['Net (Collected − Shipping − Buy) (EGP)'], 0);
+    return {
+      'Month': m,
+      'Orders': rows.length,
+      'Total Collected (EGP)': Math.round(collected * 100) / 100,
+      'Actual Shipping (EGP)': Math.round(shipping * 100) / 100,
+      'Buying Cost (EGP)': Math.round(buy * 100) / 100,
+      'Net (Collected − Shipping − Buy) (EGP)': Math.round(net * 100) / 100,
+    };
+  });
+  const grand = summaryRows.reduce((a, r) => ({
+    'Month': 'GRAND TOTAL',
+    'Orders': a['Orders'] + r['Orders'],
+    'Total Collected (EGP)': Math.round((a['Total Collected (EGP)'] + r['Total Collected (EGP)']) * 100) / 100,
+    'Actual Shipping (EGP)': Math.round((a['Actual Shipping (EGP)'] + r['Actual Shipping (EGP)']) * 100) / 100,
+    'Buying Cost (EGP)': Math.round((a['Buying Cost (EGP)'] + r['Buying Cost (EGP)']) * 100) / 100,
+    'Net (Collected − Shipping − Buy) (EGP)': Math.round((a['Net (Collected − Shipping − Buy) (EGP)'] + r['Net (Collected − Shipping − Buy) (EGP)']) * 100) / 100,
+  }), { 'Month': '', 'Orders': 0, 'Total Collected (EGP)': 0, 'Actual Shipping (EGP)': 0, 'Buying Cost (EGP)': 0, 'Net (Collected − Shipping − Buy) (EGP)': 0 });
+  const wsSummary = XLSX.utils.json_to_sheet([...summaryRows, {}, grand]);
+  wsSummary['!cols'] = [{ wch: 14 }, { wch: 10 }, { wch: 22 }, { wch: 22 }, { wch: 20 }, { wch: 30 }];
+  XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+
+  // One sheet per month. Sheet names must be ≤31 chars and avoid /\?*[].
+  for (const m of months) {
+    const rows = buckets.get(m).sort(byDate).map(toRow);
+    const subtotal = {
+      'Order Code': `Subtotal — ${m}`,
+      'Date': '', 'Customer': '', 'Phone': '', 'City': '', 'Shipping Code': '',
+      'Cash Cycle': `${rows.length} orders`,
+      'Total Collected (EGP)': Math.round(rows.reduce((a, r) => a + r['Total Collected (EGP)'], 0) * 100) / 100,
+      'Actual Shipping (EGP)': Math.round(rows.reduce((a, r) => a + r['Actual Shipping (EGP)'], 0) * 100) / 100,
+      'Buying Cost (EGP)': Math.round(rows.reduce((a, r) => a + r['Buying Cost (EGP)'], 0) * 100) / 100,
+      'Net (Collected − Shipping − Buy) (EGP)': Math.round(rows.reduce((a, r) => a + r['Net (Collected − Shipping − Buy) (EGP)'], 0) * 100) / 100,
+    };
+    const ws = XLSX.utils.json_to_sheet([...rows, subtotal]);
+    ws['!cols'] = [
+      { wch: 14 }, { wch: 12 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
+      { wch: 18 }, { wch: 20 }, { wch: 20 }, { wch: 18 }, { wch: 30 },
+    ];
+    // Excel sheet-name constraints: ≤31 chars, no / \ ? * [ ].
+    const safeName = String(m).replace(/[\\/\?\*\[\]]/g, '-').slice(0, 31);
+    XLSX.utils.book_append_sheet(wb, ws, safeName);
+  }
+
+  XLSX.writeFile(wb, `Protech_Delivered_By_Month_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  showToast(`Delivered by month: ${months.length} month${months.length === 1 ? '' : 's'} ✓`);
+}
+
 function downloadReturnsExcel() {
   const rets = cache.orders.filter(o => o.status === 'Returned');
   const rows = rets.map(o => {
