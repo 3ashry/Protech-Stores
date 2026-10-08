@@ -194,6 +194,27 @@ async function _invParseXlsxFile(file) {
 
 async function _invParseCsvFile(file) {
   const text = await file.text();
+  // Proper column CSV (a header with a code column + a qty/quantity column):
+  // parse by columns so product codes that contain digits (e.g. TFCLI2012)
+  // can never be mistaken for the quantity. Falls back to the heuristic text
+  // parser for free-form exports that have no recognisable header.
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (lines.length) {
+    const delim = lines[0].includes('\t') ? '\t' : ',';
+    const header = lines[0].toLowerCase().split(delim).map(s => s.trim());
+    const ci = header.findIndex(h => /\b(code|كود)\b/.test(h) || h === 'code');
+    const qi = header.findIndex(h => /\b(qty|quantity|balance|رصيد|كمية)\b/.test(h) || h === 'qty');
+    if (ci >= 0 && qi >= 0) {
+      const agg = new Map();
+      for (const ln of lines.slice(1)) {
+        const cells = ln.split(delim);
+        const code = String(cells[ci] || '').toUpperCase().replace(/[^A-Z0-9\-]/g, '');
+        const qty = parseFloat(String(cells[qi] || '').replace(/[^\d.]/g, ''));
+        if (code && Number.isFinite(qty)) agg.set(code, (agg.get(code) || 0) + qty);
+      }
+      return { rows: Array.from(agg, ([code, qty]) => ({ code, qty })) };
+    }
+  }
   return _invRowsFromText(text);
 }
 
@@ -244,6 +265,13 @@ function _openInventorySync() {
               <span style="color:#f97316;font-weight:700">(reversible — customers won't see them but the DB row + images stay)</span>
             </span>
           </div>
+          <div style="display:flex;align-items:flex-start;gap:10px;margin-top:6px;font-size:13px;padding:8px;border-radius:8px;background:#fafafa;cursor:pointer" onclick="var cb=this.querySelector('input');cb.checked=!cb.checked;_invRefreshPreview()">
+            <input type="checkbox" id="inv-sync-create-new" onclick="event.stopPropagation()" onchange="_invRefreshPreview()"
+                   style="width:20px !important;height:20px !important;min-width:20px;flex:0 0 20px;margin:0;padding:0;border:1px solid #d1d5db;appearance:auto;-webkit-appearance:checkbox;cursor:pointer">
+            <span style="user-select:none">Also <b>create</b> file codes not yet in the store (as <b>hidden</b> products)
+              <span style="color:#16a34a;font-weight:700">(name = code, qty set, Published = No — edit price/photos later before publishing)</span>
+            </span>
+          </div>
           <div id="inv-sync-status" style="margin-top:14px;color:#666;font-size:13px">Waiting for a file…</div>
           <div id="inv-sync-preview" style="margin-top:14px"></div>
         </div>
@@ -291,6 +319,7 @@ function _invRefreshPreview() {
   const previewEl = document.getElementById('inv-sync-preview');
   const zeroMissing = !!document.getElementById('inv-sync-zero-missing')?.checked;
   const hideMissing = !!document.getElementById('inv-sync-hide-missing')?.checked;
+  const createNew   = !!document.getElementById('inv-sync-create-new')?.checked;
 
   const dbByCode = new Map();
   for (const p of (cache.products || [])) {
@@ -332,6 +361,10 @@ function _invRefreshPreview() {
   // Build the unified pending list: qty updates + hides (some products may need both).
   const pending = qtyChanges.map(c => ({ kind: 'qty', id: c.product.id, code: c.product.code, newQty: c.newQty }));
   for (const h of toHide) pending.push({ kind: 'hide', id: h.product.id, code: h.product.code });
+  // Optionally create the file codes that don't exist yet, as hidden products.
+  if (createNew) {
+    for (const u of unmatched) pending.push({ kind: 'create', code: u.code, newQty: u.newQty });
+  }
   _invPending = pending;
   const allChanges = qtyChanges;
 
@@ -349,7 +382,7 @@ function _invRefreshPreview() {
 
   const unmatchedBlock = unmatched.length
     ? `<div style="margin-top:12px;background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px">
-         <div style="font-weight:800;color:#92400e;margin-bottom:6px">⚠️ ${unmatched.length} file codes not in your store (add them manually if they should exist):</div>
+         <div style="font-weight:800;color:#92400e;margin-bottom:6px">⚠️ ${unmatched.length} file codes not in your store ${createNew ? '— <span style="color:#16a34a">these will be CREATED as hidden products</span>' : '(tick "create" above to add them as hidden products)'}:</div>
          <div style="font-family:monospace;font-size:12px;max-height:140px;overflow:auto;white-space:pre-wrap;user-select:all;background:#fff;padding:8px;border-radius:6px">${_invEsc(unmatched.map(u => `${u.code}  qty=${u.newQty}`).join('\n'))}</div>
        </div>` : '';
 
@@ -417,6 +450,21 @@ async function _applyInventorySync() {
         await dbUpdate('products', it.id, { is_published: false });
         const i = cache.products.findIndex(p => p.id === it.id);
         if (i >= 0) cache.products[i] = { ...cache.products[i], is_published: false };
+      } else if (it.kind === 'create') {
+        // New product from the stock file: hidden, placeholder name = code,
+        // quantity set, zero prices. Admin edits price/photos before publishing.
+        const row = {
+          id: (typeof genId === 'function' ? genId() : (Date.now().toString(36) + Math.random().toString(36).slice(2, 7))),
+          code: it.code,
+          name: it.code,
+          qty: it.newQty,
+          price: 0,
+          is_published: false,
+          created_at: new Date().toISOString(),
+        };
+        const created = await dbInsert('products', row);
+        const rec = (Array.isArray(created) ? created[0] : created) || row;
+        if (cache.products) cache.products.push(rec);
       } else {
         await dbUpdate('products', it.id, { qty: it.newQty });
         const i = cache.products.findIndex(p => p.id === it.id);
