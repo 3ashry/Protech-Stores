@@ -2745,7 +2745,11 @@ async function undoWarehouse(id) {
 async function syncMetaAds() {
   showToast('Syncing Meta ad spend…');
   try {
-    const res = await fetch('/api/meta-sync', { method: 'POST' });
+    const res = await fetch('/api/meta-sync', {
+      method: 'POST',
+      headers: (typeof accessToken !== 'undefined' && accessToken)
+        ? { Authorization: `Bearer ${accessToken}` } : {},
+    });
     const d = await res.json().catch(() => ({}));
     if (!res.ok) {
       showToast('Meta sync: ' + (d.error || ('HTTP ' + res.status)));
