@@ -796,9 +796,9 @@
          auto-summed from components; the picker sees the components
          instead of the bundle name at fulfilment time. -->
     <div style="background:#fdf4ff;border:1.5px solid #a21caf;border-radius:10px;padding:14px;margin-bottom:14px">
-      <div style="font-weight:700;font-size:14px;margin-bottom:6px">📦 Bundle / Kit — طقم مركّب من منتجات أخرى</div>
+      <div style="font-weight:700;font-size:14px;margin-bottom:6px">📦 Bundle / Kit — a set made of other products</div>
       <div style="font-size:12px;color:#666;margin-bottom:10px">
-        Turn this product into a real bundle: pick components + quantities, and the buy price is auto-computed from their buy prices.
+        Turn this product into a real bundle: pick components + quantities, and the buy price is <b>summed automatically</b> from their buy prices as you edit.
         <b>The packaging staff sees the individual products instead of the bundle name</b> so they can pick each item from the warehouse.
       </div>
       <div id="p-bundle-of-list" style="display:flex;flex-direction:column;gap:8px"></div>
@@ -806,7 +806,7 @@
         <button type="button" onclick="addBundleComponentRow()"
           style="padding:8px 14px;background:#a21caf;color:#fff;border:0;border-radius:6px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer">+ Add component</button>
         <button type="button" onclick="recomputeBundleBuyPrice()"
-          style="padding:8px 14px;background:#fff;color:#a21caf;border:1.5px solid #a21caf;border-radius:6px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer">🔁 حساب سعر الشراء من المكونات</button>
+          style="padding:8px 14px;background:#fff;color:#a21caf;border:1.5px solid #a21caf;border-radius:6px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer">🔁 Recompute from components</button>
       </div>
       <div id="p-bundle-of-total" style="margin-top:10px;font-size:12px;color:#666"></div>
     </div>
