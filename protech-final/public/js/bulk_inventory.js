@@ -477,6 +477,17 @@ async function _applyInventorySync() {
     }
   }
   try { renderInventory(); } catch (_) {}
+  // Audit the whole import as one entry (counts per kind).
+  try {
+    if (typeof logAudit === 'function') {
+      const counts = items.reduce((a, it) => { a[it.kind || 'qty'] = (a[it.kind || 'qty'] || 0) + 1; return a; }, {});
+      logAudit('inventory.sync', {
+        entity: 'products',
+        summary: `Stock sync: ${counts.qty || 0} qty updated, ${counts.create || 0} created, ${counts.hide || 0} hidden` + (failed ? `, ${failed} failed` : ''),
+        new_value: counts,
+      });
+    }
+  } catch (_) {}
   _closeInventorySync();
   if (failed) {
     alert(`Done: ${total - failed} updated, ${failed} failed.\nFailed codes:\n${failedCodes.join(', ')}`);

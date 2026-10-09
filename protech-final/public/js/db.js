@@ -152,6 +152,31 @@ async function dbInsert(table, data) {
   return res.json();
 }
 
+// ── AUDIT LOG ──────────────────────────────────────────────────────
+// Records a manual change to money-related data. The DB stamps `actor`
+// from the logged-in JWT (auth.uid()) and `at` from now(), so the "who"
+// and "when" can't be forged by the client. Best-effort and non-blocking:
+// a failed audit write must never break the action it is logging.
+//   action    short machine tag, e.g. 'order.buy_price', 'invoice.save'
+//   opts      { entity, entity_id, summary, old_value, new_value }
+async function logAudit(action, opts = {}) {
+  try {
+    if (!USE_SUPABASE || !accessToken) return; // only log real, authenticated writes
+    await fetch(`${SUPABASE_URL}/rest/v1/audit_log`, {
+      method: 'POST',
+      headers: sbHeaders({ 'Prefer': 'return=minimal' }),
+      body: JSON.stringify({
+        action,
+        entity: opts.entity || null,
+        entity_id: opts.entity_id != null ? String(opts.entity_id) : null,
+        summary: opts.summary || null,
+        old_value: opts.old_value !== undefined ? opts.old_value : null,
+        new_value: opts.new_value !== undefined ? opts.new_value : null,
+      }),
+    });
+  } catch (e) { console.warn('audit log failed:', e && e.message); }
+}
+
 async function dbUpdate(table, id, data) {
   if (!USE_SUPABASE) return localUpdate(table, id, data);
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, {
