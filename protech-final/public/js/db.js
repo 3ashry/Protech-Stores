@@ -224,7 +224,7 @@ function localDelete(table, id) {
 }
 
 // ── IN-MEMORY CACHE ──
-let cache = { products: [], orders: [], expenses: [], feedbacks: [] };
+let cache = { products: [], orders: [], expenses: [], feedbacks: [], metaAdSpend: [] };
 
 async function loadAll() {
   try {
@@ -241,6 +241,10 @@ async function loadAll() {
     cache.orders = orders || [];
     cache.expenses = expenses || [];
     cache.feedbacks = feedbacks || [];
+    // Meta ad spend — best-effort so a missing table/perms never blocks the
+    // dashboard. Empty until /api/meta-sync has run with a Meta token.
+    try { cache.metaAdSpend = await dbFetch('meta_ad_spend_daily', { order: 'spend_date.desc' }) || []; }
+    catch (_) { cache.metaAdSpend = cache.metaAdSpend || []; }
   } catch (e) {
     console.warn('DB load error:', e);
     showToast('Connection error — check your internet');

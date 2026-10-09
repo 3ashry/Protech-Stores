@@ -2705,6 +2705,26 @@ async function undoWarehouse(id) {
 
 // Update the per-order buy-price snapshot only (does not touch stock, sell prices,
 // totals, or the product's system-wide buy price).
+// Trigger the serverless Meta ad-spend sync, then reload so the media
+// buyer's 20% picks up the fresh numbers. Surfaces Meta/config errors.
+async function syncMetaAds() {
+  showToast('Syncing Meta ad spend…');
+  try {
+    const res = await fetch('/api/meta-sync', { method: 'POST' });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      showToast('Meta sync: ' + (d.error || ('HTTP ' + res.status)));
+      return;
+    }
+    try { cache.metaAdSpend = await dbFetch('meta_ad_spend_daily', { order: 'spend_date.desc' }) || []; } catch (_) {}
+    renderAll();
+    showToast(`Meta synced ✓ ${d.rows || 0} rows (${d.since}→${d.until}${d.currency ? ', ' + d.currency : ''})`);
+  } catch (e) {
+    showToast('Meta sync failed: ' + e.message);
+  }
+}
+window.syncMetaAds = syncMetaAds;
+
 // ── AUDIT LOG VIEWER ───────────────────────────────────────────────
 // Reads the last 200 audit entries (admin-only table) and shows them in
 // a modal: when, action, summary, old → new. Read-only.
@@ -4334,9 +4354,19 @@ function renderMediaBuyer() {
   //   Owed = 20% × Paid Ads spent this month
   //        +  1% × delivered product sales (excl. shipping) this month
   //        −  Media Buyer payments already made this month
-  const paidAdsMonth = expenses
+  // Ad spend for the 20% share. Prefer the Meta auto-synced spend for the
+  // current Cairo month; fall back to manual "Paid Ads" expenses when there's
+  // no Meta data yet (e.g. before the token is wired). `adSource` is shown so
+  // the admin knows which number is in play.
+  const metaAdsMonth = (cache.metaAdSpend || [])
+    .filter(r => inMonth(cairoYM(r.spend_date)))
+    .reduce((a, r) => a + (parseFloat(r.spend) || 0), 0);
+  const manualAdsMonth = expenses
     .filter(e => e.category === 'Paid Ads' && inMonth(monthOfExpense(e)))
     .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const usingMeta = metaAdsMonth > 0;
+  const paidAdsMonth = usingMeta ? metaAdsMonth : manualAdsMonth;
+  const adSource = usingMeta ? 'Meta (auto)' : 'manual expenses';
 
   const monthDelivered = delivered
     .filter(o => inMonth(monthOfOrder(o)))
@@ -4451,7 +4481,7 @@ function renderMediaBuyer() {
       <span>الشهر الحالي: ${monthLabel}</span>
       <span>${monthDelivered.length} طلب مسلّم</span>
     </div>
-    <div class="fin-row"><span>Paid ads spend (this month)</span><span class="fin-val">EGP ${fmt(paidAdsMonth)}</span></div>
+    <div class="fin-row"><span>Paid ads spend (this month) <span style="font-size:10px;color:var(--muted)">· ${adSource}</span> <button class="btn btn-ghost btn-xs" onclick="syncMetaAds()" title="Pull the latest ad spend from Meta">🔄 Sync Meta</button></span><span class="fin-val">EGP ${fmt(paidAdsMonth)}</span></div>
     <div class="fin-row"><span>20% of paid ads</span><span class="fin-val">EGP ${fmt(adsShare)}</span></div>
     <div class="fin-row"><span>Delivered sales (this month, net of actual shipping)</span><span class="fin-val">EGP ${fmt(monthSales)}</span></div>
     <div class="fin-row"><span>1% of delivered sales</span><span class="fin-val">EGP ${fmt(salesShare)}</span></div>
