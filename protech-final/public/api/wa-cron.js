@@ -14,11 +14,16 @@
 //
 // Env: WA_* (see _wa.js), SUPABASE_URL, SUPABASE_KEY (service_role), CRON_SECRET,
 //      optional WA_CONFIRM_DELAY_HOURS (default 6).
-import { sendConfirmTemplate, sendFeedbackTemplate, sendCartRecoveryTemplate, waConfigured } from './_wa.js';
+import { sendConfirmTemplate, sendFeedbackTemplate, sendCartRecoveryTemplate, sendPreparedTemplate, sendShippedTemplate, waConfigured } from './_wa.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const CRON_SECRET = (process.env.CRON_SECRET || '').trim();
+// Phase-12 escalation timing. After the confirmation goes out with no reply,
+// send ONE reminder after WA_REMINDER_HOURS, then flag the order for a phone
+// call WA_CALL_AFTER_REMINDER_HOURS after that reminder.
+const REMINDER_HOURS = Math.max(1, parseFloat(process.env.WA_REMINDER_HOURS || '6') || 6);
+const CALL_AFTER_REMINDER_HOURS = Math.max(1, parseFloat(process.env.WA_CALL_AFTER_REMINDER_HOURS || '6') || 6);
 // Hours to wait after an order before sending the confirmation. Production is 6h.
 // A leftover sub-1-hour value (used while testing the flow) is IGNORED and falls
 // back to 6, so the schedule can never be accidentally left firing minutes after
@@ -88,10 +93,10 @@ export default async function handler(req, res) {
 
     const sent = [], failed = [], waitingShipCode = [];
     for (const o of orders) {
-      // Wait until Bosta has assigned the ship code before messaging, so the customer
-      // always gets the real tracking code (not the "سيتم إرساله قريباً" placeholder).
-      // No ship code yet -> leave it unsent; a later run picks it up once it's assigned.
-      if (!(o.ship_code && String(o.ship_code).trim())) { waitingShipCode.push(o.code); continue; }
+      // Phase 12: the "order received" confirmation goes out on time even before
+      // Bosta assigns a ship code — the template shows a "سيتم إرساله قريباً"
+      // placeholder, and the real tracking code arrives later in the separate
+      // "handed to Bosta / shipped" message.
       const r = await sendConfirmTemplate(o);
       if (r.ok) {
         // Mark sent so the next run doesn't message the same order again.
@@ -164,9 +169,105 @@ export default async function handler(req, res) {
       } catch (e) { cartFailed.push({ id: c.id, name: c.name, error: e.message }); }
     }
 
+    // ─────────────────────────────────────────────────────────────────
+    //  PREPARED PASS (Phase 12) — order packed (picker_prepared_at set):
+    //  "ready, ships soon" + a Cancel button. Recent orders only so we
+    //  never backfill-message the whole history on first run.
+    // ─────────────────────────────────────────────────────────────────
+    const prepParts = [
+      'select=id,code,phone,customer_name',
+      'picker_prepared_at=not.is.null',
+      'wa_prepared_sent_at=is.null',
+      'status=eq.Processing',
+      'phone=not.is.null',
+      `created_at=gte.${encodeURIComponent(floor)}`,
+    ];
+    if (ONLY_PHONE) prepParts.push(`phone=eq.${encodeURIComponent(ONLY_PHONE)}`);
+    prepParts.push('order=picker_prepared_at.desc', `limit=${test ? 1 : 50}`);
+    const prepOrders = await sbGet(`orders?${prepParts.join('&')}`);
+    const prepSent = [], prepFailed = [];
+    for (const o of prepOrders) {
+      const r = await sendPreparedTemplate(o);
+      if (r.ok) { await sbPatch(o.id, { wa_prepared_sent_at: new Date().toISOString(), wa_prepared_msg_id: r.msgId }); prepSent.push({ code: o.code, msgId: r.msgId }); }
+      else prepFailed.push({ code: o.code, error: r.error });
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    //  SHIPPED PASS (Phase 12) — handed to Bosta (ship_code assigned):
+    //  tracking code + amount, NO cancel, an "I have a problem" button.
+    // ─────────────────────────────────────────────────────────────────
+    const shipParts = [
+      'select=id,code,phone,customer_name,ship_code,total',
+      'ship_code=not.is.null',
+      'wa_shipped_sent_at=is.null',
+      'status=eq.Processing',
+      'phone=not.is.null',
+      `created_at=gte.${encodeURIComponent(floor)}`,
+    ];
+    if (ONLY_PHONE) shipParts.push(`phone=eq.${encodeURIComponent(ONLY_PHONE)}`);
+    shipParts.push('order=created_at.desc', `limit=${test ? 1 : 50}`);
+    const shipOrders = await sbGet(`orders?${shipParts.join('&')}`);
+    const shipSent = [], shipFailed = [];
+    for (const o of shipOrders) {
+      if (!(o.ship_code && String(o.ship_code).trim())) continue;
+      const r = await sendShippedTemplate(o);
+      if (r.ok) { await sbPatch(o.id, { wa_shipped_sent_at: new Date().toISOString(), wa_shipped_msg_id: r.msgId }); shipSent.push({ code: o.code, msgId: r.msgId }); }
+      else shipFailed.push({ code: o.code, error: r.error });
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    //  REMINDER + ESCALATION (Phase 12) — the customer never answered the
+    //  confirmation. Stage 1: resend it once after REMINDER_HOURS. Stage 2:
+    //  CALL_AFTER_REMINDER_HOURS later, flag the order for a phone call
+    //  (needs_call) and record the outcome as "no_answer".
+    // ─────────────────────────────────────────────────────────────────
+    const reminderCutoff = new Date(now - (test ? 0 : REMINDER_HOURS * 3600 * 1000)).toISOString();
+    const remParts = [
+      'select=id,code,phone,customer_name,total,est_shipping,allow_open,ship_code,products',
+      'wa_sent_at=not.is.null',
+      `wa_sent_at=lte.${encodeURIComponent(reminderCutoff)}`,
+      `wa_sent_at=gte.${encodeURIComponent(floor)}`,
+      'customer_confirmed=is.null',
+      'wa_confirm_reminder_at=is.null',
+      'status=eq.Processing',
+      'phone=not.is.null',
+    ];
+    if (ONLY_PHONE) remParts.push(`phone=eq.${encodeURIComponent(ONLY_PHONE)}`);
+    remParts.push('order=wa_sent_at.asc', `limit=${test ? 1 : 50}`);
+    const remOrders = await sbGet(`orders?${remParts.join('&')}`);
+    const remSent = [], remFailed = [];
+    for (const o of remOrders) {
+      const r = await sendConfirmTemplate(o);
+      if (r.ok) { await sbPatch(o.id, { wa_confirm_reminder_at: new Date().toISOString() }); remSent.push({ code: o.code, msgId: r.msgId }); }
+      else remFailed.push({ code: o.code, error: r.error });
+    }
+    const callCutoff = new Date(now - (test ? 0 : CALL_AFTER_REMINDER_HOURS * 3600 * 1000)).toISOString();
+    const callParts = [
+      'select=id,code',
+      'wa_confirm_reminder_at=not.is.null',
+      `wa_confirm_reminder_at=lte.${encodeURIComponent(callCutoff)}`,
+      'customer_confirmed=is.null',
+      'needs_call=is.false',
+      'status=eq.Processing',
+    ];
+    if (ONLY_PHONE) callParts.push(`phone=eq.${encodeURIComponent(ONLY_PHONE)}`);
+    callParts.push('order=wa_confirm_reminder_at.asc', 'limit=100');
+    const callOrders = await sbGet(`orders?${callParts.join('&')}`);
+    const flaggedForCall = [];
+    for (const o of callOrders) {
+      await sbPatch(o.id, { needs_call: true, needs_call_reason: 'لم يرد على رسالة التأكيد', confirm_outcome: 'no_answer' });
+      flaggedForCall.push(o.code);
+    }
+
     const result = { ok: true, test, onlyPhone: ONLY_PHONE || null, delayHours: DELAY_HOURS,
       confirm: { candidates: orders.length, sent: sent.length, failed: failed.length, waitingShipCode: waitingShipCode.length,
         details: { sent, failed: failed.slice(0, 5), waitingShipCode: waitingShipCode.slice(0, 5) } },
+      prepared: { candidates: prepOrders.length, sent: prepSent.length, failed: prepFailed.length,
+        details: { sent: prepSent.slice(0, 10), failed: prepFailed.slice(0, 5) } },
+      shipped: { candidates: shipOrders.length, sent: shipSent.length, failed: shipFailed.length,
+        details: { sent: shipSent.slice(0, 10), failed: shipFailed.slice(0, 5) } },
+      escalation: { reminders: remSent.length, remindersFailed: remFailed.length, flaggedForCall: flaggedForCall.length,
+        details: { flagged: flaggedForCall.slice(0, 10), failed: remFailed.slice(0, 5) } },
       feedback: { candidates: fbOrders.length, sent: fbSent.length, failed: fbFailed.length,
         details: { sent: fbSent.slice(0, 10), failed: fbFailed.slice(0, 5) } },
       cartRecovery: { candidates: cartCandidates.length, sent: cartSent.length, failed: cartFailed.length,

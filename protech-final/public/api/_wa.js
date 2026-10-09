@@ -20,6 +20,12 @@ const WA_FEEDBACK_TEMPLATE = process.env.WA_FEEDBACK_TEMPLATE || 'order_feedback
 // Manager. Default 2 body vars: {{1}} customer name, {{2}} items summary.
 // Override the name via WA_CART_TEMPLATE if yours is named differently.
 const WA_CART_TEMPLATE = process.env.WA_CART_TEMPLATE || 'cart_recovery';
+// Phase-12 status templates. Approved separately in Meta Business Manager.
+//   order_prepared: {{1}} name, {{2}} order code  + 1 Cancel quick-reply.
+//   order_shipped:  {{1}} name, {{2}} tracking code, {{3}} amount to pay
+//                   + 1 "I have a problem" quick-reply.
+const WA_PREPARED_TEMPLATE = process.env.WA_PREPARED_TEMPLATE || 'order_prepared';
+const WA_SHIPPED_TEMPLATE = process.env.WA_SHIPPED_TEMPLATE || 'order_shipped';
 
 export function waConfigured() {
   return !!(WA_TOKEN && WA_PHONE_NUMBER_ID);
@@ -100,6 +106,69 @@ export async function sendConfirmTemplate(order = {}) {
           { type: 'body', parameters: params.map(text => ({ type: 'text', text })) },
           { type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: 'CONFIRM' }] },
           { type: 'button', sub_type: 'quick_reply', index: '1', parameters: [{ type: 'payload', payload: 'CANCEL' }] },
+        ],
+      },
+    }),
+  });
+  const data = await r.json().catch(() => null);
+  if (!r.ok) return { ok: false, error: data };
+  return { ok: true, msgId: data?.messages?.[0]?.id || null };
+}
+
+// Phase 12 — "your order is prepared and ships soon" + a Cancel quick-reply
+// (a cancel here triggers the post-prep cancellation flow). Body params:
+//   {{1}} customer name   {{2}} order code
+// Button index 0 -> CANCEL (payload the webhook reads back). Returns { ok, msgId, error }.
+export async function sendPreparedTemplate(order = {}) {
+  const params = [
+    String(order.customer_name || 'عميلنا العزيز'),
+    String(order.code || ''),
+  ];
+  const r = await fetch(`https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to: waPhone(order.phone),
+      type: 'template',
+      template: {
+        name: WA_PREPARED_TEMPLATE,
+        language: { code: WA_TEMPLATE_LANG },
+        components: [
+          { type: 'body', parameters: params.map(text => ({ type: 'text', text })) },
+          { type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: 'CANCEL' }] },
+        ],
+      },
+    }),
+  });
+  const data = await r.json().catch(() => null);
+  if (!r.ok) return { ok: false, error: data };
+  return { ok: true, msgId: data?.messages?.[0]?.id || null };
+}
+
+// Phase 12 — "handed to the courier / on its way" with NO cancel; instead an
+// "I have a problem with my order" quick-reply that flags the order for a call.
+// Body params: {{1}} customer name  {{2}} tracking code  {{3}} amount to pay.
+// Button index 0 -> PROBLEM. Returns { ok, msgId, error }.
+export async function sendShippedTemplate(order = {}) {
+  const params = [
+    String(order.customer_name || 'عميلنا العزيز'),
+    String(order.ship_code || order.code || ''),
+    fmtNum(order.total || 0),
+  ];
+  const r = await fetch(`https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to: waPhone(order.phone),
+      type: 'template',
+      template: {
+        name: WA_SHIPPED_TEMPLATE,
+        language: { code: WA_TEMPLATE_LANG },
+        components: [
+          { type: 'body', parameters: params.map(text => ({ type: 'text', text })) },
+          { type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: 'PROBLEM' }] },
         ],
       },
     }),
