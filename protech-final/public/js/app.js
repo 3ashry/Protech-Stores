@@ -3942,8 +3942,12 @@ window.copyReturnsToElashry = copyReturnsToElashry;
 //  (orders, expenses, Bosta receipts, Elashry payments); nothing is
 //  hard-typed except the pre-system opening balance.
 // ═══════════════════════════════════════════════════════════════════
-const FIN_OPENING_BALANCE = -12820;        // Jun–Sep 2026, estimated before the system
-const FIN_GOLIVE = { y: 2026, m: 10 };     // first month the system tracked
+// Money the business carried before the FIRST month that has data in the
+// system. Our data currently starts at the earliest order/expense month,
+// so this is 0; set it to a real figure if you ever want to seed a
+// starting cash balance for months that predate the data entirely.
+const FIN_OPENING_BALANCE = 0;
+const FIN_GOLIVE = { y: 2026, m: 10 };     // fallback only, if there's no data yet
 const FIN_MO_EN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
 // Shared money helpers (module scope so the dashboard reuses the same
@@ -3962,10 +3966,24 @@ function finMonthOfOrder(o) { return cairoYM(o.delivered_at) || cairoYM(o.create
 function finMonthOfExpense(e) { return cairoYM(e.date) || cairoYM(e.created_at); }
 function finSameMonth(my, y, m) { return !!my && my.y === y && my.m === m; }
 
-// The sequence of months from go-live through the current Cairo month.
+// The earliest Cairo month that has any real activity (a delivered/returned
+// order or an expense). Drives the month range so no real month is hidden.
+function finEarliestMonth() {
+  let best = null;
+  const take = (my) => { if (my && (!best || my.y < best.y || (my.y === best.y && my.m < best.m))) best = { y: my.y, m: my.m }; };
+  (cache.orders || []).forEach(o => { if (o.status === 'Delivered' || o.status === 'Returned') take(finMonthOfOrder(o)); });
+  (cache.expenses || []).forEach(e => take(finMonthOfExpense(e)));
+  return best || { y: FIN_GOLIVE.y, m: FIN_GOLIVE.m };
+}
+
+// The sequence of months from the first month with data through the
+// current Cairo month.
 function finMonthSeq() {
   const now = cairoYM(new Date().toISOString()) || { y: FIN_GOLIVE.y, m: FIN_GOLIVE.m };
-  const seq = []; let y = FIN_GOLIVE.y, m = FIN_GOLIVE.m;
+  const start = finEarliestMonth();
+  const seq = []; let y = start.y, m = start.m;
+  // Guard against a stray future date pushing start past now.
+  if (y > now.y || (y === now.y && m > now.m)) return [{ y: now.y, m: now.m }];
   while (y < now.y || (y === now.y && m <= now.m)) {
     seq.push({ y, m });
     m++; if (m > 12) { m = 1; y++; }
@@ -4098,6 +4116,9 @@ function finRenderHero(model, kpis) {
   const net = model.allTimeNet;
   const cur = model.current ? model.current.result : 0;
   const confirmedPct = kpis.deliveredCount ? Math.round(kpis.deliveredClosed / kpis.deliveredCount * 100) : 100;
+  const first = model.months[0], last = model.months[model.months.length - 1];
+  const firstLabel = first ? `${FIN_MO_EN[first.m - 1]} ${first.y}` : '—';
+  const lastLabel = last ? `${FIN_MO_EN[last.m - 1]} ${last.y}` : '—';
   host.innerHTML = `
     <div class="card" style="padding:0;overflow:hidden">
       <div style="display:flex;flex-wrap:wrap">
@@ -4106,9 +4127,9 @@ function finRenderHero(model, kpis) {
           <div style="font-size:40px;font-weight:800;line-height:1.1;margin:8px 0;color:${net >= 0 ? '#16a34a' : '#dc2626'}">${net >= 0 ? '+' : '−'}${finFm(Math.abs(net))} EGP</div>
           <div style="display:inline-block;background:${cur >= 0 ? '#dcfce7' : '#fee2e2'};color:${cur >= 0 ? '#15803d' : '#b91c1c'};font-weight:700;font-size:13px;padding:3px 10px;border-radius:999px">${cur >= 0 ? '▲' : '▼'} ${finSigned(cur).replace('EGP ', '')} this month${model.current && model.current.settling ? ' (settling)' : ''}</div>
           <div style="margin-top:16px;font-size:13px;color:#444;line-height:1.9">
-            Since go-live (${FIN_MO_EN[FIN_GOLIVE.m - 1]} ${FIN_GOLIVE.y}): <b>${finSigned(model.sinceGoLive).replace('EGP ', '')}</b><br>
-            Opening balance (Jun–Sep, estimated): <b>${finFm(model.openingBalance)}</b><br>
-            <span style="color:var(--muted)">Confirmed: <b>${confirmedPct}%</b> · estimated: <b>${100 - confirmedPct}%</b> (${kpis.deliveredCount - kpis.deliveredClosed} orders not cash-cycle-closed)</span>
+            Across tracked months (${firstLabel} – ${lastLabel}): <b>${finSigned(model.sinceGoLive).replace('EGP ', '')}</b><br>
+            ${model.openingBalance ? `Opening balance (before ${firstLabel}): <b>${finFm(model.openingBalance)}</b><br>` : ''}
+            <span style="color:var(--muted)">Confirmed: <b>${confirmedPct}%</b> · estimated: <b>${100 - confirmedPct}%</b> (${kpis.deliveredCount - kpis.deliveredClosed} delivered orders not cash-cycle-closed)</span>
           </div>
         </div>
         <div style="flex:1 1 340px;padding:18px 20px;min-width:0"><div style="position:relative;height:230px"><canvas id="fin-balance-chart"></canvas></div></div>
@@ -4246,15 +4267,16 @@ function finRenderMonths(model) {
         <button class="btn btn-ghost btn-sm" onclick="downloadAllFinancesExcel()">⬇ Download Excel</button>
       </div>
       ${rowsHtml}
+      ${model.openingBalance ? `
       <details style="border-top:1px solid var(--line)">
         <summary style="cursor:pointer;list-style:none;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:14px 4px">
           <span style="font-weight:800;min-width:150px">Opening balance</span>
-          <span style="font-weight:800;color:#dc2626;min-width:90px">${finFm(model.openingBalance)}</span>
-          <span style="color:var(--muted);font-size:12.5px;flex:1;min-width:200px">June – September 2026, estimated before the system</span>
-          <span style="background:#e0e7ff;color:#3730a3;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px">Estimated</span>
+          <span style="font-weight:800;color:${model.openingBalance >= 0 ? '#16a34a' : '#dc2626'};min-width:90px">${finFm(model.openingBalance)}</span>
+          <span style="color:var(--muted);font-size:12.5px;flex:1;min-width:200px">Starting balance before the first tracked month</span>
+          <span style="background:#e0e7ff;color:#3730a3;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px">Seeded</span>
         </summary>
-        <div style="padding:10px 4px;font-size:12.5px;color:var(--muted)">A one-time starting balance for the months before the system went live. Adjust it in the code (<code>FIN_OPENING_BALANCE</code>) if you reconcile those months later.</div>
-      </details>
+        <div style="padding:10px 4px;font-size:12.5px;color:var(--muted)">A one-time starting balance for the period before the data begins. Set it in the code (<code>FIN_OPENING_BALANCE</code>).</div>
+      </details>` : ''}
     </div>`;
 }
 
