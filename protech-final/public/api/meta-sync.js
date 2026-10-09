@@ -25,12 +25,32 @@ const CRON_SECRET = (process.env.CRON_SECRET || '').trim();
 const API_VERSION = process.env.META_API_VERSION || 'v21.0';
 const SYNC_DAYS = Math.min(90, Math.max(1, parseInt(process.env.META_SYNC_DAYS || '3', 10) || 3));
 
-function authorized(req) {
-  if (!CRON_SECRET) return true; // no secret set -> allow (you should set one)
+// A request may trigger the sync two ways:
+//   1. The nightly cron / a manual curl — carries the CRON_SECRET (as a
+//      Bearer token or ?key=/?secret= query param).
+//   2. The in-app "Sync Meta" button — carries the signed-in admin's
+//      Supabase JWT, which we verify against Supabase's /auth/v1/user.
+async function authorized(req) {
   const auth = (req.headers.authorization || '').trim();
-  if (auth === `Bearer ${CRON_SECRET}`) return true;
-  const key = ((req.query && (req.query.key || req.query.secret)) || '').toString().trim();
-  return key === CRON_SECRET;
+  const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  // 1. Shared-secret path (cron / server-to-server).
+  if (CRON_SECRET) {
+    if (bearer === CRON_SECRET) return true;
+    const key = ((req.query && (req.query.key || req.query.secret)) || '').toString().trim();
+    if (key === CRON_SECRET) return true;
+  }
+  // 2. Admin path: a valid Supabase user JWT (anyone signed into the admin).
+  if (bearer && bearer !== CRON_SECRET && SUPABASE_URL && SUPABASE_KEY) {
+    try {
+      const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${bearer}` },
+      });
+      if (r.ok) { const u = await r.json().catch(() => null); if (u && u.id) return true; }
+    } catch (_) {}
+  }
+  // 3. No secret configured at all -> allow (dev only).
+  if (!CRON_SECRET) return true;
+  return false;
 }
 
 // YYYY-MM-DD in Africa/Cairo for a given Date (so "today" matches the
@@ -46,7 +66,7 @@ function cairoDate(d) {
 }
 
 export default async function handler(req, res) {
-  if (!authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
+  if (!(await authorized(req))) return res.status(401).json({ error: 'Unauthorized' });
   if (!META_ACCESS_TOKEN || !META_AD_ACCOUNT_ID) {
     return res.status(500).json({ error: 'Meta not configured — set META_ACCESS_TOKEN and META_AD_ACCOUNT_ID.' });
   }
