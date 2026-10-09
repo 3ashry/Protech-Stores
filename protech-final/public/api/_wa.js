@@ -78,19 +78,21 @@ function itemsSummary(products) {
 }
 
 // Send the approved order-confirmation template. Pass an order row (DB shape).
-// Body params, in order:
-//   {{1}} customer name   {{2}} items summary   {{3}} shipping fee (customer)
-//   {{4}} grand total     {{5}} open-package    {{6}} shipping code
-// Two quick-reply buttons: index 0 -> CONFIRM, index 1 -> CANCEL (payloads the
-// webhook reads back). Returns { ok, msgId, error }.
+// Matches the live `order_confirm` template body, in order:
+//   {{1}} customer name   {{2}} order code   {{3}} items summary
+//   {{4}} grand total (incl. shipping — order.total is the COD amount)
+//   {{5}} delivery address
+// Buttons: index 0 -> CONFIRM (تأكيد), index 1 -> CANCEL (إلغاء) as quick
+// replies the webhook reads back; a 3rd static "call us" button carries no
+// payload (it just dials), so it needs no send-time parameter.
+// Returns { ok, msgId, error }.
 export async function sendConfirmTemplate(order = {}) {
   const params = [
     String(order.customer_name || 'عميلنا العزيز'),
+    String(order.code || ''),
     itemsSummary(order.products),
-    fmtNum(order.est_shipping || 0),
     fmtNum(order.total || 0),
-    order.allow_open ? 'متاح' : 'غير متاح',
-    String(order.ship_code || 'سيتم إرساله قريباً'),
+    String(order.address || '—'),
   ];
   const r = await fetch(`https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}/messages`, {
     method: 'POST',
