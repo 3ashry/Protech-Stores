@@ -3934,14 +3934,368 @@ window.sendReturnsToElashryWA = sendReturnsToElashryWA;
 window.copyReturnsToElashry = copyReturnsToElashry;
 
 // ── FINANCIALS ──
+// ═══════════════════════════════════════════════════════════════════
+//  P&L DASHBOARD  — the top-level Financials layout: all-time net
+//  profit + running-balance chart, four KPI cards, a "not counted yet"
+//  strip, a monthly P&L accordion, and action cards that open the
+//  detailed ledgers below. Every figure is computed from real data
+//  (orders, expenses, Bosta receipts, Elashry payments); nothing is
+//  hard-typed except the pre-system opening balance.
+// ═══════════════════════════════════════════════════════════════════
+const FIN_OPENING_BALANCE = -12820;        // Jun–Sep 2026, estimated before the system
+const FIN_GOLIVE = { y: 2026, m: 10 };     // first month the system tracked
+const FIN_MO_EN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+// Shared money helpers (module scope so the dashboard reuses the same
+// math the detailed ledgers use).
+function finFm(n) { return fmt(Math.round(Number(n) || 0)); }
+function finNeg(n) { return '− EGP ' + finFm(Math.abs(n)); }
+function finSigned(n) { return (n >= 0 ? '+ EGP ' : '− EGP ') + finFm(Math.abs(n)); }
+function finShipOf(o) { const a = parseFloat(o.actual_shipping || 0); return a > 0 ? a : parseFloat(o.est_shipping || 0); }
+function finBuyCostOf(o) {
+  const products = cache.products || [];
+  return (o.products || []).reduce((b, p) => b + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0);
+}
+// Delivered orders bucket by actual delivery date; everything else falls
+// back to created_at so historical rows still land in a month.
+function finMonthOfOrder(o) { return cairoYM(o.delivered_at) || cairoYM(o.created_at) || cairoYM(o.date); }
+function finMonthOfExpense(e) { return cairoYM(e.date) || cairoYM(e.created_at); }
+function finSameMonth(my, y, m) { return !!my && my.y === y && my.m === m; }
+
+// The sequence of months from go-live through the current Cairo month.
+function finMonthSeq() {
+  const now = cairoYM(new Date().toISOString()) || { y: FIN_GOLIVE.y, m: FIN_GOLIVE.m };
+  const seq = []; let y = FIN_GOLIVE.y, m = FIN_GOLIVE.m;
+  while (y < now.y || (y === now.y && m <= now.m)) {
+    seq.push({ y, m });
+    m++; if (m > 12) { m = 1; y++; }
+    if (seq.length > 120) break;
+  }
+  return seq;
+}
+
+// Full P&L for one Cairo month, in the mockup's four-column shape.
+function finComputeMonth(y, m) {
+  const orders = cache.orders || [];
+  const expenses = cache.expenses || [];
+  const inM = (o) => finSameMonth(finMonthOfOrder(o), y, m);
+  const delivered = orders.filter(o => o.status === 'Delivered' && inM(o));
+  const returned  = orders.filter(o => o.status === 'Returned'  && inM(o));
+
+  const collected       = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
+  const actualShipping  = delivered.reduce((a, o) => a + finShipOf(o), 0);
+  const buyingCost      = delivered.reduce((a, o) => a + finBuyCostOf(o), 0);
+  const profitFromOrders = collected - actualShipping - buyingCost;
+
+  const bostaFeesReturns      = returned.reduce((a, o) => a + finShipOf(o), 0);
+  const returnedAfterDelivery = returned
+    .filter(o => o.returned_after_delivery)
+    .reduce((a, o) => a + (parseFloat(o.compensation || 0) || 0), 0);
+  const returnsTotal = -(bostaFeesReturns + returnedAfterDelivery);
+
+  const expInM = expenses.filter(e => finSameMonth(finMonthOfExpense(e), y, m));
+  const paidAds    = expInM.filter(e => e.category === 'Paid Ads').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const mediaBuyer = expInM.filter(e => e.category === 'Media Buyer').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const marketingTotal = -(paidAds + mediaBuyer);
+  const otherCats = {};
+  expInM.filter(e => e.category !== 'Paid Ads' && e.category !== 'Media Buyer').forEach(e => {
+    const c = e.category || 'Other';
+    otherCats[c] = (otherCats[c] || 0) + parseFloat(e.amount || 0);
+  });
+  const otherSum = Object.values(otherCats).reduce((a, v) => a + v, 0);
+  const otherTotal = -otherSum;
+
+  const result = profitFromOrders + returnsTotal + marketingTotal + otherTotal;
+  const denom = delivered.length + returned.length;
+  return {
+    y, m, delivered, returned, completedOrders: delivered.length,
+    collected, actualShipping, buyingCost, profitFromOrders,
+    refusedReturned: returned.length, bostaFeesReturns, returnedAfterDelivery, returnsTotal,
+    paidAds, mediaBuyer, marketingTotal, otherCats, otherTotal, result,
+    returnRate: denom ? returned.length / denom : 0,
+    profitPerOrder: delivered.length ? profitFromOrders / delivered.length : 0,
+    marketingPerOrder: delivered.length ? (paidAds + mediaBuyer) / delivered.length : 0,
+    avgOrder: delivered.length ? collected / delivered.length : 0,
+  };
+}
+
+// The whole model: every month + running balance + all-time totals.
+function finComputeModel() {
+  const now = cairoYM(new Date().toISOString()) || { y: FIN_GOLIVE.y, m: FIN_GOLIVE.m };
+  const months = finMonthSeq().map(({ y, m }) => finComputeMonth(y, m));
+  let running = FIN_OPENING_BALANCE;
+  months.forEach(mo => { mo.opening = running; running += mo.result; mo.closing = running; mo.settling = (mo.y === now.y && mo.m === now.m); });
+  const sinceGoLive = months.reduce((a, mo) => a + mo.result, 0);
+  return { months, now, openingBalance: FIN_OPENING_BALANCE, sinceGoLive, allTimeNet: FIN_OPENING_BALANCE + sinceGoLive, current: months[months.length - 1] || null };
+}
+
+// The four KPI cards' numbers, computed the same way the detailed
+// Bosta / Elashry ledgers below compute them.
+function finComputeKpis() {
+  const orders = cache.orders || [];
+  const delivered = orders.filter(o => o.status === 'Delivered');
+  const returned  = orders.filter(o => o.status === 'Returned');
+  const cc = (o) => o.cash_cycle_closed === true;
+
+  const collectedD   = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
+  const delivShipCC  = delivered.filter(cc).reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
+  const retShipCC    = returned.filter(cc).reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
+  const shouldReceive = collectedD - delivShipCC - retShipCC;
+  const received = ((typeof bostaCashCache !== 'undefined' && bostaCashCache.receipts) || [])
+    .reduce((a, r) => a + parseFloat(r.amount || 0), 0);
+  const bostaOwes = shouldReceive - received;
+
+  const paidBy = new Set();
+  ((typeof bostaCashCache !== 'undefined' && bostaCashCache.receipts) || []).forEach(r =>
+    (typeof _receiptOrderCodes === 'function' ? _receiptOrderCodes(r) : []).forEach(c => paidBy.add(String(c).toUpperCase())));
+  const nextWed = delivered
+    .filter(o => cc(o) && !paidBy.has(String(o.code || '').toUpperCase()))
+    .reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0)), 0);
+
+  const ELASHRY_TOTAL_TAKEN = 742720, ELASHRY_TOTAL_RETURNED = 146657;
+  const elashryPaid = ((typeof supplierCache !== 'undefined' && supplierCache.payments) || [])
+    .reduce((a, p) => a + parseFloat(p.amount || 0), 0);
+  const elashryOwed = ELASHRY_TOTAL_TAKEN - ELASHRY_TOTAL_RETURNED - elashryPaid;
+
+  // Goods back in my warehouse but not yet credited on an Elashry return invoice.
+  const creditsReturns = returned.filter(o => o.warehouse_confirmed && !o.supplier_return_invoice_id);
+  const creditsVal = creditsReturns.reduce((a, o) => a + finBuyCostOf(o), 0);
+
+  const topUps = (cache.expenses || []).filter(e => e.category === 'Paid Ads').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const metaSpend = (cache.metaAdSpend || []).reduce((a, r) => a + (parseFloat(r.spend) || 0), 0);
+  const metaReady = (cache.metaAdSpend || []).length > 0;
+
+  return {
+    bostaOwes, nextWed, shouldReceive, received,
+    elashryOwed, elashryPaid,
+    creditsCount: creditsReturns.length, creditsVal,
+    topUps, metaSpend, adBalance: topUps - metaSpend, metaReady,
+    deliveredCount: delivered.length, deliveredClosed: delivered.filter(cc).length,
+  };
+}
+
+// Orders whose money isn't in the P&L yet.
+function finNotCounted() {
+  const orders = cache.orders || [];
+  const delivered = orders.filter(o => o.status === 'Delivered');
+  const waiting = delivered.filter(o => o.cash_cycle_closed !== true);
+  const EXCL = new Set(['Delivered', 'Returned', 'Processing', 'Cancelled']);
+  const inflight = orders.filter(o => !EXCL.has(o.status));
+  const processing = orders.filter(o => o.status === 'Processing');
+  return {
+    waiting: waiting.length,
+    waitingVal: waiting.reduce((a, o) => a + (parseFloat(o.total || 0) - finShipOf(o)), 0),
+    processing: processing.length,
+    inflight: inflight.length,
+    inflightVal: inflight.reduce((a, o) => a + (parseFloat(o.total || 0) - finShipOf(o)), 0),
+  };
+}
+
+// ── Renderers ──────────────────────────────────────────────────────
+let _finBalanceChart = null;
+function finRenderHero(model, kpis) {
+  const host = document.getElementById('fin-hero'); if (!host) return;
+  const net = model.allTimeNet;
+  const cur = model.current ? model.current.result : 0;
+  const confirmedPct = kpis.deliveredCount ? Math.round(kpis.deliveredClosed / kpis.deliveredCount * 100) : 100;
+  host.innerHTML = `
+    <div class="card" style="padding:0;overflow:hidden">
+      <div style="display:flex;flex-wrap:wrap">
+        <div style="flex:1 1 260px;padding:24px 26px;border-inline-end:1px solid var(--line)">
+          <div style="font-size:12px;letter-spacing:.08em;color:var(--muted);font-weight:700">NET PROFIT · ALL TIME</div>
+          <div style="font-size:40px;font-weight:800;line-height:1.1;margin:8px 0;color:${net >= 0 ? '#16a34a' : '#dc2626'}">${net >= 0 ? '+' : '−'}${finFm(Math.abs(net))} EGP</div>
+          <div style="display:inline-block;background:${cur >= 0 ? '#dcfce7' : '#fee2e2'};color:${cur >= 0 ? '#15803d' : '#b91c1c'};font-weight:700;font-size:13px;padding:3px 10px;border-radius:999px">${cur >= 0 ? '▲' : '▼'} ${finSigned(cur).replace('EGP ', '')} this month${model.current && model.current.settling ? ' (settling)' : ''}</div>
+          <div style="margin-top:16px;font-size:13px;color:#444;line-height:1.9">
+            Since go-live (${FIN_MO_EN[FIN_GOLIVE.m - 1]} ${FIN_GOLIVE.y}): <b>${finSigned(model.sinceGoLive).replace('EGP ', '')}</b><br>
+            Opening balance (Jun–Sep, estimated): <b>${finFm(model.openingBalance)}</b><br>
+            <span style="color:var(--muted)">Confirmed: <b>${confirmedPct}%</b> · estimated: <b>${100 - confirmedPct}%</b> (${kpis.deliveredCount - kpis.deliveredClosed} orders not cash-cycle-closed)</span>
+          </div>
+        </div>
+        <div style="flex:1 1 340px;padding:18px 20px;min-width:0"><div style="position:relative;height:230px"><canvas id="fin-balance-chart"></canvas></div></div>
+      </div>
+    </div>`;
+  finRenderChart(model);
+}
+
+function finRenderChart(model) {
+  const canvas = document.getElementById('fin-balance-chart');
+  if (!canvas || typeof Chart === 'undefined') return;
+  if (_finBalanceChart) { try { _finBalanceChart.destroy(); } catch (e) {} _finBalanceChart = null; }
+  const labels = ['Opening', ...model.months.map(mo => FIN_MO_EN[mo.m - 1])];
+  const bars = [null, ...model.months.map(mo => mo.result)];
+  const line = [model.openingBalance, ...model.months.map(mo => mo.closing)];
+  const lastIdx = line.length - 1;
+  const barColors = bars.map((v, i) => v == null ? 'transparent'
+    : (v >= 0 ? (i === lastIdx ? '#86efac' : '#22c55e') : (i === lastIdx ? '#fca5a5' : '#ef4444')));
+  _finBalanceChart = new Chart(canvas.getContext('2d'), {
+    data: {
+      labels,
+      datasets: [
+        { type: 'bar', label: 'Month profit / loss', data: bars, backgroundColor: barColors, borderRadius: 4, order: 2, maxBarThickness: 36 },
+        { type: 'line', label: 'Running balance', data: line, borderColor: '#f97316', backgroundColor: '#f97316', borderWidth: 2, tension: 0, pointRadius: 3, pointBackgroundColor: '#f97316', order: 1,
+          segment: { borderDash: (ctx) => ctx.p1DataIndex === lastIdx ? [6, 4] : undefined } },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { boxWidth: 12, font: { size: 11 } } },
+        tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${c.parsed.y == null ? '—' : finFm(c.parsed.y)} EGP` } } },
+      scales: { y: { ticks: { callback: (v) => finFm(v), font: { size: 10 } }, grid: { color: '#f1f1f1' } }, x: { grid: { display: false }, ticks: { font: { size: 10 } } } },
+    },
+  });
+}
+
+function finRenderKpis(kpis) {
+  const host = document.getElementById('fin-kpis'); if (!host) return;
+  const card = (label, value, color, sub) => `
+    <div class="card" style="padding:18px 20px">
+      <div style="font-size:11px;letter-spacing:.06em;color:var(--muted);font-weight:700;text-transform:uppercase">${label}</div>
+      <div style="font-size:26px;font-weight:800;margin:6px 0;color:${color}">${value}</div>
+      <div style="font-size:11px;color:var(--muted);line-height:1.5">${sub}</div>
+    </div>`;
+  host.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin:14px 0';
+  host.innerHTML =
+    card('Bosta owes you', finFm(kpis.bostaOwes), '#0f172a', `Collected − all shipping − transfers received<br>Next Wednesday: <b>~${finFm(kpis.nextWed)}</b>`) +
+    card('You owe Elashry', finFm(kpis.elashryOwed), '#0f172a', 'Confirmed total − payments − confirmed returns') +
+    card('Credits pending from Elashry', finFm(kpis.creditsVal), '#b45309', `${kpis.creditsCount} returns received, not on a return invoice yet`) +
+    card('Ad account balance', kpis.metaReady ? finFm(kpis.adBalance) : finFm(kpis.topUps), '#0f172a',
+      kpis.metaReady ? 'Top-ups − Meta spend' : `Top-ups <b>${finFm(kpis.topUps)}</b> · connect Meta to subtract spend`);
+}
+
+function finRenderNotCounted(nc) {
+  const host = document.getElementById('fin-notcounted'); if (!host) return;
+  const col = (title, big, small) => `
+    <div style="flex:1;min-width:170px">
+      <div style="font-size:12px;color:#444;margin-bottom:2px">${title}</div>
+      <div style="font-weight:800;font-size:15px">${big}</div>
+      ${small ? `<div style="font-size:11px;color:var(--muted)">${small}</div>` : ''}
+    </div>`;
+  host.innerHTML = `
+    <div class="card" style="display:flex;flex-wrap:wrap;gap:18px;align-items:center;padding:16px 20px">
+      <div style="font-size:11px;letter-spacing:.06em;color:var(--muted);font-weight:700;text-transform:uppercase;min-width:120px">Not counted yet</div>
+      ${col('Waiting for Bosta to close', `${nc.waiting} orders`, `~${finFm(nc.waitingVal)}`)}
+      ${col('Processing (not shipped)', `${nc.processing} orders`, '')}
+      ${col('With Bosta / on the way', `${nc.inflight} orders`, `~${finFm(nc.inflightVal)}`)}
+    </div>`;
+}
+
+function finRenderMonths(model) {
+  const host = document.getElementById('fin-months'); if (!host) return;
+  const statusBadge = (mo, isLast) => mo.settling
+    ? '<span style="background:#fef3c7;color:#92400e;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px">⏳ Still settling</span>'
+    : '<span style="background:#dcfce7;color:#15803d;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px">✅ Closed</span>';
+  const colList = (rows, total, totalLabel) => `
+    ${rows.map(r => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:12.5px;padding:2px 0"><span style="color:#444">${r[0]}</span><span style="font-weight:600;${r[2] || ''}">${r[1]}</span></div>`).join('')}
+    <div style="display:flex;justify-content:space-between;gap:8px;font-size:12.5px;padding:6px 0 0;margin-top:4px;border-top:1px solid var(--line);font-weight:800"><span>${totalLabel}</span><span>${total}</span></div>`;
+  const panel = (mo) => {
+    const other = Object.keys(mo.otherCats).length
+      ? Object.entries(mo.otherCats).map(([c, v]) => [c, finNeg(v), 'color:#dc2626'])
+      : [['—', '', '']];
+    return `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:20px;padding:14px 4px 4px">
+        <div><div style="font-size:11px;font-weight:800;color:var(--orange);letter-spacing:.04em;margin-bottom:6px">ORDERS</div>
+          ${colList([
+            ['Completed orders', String(mo.completedOrders), ''],
+            ['Collected', finFm(mo.collected), ''],
+            ['Actual shipping', finNeg(mo.actualShipping), 'color:#dc2626'],
+            ['Buying cost (invoices)', finNeg(mo.buyingCost), 'color:#dc2626'],
+          ], finSigned(mo.profitFromOrders).replace('EGP ', ''), 'Profit from orders')}
+        </div>
+        <div><div style="font-size:11px;font-weight:800;color:var(--orange);letter-spacing:.04em;margin-bottom:6px">RETURNS</div>
+          ${colList([
+            ['Refused / returned', String(mo.refusedReturned), ''],
+            ['Bosta fees on returns', finNeg(mo.bostaFeesReturns), 'color:#dc2626'],
+            ['Returned after delivery', finNeg(mo.returnedAfterDelivery), 'color:#dc2626'],
+          ], finFm(mo.returnsTotal), 'Total')}
+        </div>
+        <div><div style="font-size:11px;font-weight:800;color:var(--orange);letter-spacing:.04em;margin-bottom:6px">MARKETING</div>
+          ${colList([
+            ['Paid ads (Meta)', finNeg(mo.paidAds), 'color:#dc2626'],
+            ['Media buyer', finNeg(mo.mediaBuyer), 'color:#dc2626'],
+          ], finFm(mo.marketingTotal), 'Total')}
+        </div>
+        <div><div style="font-size:11px;font-weight:800;color:var(--orange);letter-spacing:.04em;margin-bottom:6px">OTHER EXPENSES</div>
+          ${colList(other, finFm(mo.otherTotal), 'Total')}
+        </div>
+      </div>
+      <div style="background:${mo.result >= 0 ? '#dcfce7' : '#fee2e2'};border-radius:8px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;margin:10px 0 6px;font-weight:800">
+        <span>Month result</span><span style="color:${mo.result >= 0 ? '#15803d' : '#b91c1c'}">${finSigned(mo.result).replace('EGP ', '')} EGP</span>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:18px;font-size:12px;color:var(--muted)">
+        <span>Return rate <b style="color:#111">${Math.round(mo.returnRate * 100)}%</b></span>
+        <span>Profit per order <b style="color:#111">${finFm(mo.profitPerOrder)}</b></span>
+        <span>Marketing per order <b style="color:#111">${finFm(mo.marketingPerOrder)}</b></span>
+        <span>Avg order <b style="color:#111">${finFm(mo.avgOrder)}</b></span>
+      </div>`;
+  };
+  const rev = model.months.slice().reverse();
+  const rowsHtml = rev.map((mo, i) => `
+    <details ${i === 0 ? 'open' : ''} style="border-bottom:1px solid var(--line)">
+      <summary style="cursor:pointer;list-style:none;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:14px 4px">
+        <span style="font-weight:800;min-width:150px">${FIN_MO_EN[mo.m - 1]} ${mo.y}</span>
+        <span style="font-weight:800;color:${mo.result >= 0 ? '#16a34a' : '#dc2626'};min-width:90px">${finSigned(mo.result).replace('EGP ', '')}</span>
+        <span style="color:var(--muted);font-size:12.5px;flex:1;min-width:200px">Opening ${finFm(mo.opening)} → Closing <b style="color:#111">${finFm(mo.closing)}</b></span>
+        ${statusBadge(mo)}
+      </summary>
+      ${panel(mo)}
+    </details>`).join('');
+  host.innerHTML = `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <h3 style="margin:0;font-size:16px">Months</h3>
+        <button class="btn btn-ghost btn-sm" onclick="downloadAllFinancesExcel()">⬇ Download Excel</button>
+      </div>
+      ${rowsHtml}
+      <details style="border-top:1px solid var(--line)">
+        <summary style="cursor:pointer;list-style:none;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:14px 4px">
+          <span style="font-weight:800;min-width:150px">Opening balance</span>
+          <span style="font-weight:800;color:#dc2626;min-width:90px">${finFm(model.openingBalance)}</span>
+          <span style="color:var(--muted);font-size:12.5px;flex:1;min-width:200px">June – September 2026, estimated before the system</span>
+          <span style="background:#e0e7ff;color:#3730a3;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px">Estimated</span>
+        </summary>
+        <div style="padding:10px 4px;font-size:12.5px;color:var(--muted)">A one-time starting balance for the months before the system went live. Adjust it in the code (<code>FIN_OPENING_BALANCE</code>) if you reconcile those months later.</div>
+      </details>
+    </div>`;
+}
+
+function finRenderActionCards(kpis, nc, model) {
+  const host = document.getElementById('fin-action-cards'); if (!host) return;
+  const curOwed = (() => {
+    // media-buyer: is this month's owed still unpaid?
+    const mo = model.current;
+    if (!mo) return 0;
+    const owed = mo.collected * 0.01 + mo.paidAds * 0.20; // 1% sales + 20% top-ups
+    const paidThisMonth = mo.mediaBuyer;
+    return Math.max(0, owed - paidThisMonth);
+  })();
+  const openItems = nc.waiting + (curOwed > 1 ? 1 : 0) + kpis.creditsCount;
+  const bostaSettled = kpis.bostaOwes <= 1;
+  const card = (onclick, icon, title, sub, badge) => `
+    <button onclick="${onclick}" style="text-align:start;background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 16px;cursor:pointer;display:flex;flex-direction:column;gap:2px;position:relative;font-family:inherit">
+      ${badge ? `<span style="position:absolute;top:10px;inset-inline-end:12px;background:${badge.c};color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px">${badge.t}</span>` : ''}
+      <div style="font-weight:800;font-size:14px">${icon} ${title}</div>
+      <div style="font-size:11.5px;color:var(--muted)">${sub}</div>
+    </button>`;
+  host.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:14px 0';
+  host.innerHTML =
+    card("finOpenDetail('det-expenses')", '🧾', 'Expenses', 'Add · list · ad top-ups') +
+    card("finOpenDetail('det-mediabuyer')", '🧮', 'Media buyer', 'Monthly statements', curOwed > 1 ? { t: '1 unpaid', c: '#f59e0b' } : null) +
+    card("finOpenDetail('det-bosta')", '🏦', 'Bosta transfers', 'Wednesday payouts', bostaSettled ? { t: '✓', c: '#16a34a' } : null) +
+    card("finOpenDetail('det-elashry')", '🏭', 'Elashry account', 'Invoices · returns · payments') +
+    card("finOpenDetail('det-net')", '⚠️', 'Open items', 'Needs your attention', openItems > 0 ? { t: String(openItems), c: '#dc2626' } : null);
+}
+
+function finOpenDetail(id) {
+  const d = document.getElementById(id);
+  if (!d) return;
+  d.open = true;
+  d.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+window.finOpenDetail = finOpenDetail;
+
 function renderFinancials() {
-  // The financials screen now has exactly two blocks:
-  //   1. Money From Bosta — rendered by renderBostaCash() into #bosta-cash
-  //   2. Expenses         — populated below into #exp-tbody
-  // Other blocks (Elashry, Media Buyer, Packaging, Revenue, Net Profit,
-  // Confirmed Profit, charts) were intentionally stripped and will be
-  // rebuilt block-by-block per the new spec.
-  const generalExpenses = cache.expenses.filter(e => e.category !== 'Elashry');
+  // Expenses table (kept inside the Expenses action-card drawer).
+  const generalExpenses = (cache.expenses || []).filter(e => e.category !== 'Elashry');
   const tbody = document.getElementById('exp-tbody');
   if (tbody) tbody.innerHTML = generalExpenses.length ? generalExpenses.map(e => `
     <tr>
@@ -3952,6 +4306,19 @@ function renderFinancials() {
       <td><button class="btn btn-danger btn-xs" onclick="delExpense('${e.id}')">✕</button></td>
     </tr>`).join('') : '<tr><td colspan="5"><div class="empty">No expenses recorded</div></td></tr>';
 
+  // New P&L dashboard (top of the screen).
+  try {
+    const model = finComputeModel();
+    const kpis = finComputeKpis();
+    const nc = finNotCounted();
+    finRenderHero(model, kpis);
+    finRenderKpis(kpis);
+    finRenderNotCounted(nc);
+    finRenderMonths(model);
+    finRenderActionCards(kpis, nc, model);
+  } catch (e) { console.error('fin dashboard', e); }
+
+  // Detailed ledgers (inside the collapsible drawers below).
   if (typeof renderInflightBuyCost === 'function') renderInflightBuyCost();
   if (typeof renderFinalisedBuyCost === 'function') renderFinalisedBuyCost();
   if (typeof renderBostaCash === 'function') renderBostaCash();
