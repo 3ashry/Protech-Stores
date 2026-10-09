@@ -4172,19 +4172,22 @@ function finRenderChart(model) {
 
 function finRenderKpis(kpis) {
   const host = document.getElementById('fin-kpis'); if (!host) return;
-  const card = (label, value, color, sub) => `
-    <div class="card" style="padding:18px 20px">
+  const card = (label, value, color, sub, action) => `
+    <div class="card" style="padding:18px 20px;position:relative">
+      ${action || ''}
       <div style="font-size:11px;letter-spacing:.06em;color:var(--muted);font-weight:700;text-transform:uppercase">${label}</div>
       <div style="font-size:26px;font-weight:800;margin:6px 0;color:${color}">${value}</div>
       <div style="font-size:11px;color:var(--muted);line-height:1.5">${sub}</div>
     </div>`;
+  const syncBtn = `<button class="btn btn-ghost btn-xs" onclick="syncMetaAds()" title="Pull the latest ad spend from Meta" style="position:absolute;top:12px;inset-inline-end:12px">🔄 Sync</button>`;
   host.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin:14px 0';
   host.innerHTML =
     card('Bosta owes you', finFm(kpis.bostaOwes), '#0f172a', `Collected − all shipping − transfers received<br>Next Wednesday: <b>~${finFm(kpis.nextWed)}</b>`) +
     card('You owe Elashry', finFm(kpis.elashryOwed), '#0f172a', 'Confirmed total − payments − confirmed returns') +
     card('Credits pending from Elashry', finFm(kpis.creditsVal), '#b45309', `${kpis.creditsCount} returns received, not on a return invoice yet`) +
     card('Ad account balance', kpis.metaReady ? finFm(kpis.adBalance) : finFm(kpis.topUps), '#0f172a',
-      kpis.metaReady ? 'Top-ups − Meta spend' : `Top-ups <b>${finFm(kpis.topUps)}</b> · connect Meta to subtract spend`);
+      kpis.metaReady ? `Top-ups ${finFm(kpis.topUps)} − Meta spend ${finFm(kpis.metaSpend)}` : `Top-ups <b>${finFm(kpis.topUps)}</b> · tap 🔄 Sync to subtract Meta spend`,
+      syncBtn);
 }
 
 function finRenderNotCounted(nc) {
