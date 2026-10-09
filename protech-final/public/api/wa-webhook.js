@@ -18,6 +18,8 @@ import { waPhone, sendText } from './_wa.js';
 // Auto-replies sent back to the customer after they confirm / cancel.
 const CONFIRM_REPLY = 'شكراً لطلبك من بروتيك 😊\nمدة الشحن المتوقعة 3 أيام عمل.\nللاستفسار ابعتلنا على واتساب على الرقم ده: 01034482071';
 const CANCEL_REPLY = 'تم إلغاء طلبك.';
+// Phase 12 — reply after the customer taps "I have a problem with my order".
+const PROBLEM_REPLY = 'تمام، سجّلنا إن عندك مشكلة في الطلب ✅ هنتواصل معاك في أقرب وقت على نفس الرقم.';
 // Auto-reply after a rating tap on the feedback template.
 const FEEDBACK_THANKS_HIGH = 'شكراً جداً لتقييمك 🌟\nيسعدنا خدمتك دائماً، ولو محتاج أي حاجة إحنا معاك.';
 const FEEDBACK_THANKS_MID  = 'شكراً على تقييمك 🙏\nلو عندك أي ملاحظة تحب تشاركنا بيها، اكتبها هنا أو كلمنا على 01034482071.';
@@ -50,6 +52,7 @@ async function sbPatchRep(path, body) {
 
 const CONFIRM_RE = /تأكيد|تاكيد|أكد|اكد|confirm|نعم|موافق|تمام|أوافق/i;
 const CANCEL_RE = /إلغاء|الغاء|ألغاء|cancel|رفض|لا اريد|لا أريد|مش عايز|مش عاوز/i;
+const PROBLEM_RE = /مشكلة|مشكله|problem|شكوى|شكوي|خطأ|غلط/i;
 
 export default async function handler(req, res) {
   // 1) Webhook verification handshake (Meta calls this once with GET).
@@ -68,6 +71,24 @@ export default async function handler(req, res) {
   try {
     const entry = req.body?.entry?.[0];
     const change = entry?.changes?.[0]?.value;
+
+    // ── Delivery-status events (Phase 12) ──────────────────────────────
+    // A message that FAILED to deliver (bad number, blocked, etc.) flags
+    // the order for a phone call so it never silently falls through.
+    const statusEvt = change?.statuses?.[0];
+    if (statusEvt && (statusEvt.status === 'failed' || statusEvt.status === 'undelivered') && SUPABASE_URL && SUPABASE_KEY) {
+      const failedId = statusEvt.id;
+      const reason = statusEvt.errors?.[0]?.title || statusEvt.errors?.[0]?.message || statusEvt.status;
+      if (failedId) {
+        const patch = { wa_delivery_failed: true, needs_call: true, needs_call_reason: 'فشل توصيل رسالة واتساب: ' + reason };
+        for (const col of ['wa_msg_id', 'wa_prepared_msg_id', 'wa_shipped_msg_id']) {
+          const rows = await sbPatchRep(`orders?${col}=eq.${encodeURIComponent(failedId)}`, patch);
+          if (rows.length) break;
+        }
+      }
+      return res.status(200).json({ received: true });
+    }
+
     const msg = change?.messages?.[0];
     if (!msg || !SUPABASE_URL || !SUPABASE_KEY) return res.status(200).json({ received: true });
 
@@ -86,6 +107,7 @@ export default async function handler(req, res) {
       const text = msg.button?.text || '';
       const r = readRatingPayload(payload);
       if (r != null) { intent = 'rating'; rating = r; }
+      else if (payload === 'PROBLEM' || PROBLEM_RE.test(text)) intent = 'problem';
       else if (payload === 'CONFIRM' || CONFIRM_RE.test(text)) intent = 'confirm';
       else if (payload === 'CANCEL' || CANCEL_RE.test(text)) intent = 'cancel';
     } else if (msg.type === 'interactive') {
@@ -93,11 +115,13 @@ export default async function handler(req, res) {
       const id = br.id || '', title = br.title || '';
       const r = readRatingPayload(id);
       if (r != null) { intent = 'rating'; rating = r; }
+      else if (id === 'PROBLEM' || PROBLEM_RE.test(title)) intent = 'problem';
       else if (id === 'CONFIRM' || CONFIRM_RE.test(title)) intent = 'confirm';
       else if (id === 'CANCEL' || CANCEL_RE.test(title)) intent = 'cancel';
     } else if (msg.type === 'text') {
       const body = (msg.text?.body || '').trim();
-      if (CONFIRM_RE.test(body)) intent = 'confirm';
+      if (PROBLEM_RE.test(body)) intent = 'problem';
+      else if (CONFIRM_RE.test(body)) intent = 'confirm';
       else if (CANCEL_RE.test(body)) intent = 'cancel';
     }
 
@@ -125,10 +149,28 @@ export default async function handler(req, res) {
       return res.status(200).json({ received: true });
     }
 
+    // ── "I have a problem with my order" (Phase 12) ────────────────────
+    if (intent === 'problem') {
+      const patch = { needs_call: true, needs_call_reason: 'أبلغ العميل عن مشكلة في الطلب', problem_reported_at: new Date().toISOString() };
+      let updated = [];
+      const repliedToId = msg.context?.id;
+      if (repliedToId) updated = await sbPatchRep(`orders?wa_shipped_msg_id=eq.${encodeURIComponent(repliedToId)}`, patch);
+      if (!updated.length) {
+        const from = String(msg.from || '').replace(/\D/g, '');
+        if (from) {
+          const rows = await sbGet('orders?select=id,phone&status=eq.Processing&wa_shipped_sent_at=not.is.null&order=wa_shipped_sent_at.desc&limit=100');
+          const match = rows.find(o => waPhone(o.phone) === from);
+          if (match) await sbPatchRep(`orders?id=eq.${encodeURIComponent(match.id)}`, patch);
+        }
+      }
+      if (msg.from) await sendText(msg.from, PROBLEM_REPLY);
+      return res.status(200).json({ received: true });
+    }
+
     if (intent) {
       const update = intent === 'confirm'
-        ? { customer_confirmed: true }
-        : { customer_confirmed: false, status: 'Cancelled' };
+        ? { customer_confirmed: true, confirm_outcome: 'confirmed_button', needs_call: false }
+        : { customer_confirmed: false, status: 'Cancelled', confirm_outcome: 'cancelled', needs_call: false };
 
       // 1) Precise: match the order by the id of the template message we sent.
       let updated = [];

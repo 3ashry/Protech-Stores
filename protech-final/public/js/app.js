@@ -2050,21 +2050,23 @@ function renderOrders() {
     : '';
   document.getElementById('orders-tbody').innerHTML = visibleOrders.length ? visibleOrders.map(o => `
     <tr${o.status === 'Awaiting Action' ? ' style="background:#fff4f4"' : ''}>
-      <td><span class="badge b-orange">${esc(o.code)}</span> ${orderProgressBadge(o)}${o.allow_open ? ' <span class="badge b-warning" title="يريد فتح الشحنة">📦</span>' : ''}${o.status === 'Returned' && !o.warehouse_confirmed ? ' <span class="badge b-danger" title="مرتجع — لم يُرجع للمخزن بعد">↩️ لم يُرجع للمخزن</span>' : ''}${o.picker_prepared_at ? ' <span class="badge b-success" title="جهّزها موظف التجهيز">✅ جاهز</span>' : ''}${o.revised_at ? ' <span class="badge b-success" title="تمت مراجعته">📝 مُراجَع</span>' : ''}${o.pending_elashry_at ? ' <span class="badge b-warning" title="في قائمة المرتجعات للأشري">📦 قائمة الأشري</span>' : ''}${cashCycleBadge(o)}</td>
+      <td><span class="badge b-orange">${esc(o.code)}</span> ${orderProgressBadge(o)}${o.allow_open ? ' <span class="badge b-warning" title="يريد فتح الشحنة">📦</span>' : ''}${o.status === 'Returned' && !o.warehouse_confirmed ? ' <span class="badge b-danger" title="مرتجع — لم يُرجع للمخزن بعد">↩️ لم يُرجع للمخزن</span>' : ''}${o.picker_prepared_at ? ' <span class="badge b-success" title="جهّزها موظف التجهيز">✅ جاهز</span>' : ''}${o.revised_at ? ' <span class="badge b-success" title="تمت مراجعته">📝 مُراجَع</span>' : ''}${o.pending_elashry_at ? ' <span class="badge b-warning" title="في قائمة المرتجعات للأشري">📦 قائمة الأشري</span>' : ''}${o.needs_call ? ` <span class="badge b-danger" title="${esc(o.needs_call_reason || 'محتاج مكالمة')}">📞 محتاج مكالمة</span>` : ''}${cashCycleBadge(o)}</td>
       <td><strong>${esc(o.customer_name)}</strong></td>
       <td>${esc(o.phone)}</td>
       <td>EGP ${fmt(o.total)}</td>
       <td>${o.status === 'Awaiting Action'
         ? `<span style="display:inline-block;background:#dc2626;color:#fff;font-weight:800;font-size:13px;padding:6px 12px;border-radius:8px;animation:none">⚠️ AWAITING ACTION</span>`
         : `<span class="badge ${smap[o.status] || 'b-gray'}">${esc(o.status)}</span>`}${
-          o.customer_confirmed === true ? `<div style="font-size:11px;color:#16a34a;font-weight:700;margin-top:3px">✅ مؤكد</div>`
+          o.customer_confirmed === true ? `<div style="font-size:11px;color:#16a34a;font-weight:700;margin-top:3px">✅ ${o.confirm_outcome === 'confirmed_call' ? 'مؤكد (تليفون)' : 'مؤكد'}</div>`
           : o.customer_confirmed === false ? `<div style="font-size:11px;color:#dc2626;font-weight:700;margin-top:3px">❌ ملغي</div>`
+          : o.confirm_outcome === 'no_answer' ? `<div style="font-size:11px;color:#b45309;font-weight:700;margin-top:3px">⏳ لم يرد</div>`
           : ''}${o.allow_open ? `<div style="font-size:11px;color:#F26A21;font-weight:700;margin-top:3px">📦 فتح الشحنة</div>` : ''}</td>
       <td><div class="actions">
         <button class="btn btn-ghost btn-xs" onclick="viewOrder('${o.id}')">View</button>
         <button class="btn btn-dark btn-xs" onclick="editOrder('${o.id}')">Edit</button>
         <button class="btn ${o.sent_to_picker_at ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="toggleSentToPicker('${o.id}', ${!!o.sent_to_picker_at})" title="${o.sent_to_picker_at ? 'إلغاء الإرسال للتجهيز' : 'إرسال للتجهيز'}">${o.sent_to_picker_at ? '📤 تم الإرسال' : '📦 إرسال للتجهيز'}</button>
         <button class="btn ${o.revised_at ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="toggleRevised('${o.id}', ${!!o.revised_at})" title="${o.revised_at ? 'إلغاء المراجعة' : 'تحديد كمُراجَع — تمت مراجعة الطلب والتأكد منه'}">${o.revised_at ? '✓ مُراجَع' : '📝 مراجعة'}</button>
+        ${o.status === 'Processing' && o.customer_confirmed !== true ? `<button class="btn ${o.needs_call ? 'btn-danger' : 'btn-ghost'} btn-xs" onclick="markConfirmedByCall('${o.id}')" title="تأكيد الطلب عن طريق مكالمة تليفون">📞 أكد بالتليفون</button>` : ''}
         ${o.status === 'Returned' ? `<button class="btn ${o.pending_elashry_at ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="toggleElashryReturn('${o.id}', ${!!o.pending_elashry_at})" title="${o.pending_elashry_at ? 'إخراج من قائمة الأشري' : 'أضف هذا الطلب إلى قائمة المرتجعات الجاهزة للأشري'}">${o.pending_elashry_at ? '✓ بقائمة الأشري' : '📦 أرسل لقائمة الأشري'}</button>` : ''}
         <button class="btn btn-danger btn-xs" onclick="delOrder('${o.id}')">Delete</button>
       </div></td>
@@ -2989,6 +2991,22 @@ async function setConfirm(id, confirmed) {
     closeModal(); renderAllKeepScroll();
   } catch (e) { showToast('Error: ' + e.message); }
 }
+
+// Phase 12 — record a confirmation made over the PHONE (when the customer
+// didn't tap the WhatsApp button). Clears the needs-call flag and stamps the
+// outcome so reporting can tell button vs call confirmations apart.
+async function markConfirmedByCall(id) {
+  try {
+    const patch = { customer_confirmed: true, confirm_outcome: 'confirmed_call', needs_call: false };
+    await dbUpdate('orders', id, patch);
+    const i = cache.orders.findIndex(o => o.id === id);
+    if (i >= 0) cache.orders[i] = { ...cache.orders[i], ...patch };
+    try { logAudit('order.confirm_call', { entity: 'orders', entity_id: (i >= 0 ? cache.orders[i].code : id), summary: 'Order confirmed by phone call' }); } catch (_) {}
+    showToast('✅ تم تأكيد الطلب بالتليفون');
+    renderAllKeepScroll();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+window.markConfirmedByCall = markConfirmedByCall;
 
 // ── RETURNS ──
 function renderReturns() {
