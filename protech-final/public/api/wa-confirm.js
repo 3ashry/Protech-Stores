@@ -56,7 +56,7 @@ export default async function handler(req, res) {
     // Load the full order so the message carries the same itemised details
     // (products, shipping, total, open-package, ship code) as the automatic sender.
     const oRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}&select=id,code,phone,customer_name,total,est_shipping,allow_open,ship_code,products&limit=1`,
+      `${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}&select=id,code,phone,customer_name,total,est_shipping,allow_open,ship_code,products,address&limit=1`,
       { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
     const order = (await oRes.json().catch(() => []))[0];
     if (!order) return res.status(404).json({ error: 'Order not found' });

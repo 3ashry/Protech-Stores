@@ -78,7 +78,7 @@ export default async function handler(req, res) {
   try {
     // Old enough, never sent, not yet resolved, still in an early state, has a phone.
     const qparts = [
-      'select=id,code,phone,customer_name,total,est_shipping,allow_open,ship_code,products,created_at,status',
+      'select=id,code,phone,customer_name,total,est_shipping,allow_open,ship_code,products,address,created_at,status',
       `created_at=lte.${encodeURIComponent(cutoff)}`,
       `created_at=gte.${encodeURIComponent(floor)}`,
       'wa_sent_at=is.null',
@@ -223,7 +223,7 @@ export default async function handler(req, res) {
     // ─────────────────────────────────────────────────────────────────
     const reminderCutoff = new Date(now - (test ? 0 : REMINDER_HOURS * 3600 * 1000)).toISOString();
     const remParts = [
-      'select=id,code,phone,customer_name,total,est_shipping,allow_open,ship_code,products',
+      'select=id,code,phone,customer_name,total,est_shipping,allow_open,ship_code,products,address',
       'wa_sent_at=not.is.null',
       `wa_sent_at=lte.${encodeURIComponent(reminderCutoff)}`,
       `wa_sent_at=gte.${encodeURIComponent(floor)}`,
