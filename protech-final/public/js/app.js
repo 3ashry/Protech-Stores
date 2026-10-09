@@ -3953,6 +3953,13 @@ window.copyReturnsToElashry = copyReturnsToElashry;
 const FIN_OPENING_BALANCE = 0;
 const FIN_GOLIVE = { y: 2026, m: 10 };     // fallback only, if there's no data yet
 const FIN_MO_EN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+// Egyptian VAT on ad spend. Meta's reported `spend` is the amount LEFT after
+// the 14% tax is taken off the original charge (tax = 14% of the gross), so
+// the real money that left the ad account = reported / (1 − 0.14). We keep
+// the raw Meta figure in the DB and gross it up only where we show the real
+// cost / ad-account balance.
+const META_VAT_RATE = 0.14;
+function finRealAdSpend(rawSpend) { return (parseFloat(rawSpend) || 0) / (1 - META_VAT_RATE); }
 
 // Shared money helpers (module scope so the dashboard reuses the same
 // math the detailed ledgers use).
@@ -4084,7 +4091,8 @@ function finComputeKpis() {
   const creditsVal = creditsReturns.reduce((a, o) => a + finBuyCostOf(o), 0);
 
   const topUps = (cache.expenses || []).filter(e => e.category === 'Paid Ads').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-  const metaSpend = (cache.metaAdSpend || []).reduce((a, r) => a + (parseFloat(r.spend) || 0), 0);
+  const metaSpendRaw = (cache.metaAdSpend || []).reduce((a, r) => a + (parseFloat(r.spend) || 0), 0);
+  const metaSpend = finRealAdSpend(metaSpendRaw); // grossed up for the 14% VAT
   const metaReady = (cache.metaAdSpend || []).length > 0;
 
   return {
@@ -4186,7 +4194,7 @@ function finRenderKpis(kpis) {
     card('You owe Elashry', finFm(kpis.elashryOwed), '#0f172a', 'Confirmed total − payments − confirmed returns') +
     card('Credits pending from Elashry', finFm(kpis.creditsVal), '#b45309', `${kpis.creditsCount} returns received, not on a return invoice yet`) +
     card('Ad account balance', kpis.metaReady ? finFm(kpis.adBalance) : finFm(kpis.topUps), '#0f172a',
-      kpis.metaReady ? `Top-ups ${finFm(kpis.topUps)} − Meta spend ${finFm(kpis.metaSpend)}` : `Top-ups <b>${finFm(kpis.topUps)}</b> · tap 🔄 Sync to subtract Meta spend`,
+      kpis.metaReady ? `Top-ups ${finFm(kpis.topUps)} − Meta spend ${finFm(kpis.metaSpend)} (incl. 14% VAT)` : `Top-ups <b>${finFm(kpis.topUps)}</b> · tap 🔄 Sync to subtract Meta spend`,
       syncBtn);
 }
 
@@ -4793,9 +4801,9 @@ function renderMediaBuyer() {
     .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
   // Meta's ACTUAL spend this month — shown for reference/ROAS only; it does
   // NOT feed the media-buyer payout. Empty until /api/meta-sync has run.
-  const metaSpendMonth = (cache.metaAdSpend || [])
+  const metaSpendMonth = finRealAdSpend((cache.metaAdSpend || [])
     .filter(r => inMonth(cairoYM(r.spend_date)))
-    .reduce((a, r) => a + (parseFloat(r.spend) || 0), 0);
+    .reduce((a, r) => a + (parseFloat(r.spend) || 0), 0)); // grossed up for 14% VAT
 
   const monthDelivered = delivered
     .filter(o => inMonth(monthOfOrder(o)))
@@ -4912,7 +4920,7 @@ function renderMediaBuyer() {
     </div>
     <div class="fin-row"><span>Ad top-ups (this month)</span><span class="fin-val">EGP ${fmt(paidAdsMonth)}</span></div>
     <div class="fin-row"><span>20% of top-ups</span><span class="fin-val">EGP ${fmt(adsShare)}</span></div>
-    <div class="fin-row" style="opacity:.75;font-size:11px"><span>Meta actual spend (this month) <span style="font-size:10px;color:var(--muted)">· for ROAS only, not the payout</span> <button class="btn btn-ghost btn-xs" onclick="syncMetaAds()" title="Pull the latest ad spend from Meta">🔄 Sync Meta</button></span><span class="fin-val">EGP ${fmt(metaSpendMonth)}</span></div>
+    <div class="fin-row" style="opacity:.75;font-size:11px"><span>Meta actual spend (this month) <span style="font-size:10px;color:var(--muted)">· incl. 14% VAT · for ROAS only, not the payout</span> <button class="btn btn-ghost btn-xs" onclick="syncMetaAds()" title="Pull the latest ad spend from Meta">🔄 Sync Meta</button></span><span class="fin-val">EGP ${fmt(metaSpendMonth)}</span></div>
     <div class="fin-row"><span>Delivered sales (this month, net of actual shipping)</span><span class="fin-val">EGP ${fmt(monthSales)}</span></div>
     <div class="fin-row"><span>1% of delivered sales</span><span class="fin-val">EGP ${fmt(salesShare)}</span></div>
     <div class="fin-row"><span>Gross salary for this month</span><span class="fin-val">EGP ${fmt(grossOwed)}</span></div>
