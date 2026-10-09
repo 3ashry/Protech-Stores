@@ -111,6 +111,38 @@ function go(id) {
   if (fabStack) fabStack.style.display = id === 'orders' ? 'flex' : 'none';
   renderAll();
 }
+
+// ── CAIRO MONTH HELPER ─────────────────────────────────────────────
+// All "which month does this belong to" logic uses Africa/Cairo, per the
+// business rule — never the browser's local clock. Returns { y, m } (m is
+// 1..12) or null.
+//   • A date-only string (YYYY-MM-DD or DD/MM/YYYY) is already a calendar
+//     date, so its month is taken literally — no timezone shift.
+//   • A full timestamp (e.g. created_at ending in Z) is a point in time, so
+//     we convert that instant to Cairo and read the month there. This is what
+//     fixes rows near a month boundary (e.g. a 23:30 UTC order on the last of
+//     the month falls into the next month in Cairo, +2/+3).
+function cairoYM(value) {
+  const s = String(value == null ? '' : value).trim();
+  if (!s) return null;
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) return { y: +m[1], m: +m[2] };
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return { y: +m[3], m: +m[2] };
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return null;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit' }).formatToParts(d);
+    return { y: +parts.find(p => p.type === 'year').value, m: +parts.find(p => p.type === 'month').value };
+  } catch {
+    return { y: d.getFullYear(), m: d.getMonth() + 1 };
+  }
+}
+// Cairo "YYYY-MM" string for bucketing (e.g. monthly Excel tabs).
+function cairoMonthKey(value) {
+  const ym = cairoYM(value);
+  return ym ? `${ym.y}-${String(ym.m).padStart(2, '0')}` : 'unknown';
+}
 // ═══════════════════════════════════════════════════════════════════
 //  PROTECH ADMIN — Order Actions (WhatsApp Message + PDF Invoice)
 //  Paste these functions into app.js BEFORE your renderOrders() call
@@ -1154,6 +1186,11 @@ async function saveInvoiceMatch() {
     }
     (_im.saved = _im.saved || []).unshift(record);
     renderSavedInvoices();
+    logAudit('invoice.save', {
+      entity: 'supplier_invoices', entity_id: record.invoice_serial || record.id,
+      summary: `Saved Elashry invoice "${record.name}"${record.invoice_serial ? ' · #' + record.invoice_serial : ''} (${(record.aggregated || []).length} SKUs) — buy prices applied to linked orders`,
+      new_value: { name: record.name, serial: record.invoice_serial || null, prepared_date: record.prepared_date, skus: (record.aggregated || []).length },
+    });
 
     // ── Apply this invoice's per-unit prices to every linked order ──
     // Treats the saved invoice as authoritative: for every product line
@@ -1910,10 +1947,24 @@ const payload = { code, name, qty, price, buy_price, brand, description, is_offe
     }
     if (result.updated) {
       const i = cache.products.findIndex(x => x.id === id);
+      const oldBuy = i >= 0 ? (parseFloat(cache.products[i].buy_price) || 0) : null;
       if (i >= 0) cache.products[i] = { ...cache.products[i], ...payload };
+      // Audit only when the buying price actually moved — that's the money fact.
+      if (oldBuy != null && Math.abs(oldBuy - buy_price) >= 0.01) {
+        logAudit('product.buy_price', {
+          entity: 'products', entity_id: code,
+          summary: `Buy price of ${code} changed ${oldBuy} → ${buy_price}`,
+          old_value: { buy_price: oldBuy }, new_value: { buy_price },
+        });
+      }
       showToast('Product updated ✓');
     } else if (result.created) {
       cache.products.push(result.created);
+      logAudit('product.create', {
+        entity: 'products', entity_id: code,
+        summary: `Created product ${code} (buy ${buy_price})`,
+        new_value: { code, name, qty, buy_price, price },
+      });
       showToast('Product added ✓');
     }
     closeModal(); renderAll();
@@ -2654,6 +2705,56 @@ async function undoWarehouse(id) {
 
 // Update the per-order buy-price snapshot only (does not touch stock, sell prices,
 // totals, or the product's system-wide buy price).
+// ── AUDIT LOG VIEWER ───────────────────────────────────────────────
+// Reads the last 200 audit entries (admin-only table) and shows them in
+// a modal: when, action, summary, old → new. Read-only.
+async function openAuditLog() {
+  let rows = [];
+  try {
+    rows = await dbFetch('audit_log', { order: 'at.desc', filter: 'limit=200' });
+  } catch (e) {
+    showToast('Audit log read failed: ' + (e && e.message));
+    return;
+  }
+  const esc2 = (s) => esc(String(s == null ? '' : s));
+  const fmtVal = (v) => {
+    if (v == null) return '';
+    try { return esc2(typeof v === 'string' ? v : JSON.stringify(v)); } catch { return ''; }
+  };
+  const body = (Array.isArray(rows) && rows.length)
+    ? rows.map(r => `
+        <tr>
+          <td style="padding:6px 8px;font-family:var(--f-mono,monospace);font-size:11px;white-space:nowrap;color:var(--muted)">${esc2(String(r.at || '').slice(0, 16).replace('T', ' '))}</td>
+          <td style="padding:6px 8px"><span class="badge b-orange" style="font-size:10px">${esc2(r.action)}</span></td>
+          <td style="padding:6px 8px;font-size:12px">${esc2(r.summary || '')}</td>
+          <td style="padding:6px 8px;font-size:11px;color:#dc2626;max-width:180px;overflow:hidden;text-overflow:ellipsis">${fmtVal(r.old_value)}</td>
+          <td style="padding:6px 8px;font-size:11px;color:#16a34a;max-width:180px;overflow:hidden;text-overflow:ellipsis">${fmtVal(r.new_value)}</td>
+        </tr>`).join('')
+    : '<tr><td colspan="5" style="padding:20px;text-align:center;color:var(--muted)">No audit entries yet — they appear as you edit buy prices, save invoices, or sync stock.</td></tr>';
+  const html = `
+    <div class="modal" style="max-width:1000px">
+      <span class="modal-handle"></span>
+      <div class="modal-header">
+        <span class="modal-title">📋 Audit log — manual money changes</span>
+        <button class="close-btn" onclick="closeModal()">✕</button>
+      </div>
+      <div style="padding:4px 2px">
+        <div style="padding:0 14px 10px;font-size:12px;color:var(--muted)">Latest ${Array.isArray(rows) ? rows.length : 0} changes. The database stamps who &amp; when from your login — it can't be forged.</div>
+        <div class="table-wrap" style="margin:0 2px">
+          <table style="width:100%">
+            <thead><tr><th>When</th><th>Action</th><th>What</th><th>Old</th><th>New</th></tr></thead>
+            <tbody>${body}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>`;
+  const overlay = document.getElementById('overlay');
+  overlay.innerHTML = html;
+  overlay.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+}
+window.openAuditLog = openAuditLog;
+
 async function saveOrderBuyPrices(id) {
   const o = cache.orders.find(x => x.id === id);
   if (!o) return;
@@ -2664,9 +2765,16 @@ async function saveOrderBuyPrices(id) {
     return { ...p, buy_price: bp };
   });
   try {
+    const oldBrief = (o.products || []).map(p => ({ code: p.code, buy_price: lineBuyPrice(p, cache.products) }));
     await dbUpdate('orders', id, { products: newProducts });
     const i = cache.orders.findIndex(x => x.id === id);
     if (i >= 0) cache.orders[i].products = newProducts;
+    logAudit('order.buy_price', {
+      entity: 'orders', entity_id: o.code || id,
+      summary: `Edited buy prices on order ${o.code || id}`,
+      old_value: oldBrief,
+      new_value: newProducts.map(p => ({ code: p.code, buy_price: p.buy_price })),
+    });
     showToast('Buy prices updated for this order ✓');
     closeModal(); renderAllKeepScroll();
   } catch (e) { showToast('Error: ' + e.message); }
@@ -4197,24 +4305,12 @@ function renderMediaBuyer() {
   //     silently excluded every `03/09/2026` row.
   // The fix is to parse each row's date into a real `{y, m}` and
   // compare against the local month/year, not lexicographic strings.
-  const now = new Date();
-  const curY = now.getFullYear();
-  const curM = now.getMonth() + 1;              // 1..12
-  const _parseMonthYear = (raw) => {
-    const s = String(raw || '').trim();
-    if (!s) return null;
-    let mm, yy;
-    // ISO: YYYY-MM-DD (also matches full ISO timestamps that start that way).
-    let m1 = s.match(/^(\d{4})-(\d{1,2})/);
-    if (m1) { yy = +m1[1]; mm = +m1[2]; return { y: yy, m: mm }; }
-    // DD/MM/YYYY (Egyptian) or D/M/YYYY.
-    m1 = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if (m1) { mm = +m1[2]; yy = +m1[3]; return { y: yy, m: mm }; }
-    // Fallback: let JS parse.
-    const d = new Date(s);
-    if (!isNaN(d.getTime())) return { y: d.getFullYear(), m: d.getMonth() + 1 };
-    return null;
-  };
+  // "Now" in Africa/Cairo (not the browser's clock) so the current-month
+  // window is correct regardless of where the admin is sitting.
+  const _nowCairo = cairoYM(new Date().toISOString());
+  const curY = _nowCairo.y;
+  const curM = _nowCairo.m;                      // 1..12
+  const _parseMonthYear = cairoYM;               // all month logic → Cairo
   const monthOfExpense = (e) =>
     _parseMonthYear(e.date) || _parseMonthYear(e.created_at);
   // For delivered-orders bucketing we prefer the ACTUAL delivery date
@@ -5012,10 +5108,9 @@ function downloadDeliveredByMonthExcel() {
   const delivered = (cache.orders || []).filter(o => o.status === 'Delivered');
   if (!delivered.length) { showToast('No delivered orders to export'); return; }
 
-  const monthKey = (o) => {
-    const raw = String(o.created_at || o.date || '').slice(0, 7);
-    return /^\d{4}-\d{2}$/.test(raw) ? raw : 'unknown';
-  };
+  // Bucket by Africa/Cairo month (not UTC) so a late-night order near a
+  // month boundary lands in the right month's sheet.
+  const monthKey = (o) => cairoMonthKey(o.created_at || o.date || '');
   const byDate = (a, b) => String(a.created_at || a.date || '').localeCompare(String(b.created_at || b.date || ''));
 
   const buckets = new Map();
