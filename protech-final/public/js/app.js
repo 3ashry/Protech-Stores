@@ -1768,10 +1768,26 @@ window.addVariantRow = addVariantRow;
 // Each row: { code, qty }. The picker expands the bundle into these
 // components when preparing the order; the customer's invoice still
 // shows the bundle name.
+// When a product is a bundle, its buy price is the sum of its components'
+// buy prices and should stay in sync automatically. We still let the admin
+// override it by hand — once they type into the buy-price field directly,
+// _bundleBuyManual flips true and we stop auto-writing for that edit session.
+let _bundleBuyManual = false;
+let _bundleBuyWriting = false; // guards our own programmatic writes
+function _wireBundleBuyManualGuard() {
+  const bp = document.getElementById('p-buy-price');
+  if (!bp || bp._bundleGuardWired) return;
+  bp._bundleGuardWired = true;
+  bp.addEventListener('input', () => { if (!_bundleBuyWriting) _bundleBuyManual = true; });
+}
 function renderBundleOfRows(items) {
   const list = document.getElementById('p-bundle-of-list');
   if (!list) return;
   list.innerHTML = '';
+  // A product that already stores components was priced from them; keep it
+  // auto-synced. An empty bundle leaves the manual flag untouched.
+  _bundleBuyManual = false;
+  _wireBundleBuyManualGuard();
   (Array.isArray(items) ? items : []).forEach(it => addBundleComponentRow(it?.code || '', it?.qty || 1));
   refreshBundleTotal();
 }
@@ -1785,7 +1801,7 @@ function addBundleComponentRow(code = '', qty = 1) {
   const opts = (cache.products || []).slice().sort((a,b) => (a.code||'').localeCompare(b.code||''))
     .map(p => `<option value="${esc(p.code)}">${esc(p.name || '')}</option>`).join('');
   row.innerHTML = `
-    <input class="p-bundle-code" type="text" value="${esc(code)}" placeholder="كود المنتج (مثل TAC1200404)" list="p-bundle-codes-dl"
+    <input class="p-bundle-code" type="text" value="${esc(code)}" placeholder="Product code (e.g. TAC1200404)" list="p-bundle-codes-dl"
       style="padding:8px 10px;border:1px solid #f0abfc;border-radius:6px;font-family:inherit;font-size:13px;text-transform:uppercase">
     <input class="p-bundle-qty" type="number" min="1" step="1" value="${qty || 1}" placeholder="qty"
       style="padding:8px 10px;border:1px solid #f0abfc;border-radius:6px;font-family:inherit;font-size:13px">
@@ -1811,31 +1827,50 @@ function collectBundleOf() {
   });
   return out;
 }
+// Sum the buy prices of the listed components. Returns { sum, missing }.
+function _sumBundleComponents(items) {
+  let sum = 0; const missing = [];
+  for (const it of items) {
+    const p = (cache.products || []).find(x => (x.code || '').toUpperCase() === it.code);
+    if (!p) { missing.push(it.code); continue; }
+    sum += (parseFloat(p.buy_price) || 0) * (it.qty || 1);
+  }
+  return { sum: Math.round(sum * 100) / 100, missing };
+}
+// Write a value into the buy-price field without tripping the manual-override
+// guard (so our own auto-sync isn't mistaken for the admin typing).
+function _setBuyPriceAuto(val) {
+  const bp = document.getElementById('p-buy-price'); if (!bp) return;
+  _bundleBuyWriting = true;
+  bp.value = val;
+  _bundleBuyWriting = false;
+}
 function refreshBundleTotal() {
   const el = document.getElementById('p-bundle-of-total'); if (!el) return;
   const items = collectBundleOf();
   if (!items.length) { el.textContent = ''; return; }
-  let sum = 0; const missing = [];
-  for (const it of items) {
-    const p = (cache.products || []).find(x => (x.code || '').toUpperCase() === it.code);
-    if (!p) { missing.push(it.code); continue; }
-    sum += (parseFloat(p.buy_price) || 0) * (it.qty || 1);
-  }
-  el.innerHTML = `مجموع سعر الشراء من المكونات: <b>EGP ${fmt(sum)}</b>${missing.length ? ` — <span style="color:#dc2626">لم يُعثر: ${missing.join(', ')}</span>` : ''}`;
+  const { sum, missing } = _sumBundleComponents(items);
+  // Auto-apply the computed sum to the buy price unless the admin has
+  // overridden it manually, and never apply a partial sum while codes are
+  // still unresolved (that would understate the cost).
+  let applied = false;
+  if (!_bundleBuyManual && !missing.length) { _setBuyPriceAuto(sum); applied = true; }
+  el.innerHTML = `Components buy-price total: <b>EGP ${fmt(sum)}</b>`
+    + (applied ? ' <span style="color:#16a34a">· applied to buy price ✓</span>' : '')
+    + (_bundleBuyManual && !missing.length ? ' <span style="color:#a16207">· buy price set manually (not overwritten)</span>' : '')
+    + (missing.length ? ` — <span style="color:#dc2626">not found: ${missing.join(', ')}</span>` : '');
 }
+// Manual "recompute" button: force the sum into the buy price and clear the
+// manual-override flag so it goes back to auto-syncing.
 function recomputeBundleBuyPrice() {
   const items = collectBundleOf();
-  if (!items.length) { showToast('أضف مكونات أولاً'); return; }
-  let sum = 0; const missing = [];
-  for (const it of items) {
-    const p = (cache.products || []).find(x => (x.code || '').toUpperCase() === it.code);
-    if (!p) { missing.push(it.code); continue; }
-    sum += (parseFloat(p.buy_price) || 0) * (it.qty || 1);
-  }
-  if (missing.length) { showToast('أكواد غير موجودة: ' + missing.join(', ')); return; }
-  document.getElementById('p-buy-price').value = Math.round(sum * 100) / 100;
+  if (!items.length) { showToast('Add components first'); return; }
+  const { sum, missing } = _sumBundleComponents(items);
+  if (missing.length) { showToast('Codes not found: ' + missing.join(', ')); return; }
+  _bundleBuyManual = false;
+  _setBuyPriceAuto(sum);
   refreshBundleTotal();
-  showToast('✓ حُسب سعر الشراء من المكونات');
+  showToast('✓ Buy price computed from components');
 }
 window.addBundleComponentRow = addBundleComponentRow;
 window.recomputeBundleBuyPrice = recomputeBundleBuyPrice;
