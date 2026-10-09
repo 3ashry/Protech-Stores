@@ -4354,19 +4354,17 @@ function renderMediaBuyer() {
   //   Owed = 20% × Paid Ads spent this month
   //        +  1% × delivered product sales (excl. shipping) this month
   //        −  Media Buyer payments already made this month
-  // Ad spend for the 20% share. Prefer the Meta auto-synced spend for the
-  // current Cairo month; fall back to manual "Paid Ads" expenses when there's
-  // no Meta data yet (e.g. before the token is wired). `adSource` is shown so
-  // the admin knows which number is in play.
-  const metaAdsMonth = (cache.metaAdSpend || [])
-    .filter(r => inMonth(cairoYM(r.spend_date)))
-    .reduce((a, r) => a + (parseFloat(r.spend) || 0), 0);
-  const manualAdsMonth = expenses
+  // The media buyer's 20% is on what the admin TOPS UP the ad account with
+  // (e.g. charge 3,000 → he gets 600), NOT what Meta actually spends. Top-ups
+  // are recorded as "Paid Ads" expenses, so that's the payout base.
+  const paidAdsMonth = expenses
     .filter(e => e.category === 'Paid Ads' && inMonth(monthOfExpense(e)))
     .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-  const usingMeta = metaAdsMonth > 0;
-  const paidAdsMonth = usingMeta ? metaAdsMonth : manualAdsMonth;
-  const adSource = usingMeta ? 'Meta (auto)' : 'manual expenses';
+  // Meta's ACTUAL spend this month — shown for reference/ROAS only; it does
+  // NOT feed the media-buyer payout. Empty until /api/meta-sync has run.
+  const metaSpendMonth = (cache.metaAdSpend || [])
+    .filter(r => inMonth(cairoYM(r.spend_date)))
+    .reduce((a, r) => a + (parseFloat(r.spend) || 0), 0);
 
   const monthDelivered = delivered
     .filter(o => inMonth(monthOfOrder(o)))
@@ -4481,8 +4479,9 @@ function renderMediaBuyer() {
       <span>الشهر الحالي: ${monthLabel}</span>
       <span>${monthDelivered.length} طلب مسلّم</span>
     </div>
-    <div class="fin-row"><span>Paid ads spend (this month) <span style="font-size:10px;color:var(--muted)">· ${adSource}</span> <button class="btn btn-ghost btn-xs" onclick="syncMetaAds()" title="Pull the latest ad spend from Meta">🔄 Sync Meta</button></span><span class="fin-val">EGP ${fmt(paidAdsMonth)}</span></div>
-    <div class="fin-row"><span>20% of paid ads</span><span class="fin-val">EGP ${fmt(adsShare)}</span></div>
+    <div class="fin-row"><span>Ad top-ups (this month)</span><span class="fin-val">EGP ${fmt(paidAdsMonth)}</span></div>
+    <div class="fin-row"><span>20% of top-ups</span><span class="fin-val">EGP ${fmt(adsShare)}</span></div>
+    <div class="fin-row" style="opacity:.75;font-size:11px"><span>Meta actual spend (this month) <span style="font-size:10px;color:var(--muted)">· for ROAS only, not the payout</span> <button class="btn btn-ghost btn-xs" onclick="syncMetaAds()" title="Pull the latest ad spend from Meta">🔄 Sync Meta</button></span><span class="fin-val">EGP ${fmt(metaSpendMonth)}</span></div>
     <div class="fin-row"><span>Delivered sales (this month, net of actual shipping)</span><span class="fin-val">EGP ${fmt(monthSales)}</span></div>
     <div class="fin-row"><span>1% of delivered sales</span><span class="fin-val">EGP ${fmt(salesShare)}</span></div>
     <div class="fin-row"><span>Gross salary for this month</span><span class="fin-val">EGP ${fmt(grossOwed)}</span></div>
