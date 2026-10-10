@@ -256,6 +256,12 @@
     <div id="fin-months"></div>
     <div id="fin-action-cards"></div>
 
+    <!-- ═══ TRENDS (Phase 11) — charts over months ═══ -->
+    <details id="det-trends" style="margin:10px 0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff" ontoggle="if(this.open && typeof renderFinTrends==='function') renderFinTrends()">
+      <summary style="cursor:pointer;padding:14px 16px;font-weight:700;font-size:14px;list-style:none">📈 Trends — metrics over months</summary>
+      <div style="padding:0 12px 12px"><div id="fin-trends"></div></div>
+    </details>
+
     <!-- ═══ DETAILED LEDGERS — opened from the action cards above ═══ -->
     <details id="det-bosta" style="margin:10px 0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff">
       <summary style="cursor:pointer;padding:14px 16px;font-weight:700;font-size:14px;list-style:none">💰 Money From Bosta — full ledger & bank transfers</summary>
