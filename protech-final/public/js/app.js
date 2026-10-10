@@ -4387,7 +4387,7 @@ function finRenderMonths(model) {
   };
   const rev = model.months.slice().reverse();
   const rowsHtml = rev.map((mo, i) => `
-    <details ${i === 0 ? 'open' : ''} style="border-bottom:1px solid var(--line)">
+    <details id="fin-month-${mo.y}-${String(mo.m).padStart(2, '0')}" ${i === 0 ? 'open' : ''} style="border-bottom:1px solid var(--line)">
       <summary style="cursor:pointer;list-style:none;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:14px 4px">
         <span style="font-weight:800;min-width:150px">${FIN_MO_EN[mo.m - 1]} ${mo.y}</span>
         <span style="font-weight:800;color:${mo.result >= 0 ? '#16a34a' : '#dc2626'};min-width:90px">${finSigned(mo.result).replace('EGP ', '')}</span>
@@ -4450,6 +4450,132 @@ function finOpenDetail(id) {
   d.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 window.finOpenDetail = finOpenDetail;
+
+// Jump to a specific month in the accordion (from a Trends chart point).
+function finOpenMonth(y, m) {
+  const d = document.getElementById(`fin-month-${y}-${String(m).padStart(2, '0')}`);
+  if (!d) return;
+  d.open = true;
+  d.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+window.finOpenMonth = finOpenMonth;
+
+// ═══════════════════════════════════════════════════════════════════
+//  TRENDS (Phase 11) — a grid of month-over-month charts built from the
+//  same finComputeModel() the dashboard uses. Bars for totals, lines for
+//  rates; the current (still-settling) month is faded. Range 6/12/all;
+//  cost charts toggle EGP ↔ % of collected. Tapping a bar opens that month.
+// ═══════════════════════════════════════════════════════════════════
+let _finTrendRange = 12;         // 6 | 12 | 0(all)
+let _finTrendCostPct = false;    // false = EGP, true = % of collected
+let _finTrendCharts = [];
+function _finDestroyTrendCharts() {
+  _finTrendCharts.forEach(c => { try { c.destroy(); } catch (_) {} });
+  _finTrendCharts = [];
+}
+function finSetTrendRange(n) { _finTrendRange = n; renderFinTrends(); }
+function finSetTrendCostMode(pct) { _finTrendCostPct = !!pct; renderFinTrends(); }
+window.finSetTrendRange = finSetTrendRange;
+window.finSetTrendCostMode = finSetTrendCostMode;
+
+// Build one chart: bars (totals) + an optional line on a 2nd axis (rates).
+function _finTrendChart(canvasId, opts) {
+  const el = document.getElementById(canvasId);
+  if (!el || typeof Chart === 'undefined') return;
+  const lastIdx = opts.labels.length - 1;
+  const barColors = opts.bars.map((v, i) => {
+    const base = v >= 0 ? (opts.barColor || '#22c55e') : '#ef4444';
+    return i === lastIdx ? base + '66' : base; // fade the current month
+  });
+  const datasets = [{
+    type: 'bar', label: opts.barLabel, data: opts.bars, backgroundColor: barColors,
+    borderRadius: 3, maxBarThickness: 30, yAxisID: 'y', order: 2,
+  }];
+  if (opts.line) {
+    datasets.push({
+      type: 'line', label: opts.lineLabel, data: opts.line, borderColor: '#f97316',
+      backgroundColor: '#f97316', borderWidth: 2, tension: 0, pointRadius: 2,
+      yAxisID: opts.line2 ? 'y1' : 'y', order: 1,
+    });
+  }
+  const scales = {
+    x: { grid: { display: false }, ticks: { font: { size: 9 } } },
+    y: { ticks: { callback: v => finFm(v), font: { size: 9 } }, grid: { color: '#f3f3f3' } },
+  };
+  if (opts.line2) scales.y1 = { position: 'right', grid: { display: false }, ticks: { callback: v => (opts.lineFmt ? opts.lineFmt(v) : finFm(v)), font: { size: 9 } } };
+  const chart = new Chart(el.getContext('2d'), {
+    data: { labels: opts.labels, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: !!opts.line, labels: { boxWidth: 10, font: { size: 10 } } },
+        tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${c.dataset.type === 'line' && opts.lineFmt ? opts.lineFmt(c.parsed.y) : finFm(c.parsed.y)}` } },
+      },
+      scales,
+      onClick: (e, els) => { if (els && els.length) { const mo = opts.months[els[0].index]; if (mo) finOpenMonth(mo.y, mo.m); } },
+    },
+  });
+  _finTrendCharts.push(chart);
+}
+
+function renderFinTrends() {
+  const host = document.getElementById('fin-trends'); if (!host) return;
+  _finDestroyTrendCharts();
+  const model = finComputeModel();
+  let months = model.months;
+  if (_finTrendRange && months.length > _finTrendRange) months = months.slice(-_finTrendRange);
+  const labels = months.map(m => `${FIN_MO_EN[m.m - 1]} ${String(m.y).slice(2)}`);
+  const col = (f) => months.map(f);
+  const costVal = (f) => months.map(m => _finTrendCostPct ? (m.collected ? f(m) / m.collected * 100 : 0) : f(m));
+  const pctFmt = (v) => `${Math.round(v)}%`;
+  const costUnit = _finTrendCostPct ? ' (% of sales)' : '';
+  const rangeBtn = (n, lbl) => `<button class="btn ${_finTrendRange === n ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="finSetTrendRange(${n})">${lbl}</button>`;
+  const costBtn = (pct, lbl) => `<button class="btn ${_finTrendCostPct === pct ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="finSetTrendCostMode(${pct})">${lbl}</button>`;
+  const card = (title, id) => `<div style="background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px"><div style="font-size:12px;font-weight:700;color:#444;margin-bottom:6px">${title}</div><div style="position:relative;height:160px"><canvas id="${id}"></canvas></div></div>`;
+  const grid = (cards) => `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-bottom:8px">${cards}</div>`;
+  const section = (t) => `<div style="font-size:13px;font-weight:800;color:var(--orange);margin:14px 2px 6px">${t}</div>`;
+
+  host.innerHTML = `
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:6px">
+      <span style="font-size:12px;color:var(--muted);font-weight:700">Range:</span>
+      ${rangeBtn(6, '6 mo')} ${rangeBtn(12, '12 mo')} ${rangeBtn(0, 'All')}
+      <span style="font-size:12px;color:var(--muted);font-weight:700;margin-inline-start:12px">Costs:</span>
+      ${costBtn(false, 'EGP')} ${costBtn(true, '% of sales')}
+    </div>
+    ${section('Profit')}
+    ${grid(card('Net profit / month', 'tr-profit') + card('Profit per order · margin %', 'tr-ppo') + card('Running balance', 'tr-bal'))}
+    ${section('Sales')}
+    ${grid(card('Collected · delivered orders', 'tr-sales') + card('Average order value', 'tr-aov'))}
+    ${section('Costs' + costUnit)}
+    ${grid(card('Buying cost', 'tr-buy') + card('Bosta shipping · per order', 'tr-ship') + card('Ad spend', 'tr-ads') + card('Media buyer', 'tr-mb') + card('Other expenses', 'tr-other'))}
+    ${section('Efficiency')}
+    ${grid(card('Returns · return rate %', 'tr-ret') + card('ROAS (EGP collected per ad EGP)', 'tr-roas') + card('Ad cost per order', 'tr-acpo'))}
+    <div style="font-size:11px;color:var(--muted);margin-top:8px">Current month is faded (still settling). Tap a bar to open that month.</div>
+  `;
+
+  // Profit
+  _finTrendChart('tr-profit', { labels, months, bars: col(m => m.result), barLabel: 'Net profit', barColor: '#16a34a' });
+  _finTrendChart('tr-ppo', { labels, months, bars: col(m => m.profitPerOrder), barLabel: 'Profit/order', barColor: '#16a34a',
+    line: col(m => m.collected ? m.result / m.collected * 100 : 0), lineLabel: 'Margin %', line2: true, lineFmt: pctFmt });
+  _finTrendChart('tr-bal', { labels, months, bars: col(m => m.closing), barLabel: 'Running balance', barColor: '#6366f1' });
+  // Sales
+  _finTrendChart('tr-sales', { labels, months, bars: col(m => m.collected), barLabel: 'Collected', barColor: '#0ea5e9',
+    line: col(m => m.completedOrders), lineLabel: 'Delivered orders', line2: true, lineFmt: v => String(Math.round(v)) });
+  _finTrendChart('tr-aov', { labels, months, bars: col(m => m.avgOrder), barLabel: 'Avg order', barColor: '#0ea5e9' });
+  // Costs (EGP or % of sales)
+  _finTrendChart('tr-buy', { labels, months, bars: costVal(m => m.buyingCost), barLabel: 'Buying cost', barColor: '#f59e0b' });
+  _finTrendChart('tr-ship', { labels, months, bars: costVal(m => m.actualShipping), barLabel: 'Bosta shipping', barColor: '#f59e0b',
+    line: col(m => m.completedOrders ? m.actualShipping / m.completedOrders : 0), lineLabel: 'Per order', line2: true });
+  _finTrendChart('tr-ads', { labels, months, bars: costVal(m => m.paidAds), barLabel: 'Ad spend', barColor: '#f59e0b' });
+  _finTrendChart('tr-mb', { labels, months, bars: costVal(m => m.mediaBuyer), barLabel: 'Media buyer', barColor: '#f59e0b' });
+  _finTrendChart('tr-other', { labels, months, bars: costVal(m => -m.otherTotal), barLabel: 'Other', barColor: '#f59e0b' });
+  // Efficiency
+  _finTrendChart('tr-ret', { labels, months, bars: col(m => m.refusedReturned), barLabel: 'Returns', barColor: '#ef4444',
+    line: col(m => m.returnRate * 100), lineLabel: 'Return rate %', line2: true, lineFmt: pctFmt });
+  _finTrendChart('tr-roas', { labels, months, bars: col(m => m.paidAds ? m.collected / m.paidAds : 0), barLabel: 'ROAS', barColor: '#8b5cf6', lineFmt: v => v.toFixed(1) });
+  _finTrendChart('tr-acpo', { labels, months, bars: col(m => m.completedOrders ? m.paidAds / m.completedOrders : 0), barLabel: 'Ad cost/order', barColor: '#8b5cf6' });
+}
+window.renderFinTrends = renderFinTrends;
 
 function renderFinancials() {
   // Expenses table (kept inside the Expenses action-card drawer).
