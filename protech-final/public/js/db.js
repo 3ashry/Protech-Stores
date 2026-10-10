@@ -224,7 +224,7 @@ function localDelete(table, id) {
 }
 
 // ── IN-MEMORY CACHE ──
-let cache = { products: [], orders: [], expenses: [], feedbacks: [], metaAdSpend: [] };
+let cache = { products: [], orders: [], expenses: [], feedbacks: [], metaAdSpend: [], supplierReturns: [] };
 
 async function loadAll() {
   try {
@@ -245,6 +245,9 @@ async function loadAll() {
     // dashboard. Empty until /api/meta-sync has run with a Meta token.
     try { cache.metaAdSpend = await dbFetch('meta_ad_spend_daily', { order: 'spend_date.desc' }) || []; }
     catch (_) { cache.metaAdSpend = cache.metaAdSpend || []; }
+    // Elashry return invoices — credits that reduce what we owe the supplier.
+    try { cache.supplierReturns = await dbFetch('supplier_returns', { order: 'created_at.desc' }) || []; }
+    catch (_) { cache.supplierReturns = cache.supplierReturns || []; }
   } catch (e) {
     console.warn('DB load error:', e);
     showToast('Connection error — check your internet');

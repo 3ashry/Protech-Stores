@@ -802,11 +802,13 @@ async function extractPdfText(file) {
   return chunks.join(' ');
 }
 
-function scanInvoice() {
-  const raw = (document.getElementById('im-invoice-text')?.value || '').trim();
-  if (!raw) { showToast('Paste the invoice text first'); return; }
-  const codes = (_im.aggregated || []).map(r => r.code);
-  if (!codes.length) { showToast('No products on this day to match against'); return; }
+// Pure Elashry-invoice parser: raw text + the codes to look for → { invoiceMap
+// (code→qty), priceMap (code→{list,total,qty}), serial }. No DOM / no _im, so
+// both the purchase (prep-batch) match and the return-invoice flow reuse it.
+function parseElashryInvoice(raw, codes) {
+  const invoiceMap = {}, priceMap = {};
+  let serial = null;
+  if (!raw || !Array.isArray(codes) || !codes.length) return { invoiceMap, priceMap, serial };
 
   // 1. Normalise Arabic-Indic digits (٠-٩) to Latin so we can regex numbers.
   const arNumMap = { '٠':'0','١':'1','٢':'2','٣':'3','٤':'4','٥':'5','٦':'6','٧':'7','٨':'8','٩':'9' };
@@ -861,9 +863,6 @@ function scanInvoice() {
     if (ec) elashryVariants.set(ec, code);
   }
 
-  _im.invoiceMap = {};
-  _im.priceMap = {};
-
   // 2.5. Pull the invoice serial number ("مسلسل اذن البيع") out of the
   //      header. pdf.js often extracts the label and its number separated
   //      by whitespace or newlines; the number is the first digit run
@@ -872,15 +871,7 @@ function scanInvoice() {
   try {
     const serialMatch = norm.match(/مسلسل\s*(?:إ|أ|ا)?ذ[نهة]?\s*ا?ل?بيع[^0-9]{0,40}(\d{3,})/)
       || norm.match(/(?:إ|أ|ا)?ذن\s*بيع[^0-9]{0,40}(\d{3,})/);
-    if (serialMatch) {
-      const detected = serialMatch[1];
-      // Don't clobber a serial the user already typed by hand.
-      if (!_im.invoiceSerial || !document.getElementById('im-invoice-serial')?.dataset.manual) {
-        _im.invoiceSerial = detected;
-        const el = document.getElementById('im-invoice-serial');
-        if (el) el.value = detected;
-      }
-    }
+    if (serialMatch) serial = serialMatch[1];
   } catch {}
 
   // 3. Split the invoice into "row blocks". Elashry invoices have a
@@ -925,13 +916,13 @@ function scanInvoice() {
     // item code instead, bounded by non-digits so it isn't pulled from a price.
     if (!matchedCode && elashryVariants.size) {
       for (const [ec, canonical] of elashryVariants) {
-        if (_im.invoiceMap[canonical]) continue;
+        if (invoiceMap[canonical]) continue;
         const esc2 = ec.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         if (new RegExp('(?<![0-9])' + esc2 + '(?![0-9])').test(blockUpper)) { matchedCode = canonical; break; }
       }
     }
     if (!matchedCode) continue;
-    if (_im.invoiceMap[matchedCode]) continue;
+    if (invoiceMap[matchedCode]) continue;
 
     // Pull every price-shaped number in the block (any digit count,
     // optional thousands commas, up to 3 decimals). Keep duplicates so a
@@ -1009,8 +1000,25 @@ function scanInvoice() {
       else if (nums.length) qty = 3;
     }
 
-    if (qty != null) _im.invoiceMap[matchedCode] = qty;
-    if (listPrice != null) _im.priceMap[matchedCode] = { list: listPrice, total: invoiceTotal, qty };
+    if (qty != null) invoiceMap[matchedCode] = qty;
+    if (listPrice != null) priceMap[matchedCode] = { list: listPrice, total: invoiceTotal, qty };
+  }
+  return { invoiceMap, priceMap, serial };
+}
+
+// Thin wrapper: parse the pasted purchase invoice for the selected prep-day
+// batch, then render the totals + comparison card.
+function scanInvoice() {
+  const raw = (document.getElementById('im-invoice-text')?.value || '').trim();
+  if (!raw) { showToast('Paste the invoice text first'); return; }
+  const codes = (_im.aggregated || []).map(r => r.code);
+  if (!codes.length) { showToast('No products on this day to match against'); return; }
+  const parsed = parseElashryInvoice(raw, codes);
+  _im.invoiceMap = parsed.invoiceMap;
+  _im.priceMap = parsed.priceMap;
+  if (parsed.serial && (!_im.invoiceSerial || !document.getElementById('im-invoice-serial')?.dataset.manual)) {
+    _im.invoiceSerial = parsed.serial;
+    const el = document.getElementById('im-invoice-serial'); if (el) el.value = parsed.serial;
   }
 
   // 5. Render right-hand totals + comparison card.
@@ -4312,7 +4320,8 @@ function finComputeKpis() {
   const ELASHRY_TOTAL_TAKEN = 742720, ELASHRY_TOTAL_RETURNED = 146657;
   const elashryPaid = ((typeof supplierCache !== 'undefined' && supplierCache.payments) || [])
     .reduce((a, p) => a + parseFloat(p.amount || 0), 0);
-  const elashryOwed = ELASHRY_TOTAL_TAKEN - ELASHRY_TOTAL_RETURNED - elashryPaid;
+  const elashryReturnCredits = (cache.supplierReturns || []).reduce((a, r) => a + parseFloat(r.credit_total || 0), 0);
+  const elashryOwed = ELASHRY_TOTAL_TAKEN - ELASHRY_TOTAL_RETURNED - elashryReturnCredits - elashryPaid;
 
   // Goods back in my warehouse but not yet credited on an Elashry return invoice.
   const creditsReturns = returned.filter(o => o.warehouse_confirmed && !o.supplier_return_invoice_id);
@@ -6664,6 +6673,177 @@ function downloadSupplierBreakdownExcel() {
   showToast('Breakdown downloaded ✓');
 }
 
+// ═══════════════════════════════════════════════════════════════════
+//  RETURN INVOICES (Phase 4) — scan Elashry's return invoice, compare the
+//  credited buy prices against what the system recorded for those items,
+//  flag any mismatch before saving, and on save subtract the credit from
+//  what we owe Elashry. Also auto-learns each product's Elashry item code.
+// ═══════════════════════════════════════════════════════════════════
+let _ri = { parsed: null, pendingFile: null };
+
+function openReturnInvoice() {
+  const overlay = document.getElementById('overlay');
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:14px;max-width:920px;width:96%;padding:22px;max-height:92vh;overflow:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <h3 style="margin:0;font-size:17px">📄 Record Elashry return invoice</h3>
+        <button class="btn btn-ghost btn-xs" onclick="closeModal()">✕</button>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        <input type="file" id="ri-file" accept="application/pdf,text/plain" onchange="onReturnFileChosen(event)" style="font-size:12px">
+        <input type="text" id="ri-serial" placeholder="إذن مرتجع # (serial)" style="padding:8px 10px;border:1px solid var(--line);border-radius:6px;font-size:12px">
+        <input type="text" id="ri-date" placeholder="Return date (YYYY-MM-DD)" style="padding:8px 10px;border:1px solid var(--line);border-radius:6px;font-size:12px">
+      </div>
+      <textarea id="ri-text" rows="6" placeholder="Paste the return-invoice text here (or load a PDF above), then press Scan…" style="width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px"></textarea>
+      <div style="display:flex;gap:8px;margin:10px 0">
+        <button class="btn btn-primary btn-sm" onclick="scanReturnInvoice()">🔍 Scan &amp; compare</button>
+      </div>
+      <div id="ri-compare"></div>
+      <div style="display:flex;gap:10px;margin-top:14px">
+        <button class="btn btn-dark" style="flex:1" onclick="saveReturnInvoice()">💾 Save return invoice</button>
+        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      </div>
+    </div>`;
+  overlay.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+  _ri = { parsed: null, pendingFile: null, _codeEdits: {} };
+}
+window.openReturnInvoice = openReturnInvoice;
+
+function onReturnFileChosen(e) {
+  const f = e.target.files?.[0]; if (!f) return;
+  const reader = new FileReader();
+  reader.onload = () => { _ri.pendingFile = { name: f.name || 'return', type: f.type || '', data_url: reader.result || '', size: f.size || 0 }; };
+  reader.readAsDataURL(f);
+  const ta = document.getElementById('ri-text');
+  if (f.type === 'application/pdf' || /\.pdf$/i.test(f.name)) {
+    extractPdfText(f).then(t => { if (t && t.trim()) { ta.value = t; showToast('Loaded PDF text · press Scan'); } else showToast('No embedded text — paste it manually.'); }).catch(err => showToast('PDF read failed: ' + err.message));
+  } else { f.text().then(t => { ta.value = t; showToast('Loaded · press Scan'); }); }
+}
+window.onReturnFileChosen = onReturnFileChosen;
+
+function scanReturnInvoice() {
+  const raw = (document.getElementById('ri-text')?.value || '').trim();
+  if (!raw) { showToast('Paste the return invoice text first'); return; }
+  const codes = (cache.products || []).map(p => p.code).filter(Boolean);
+  _ri.parsed = parseElashryInvoice(raw, codes);
+  if (_ri.parsed.serial) { const el = document.getElementById('ri-serial'); if (el && !el.value) el.value = _ri.parsed.serial; }
+  renderReturnInvoiceCompare();
+  const n = Object.keys(_ri.parsed.invoiceMap).length;
+  showToast(`Scanned · ${n} product${n === 1 ? '' : 's'} matched`);
+}
+window.scanReturnInvoice = scanReturnInvoice;
+
+function _riRows() {
+  const parsed = _ri.parsed; if (!parsed) return [];
+  const byCode = new Map((cache.products || []).map(p => [String(p.code || '').toUpperCase(), p]));
+  return Object.keys(parsed.invoiceMap).map(code => {
+    const qty = parsed.invoiceMap[code] || 0;
+    const list = parseFloat((parsed.priceMap[code] || {}).list || 0) || 0;
+    const retBuyUnit = Math.round(list * 0.97 * 100) / 100;
+    const prod = byCode.get(String(code).toUpperCase());
+    const sysBuyUnit = prod ? (parseFloat(prod.buy_price || 0) || 0) : 0;
+    const delta = Math.round((retBuyUnit - sysBuyUnit) * 100) / 100;
+    return { code, name: prod?.name || '', qty, list, retBuyUnit, sysBuyUnit, delta, elashry_code: prod?.elashry_code || '', productId: prod?.id || null };
+  });
+}
+
+function renderReturnInvoiceCompare() {
+  const host = document.getElementById('ri-compare'); if (!host) return;
+  const rows = _riRows();
+  if (!rows.length) { host.innerHTML = '<div style="color:var(--muted);padding:10px">No products matched — check the pasted text, or set the products\' Elashry codes.</div>'; return; }
+  const creditTotal = rows.reduce((a, r) => a + r.retBuyUnit * r.qty, 0);
+  const mismatches = rows.filter(r => Math.abs(r.delta) >= 0.01).length;
+  host.innerHTML = `
+    <div class="table-wrap"><table style="width:100%;font-size:12px">
+      <thead><tr>
+        <th>Code</th><th>Name</th><th style="text-align:center">Qty</th>
+        <th style="text-align:right">Return buy/unit</th><th style="text-align:right">System buy/unit</th>
+        <th style="text-align:right">Δ</th><th>Elashry code</th>
+      </tr></thead>
+      <tbody>${rows.map(r => `
+        <tr style="${Math.abs(r.delta) >= 0.01 ? 'background:#fef2f2' : ''}">
+          <td style="font-family:var(--f-mono,monospace)">${esc(r.code)}</td>
+          <td>${esc(r.name)}</td>
+          <td style="text-align:center"><input value="${r.qty}" onchange="editReturnQty('${esc(r.code)}', this.value)" style="width:48px;text-align:center;border:1px solid var(--line);border-radius:5px;padding:3px"></td>
+          <td style="text-align:right">EGP ${fmt(r.retBuyUnit)}</td>
+          <td style="text-align:right">EGP ${fmt(r.sysBuyUnit)}</td>
+          <td style="text-align:right;font-weight:800;color:${Math.abs(r.delta) < 0.01 ? '#16a34a' : '#dc2626'}">${r.delta > 0 ? '+' : ''}${fmt(r.delta)}</td>
+          <td><input value="${esc(r.elashry_code)}" placeholder="كود الصنف" onchange="setRowElashryCode('${esc(r.code)}', this.value)" style="width:90px;border:1px solid var(--line);border-radius:5px;padding:3px;font-size:11px"></td>
+        </tr>`).join('')}</tbody>
+    </table></div>
+    <div class="fin-row" style="margin-top:10px;font-weight:800"><span>Total return credit</span><span>EGP ${fmt(creditTotal)}</span></div>
+    ${mismatches
+      ? `<div style="margin-top:6px;color:#dc2626;font-size:12px">⚠️ ${mismatches} row${mismatches === 1 ? '' : 's'} where the credited buy price ≠ the system's recorded buy price — you'll be asked to confirm before saving.</div>`
+      : '<div style="margin-top:6px;color:#16a34a;font-size:12px">✓ All credited buy prices match the system.</div>'}`;
+}
+window.renderReturnInvoiceCompare = renderReturnInvoiceCompare;
+
+function editReturnQty(code, val) {
+  if (!_ri.parsed) return;
+  const n = parseInt(String(val || '').replace(/\D/g, ''), 10);
+  if (!Number.isFinite(n) || n < 0) return;
+  if (n === 0) delete _ri.parsed.invoiceMap[code];
+  else { _ri.parsed.invoiceMap[code] = n; if (_ri.parsed.priceMap[code]) _ri.parsed.priceMap[code].qty = n; }
+  renderReturnInvoiceCompare();
+}
+window.editReturnQty = editReturnQty;
+
+function setRowElashryCode(code, val) {
+  _ri._codeEdits = _ri._codeEdits || {};
+  _ri._codeEdits[String(code).toUpperCase()] = String(val || '').trim();
+}
+window.setRowElashryCode = setRowElashryCode;
+
+async function saveReturnInvoice() {
+  if (!_ri.parsed || !Object.keys(_ri.parsed.invoiceMap).length) { showToast('Scan a return invoice first'); return; }
+  const rows = _riRows();
+  const mism = rows.filter(r => Math.abs(r.delta) >= 0.01);
+  if (mism.length) {
+    const detail = mism.map(r => `• ${r.code}: return ${fmt(r.retBuyUnit)} vs system ${fmt(r.sysBuyUnit)}`).join('\n');
+    if (!confirm(`${mism.length} row(s) have a buy-price mismatch:\n\n${detail}\n\nSave the return invoice anyway?\n(Cancel to discard and upload another.)`)) return;
+  }
+  const creditTotal = Math.round(rows.reduce((a, r) => a + r.retBuyUnit * r.qty, 0) * 100) / 100;
+  const serial = (document.getElementById('ri-serial')?.value || '').trim() || null;
+  const rdate = (document.getElementById('ri-date')?.value || '').trim() || null;
+  const record = {
+    id: genId(),
+    name: `Elashry return — ${rdate || today()}${serial ? ' (#' + serial + ')' : ''}`,
+    return_date: rdate, dispense_date: null, invoice_serial: serial,
+    lines: rows.map(r => ({ code: r.code, name: r.name, qty: r.qty, list: r.list, buy: r.retBuyUnit, line_credit: Math.round(r.retBuyUnit * r.qty * 100) / 100, sys_buy: r.sysBuyUnit, delta: r.delta })),
+    credit_total: creditTotal,
+    invoice_text: (document.getElementById('ri-text')?.value || '').trim(),
+    original_file: _ri.pendingFile || null,
+    has_mismatch: mism.length > 0,
+    created_at: new Date().toISOString(),
+  };
+  try {
+    await dbInsert('supplier_returns', record);
+    (cache.supplierReturns = cache.supplierReturns || []).unshift(record);
+    // Auto-learn: persist any entered/confirmed Elashry codes onto the products.
+    const edits = _ri._codeEdits || {};
+    let learned = 0;
+    for (const r of rows) {
+      const entered = String(edits[String(r.code).toUpperCase()] ?? r.elashry_code ?? '').trim();
+      if (entered && r.productId) {
+        const prod = cache.products.find(p => p.id === r.productId);
+        if (prod && String(prod.elashry_code || '') !== entered) {
+          try { await dbUpdate('products', r.productId, { elashry_code: entered }); prod.elashry_code = entered; learned++; } catch (_) {}
+        }
+      }
+    }
+    try { logAudit('return.save', { entity: 'supplier_returns', entity_id: serial || record.id, summary: `Return invoice ${serial ? '#' + serial : ''} — credit EGP ${fmt(creditTotal)} (${rows.length} SKUs)${mism.length ? ' · ' + mism.length + ' price mismatch' : ''}`, new_value: { credit: creditTotal, skus: rows.length, mismatches: mism.length } }); } catch (_) {}
+    showToast(`Return saved ✓ — EGP ${fmt(creditTotal)} credited${learned ? ` · ${learned} Elashry codes learned` : ''}`);
+    closeModal();
+    renderAll();
+  } catch (e) {
+    const msg = String(e.message || '');
+    if (/supplier_returns/i.test(msg) && /relation|does not exist|schema cache/i.test(msg)) alert('The supplier_returns table is missing.');
+    else showToast('Save failed: ' + msg);
+  }
+}
+window.saveReturnInvoice = saveReturnInvoice;
+
 function renderSupplierAccount() {
   const host = document.getElementById('supplier-account');
   if (!host) return;
@@ -6701,7 +6881,10 @@ function renderSupplierAccount() {
 
   const paid = (supplierCache.payments || [])
     .reduce((a, p) => a + parseFloat(p.amount || 0), 0);
-  const remaining = ELASHRY_TOTAL_TAKEN - returnedBuyCost - paid;
+  // Phase 4: credits from saved Elashry return invoices reduce what we owe.
+  const returnCredits = (cache.supplierReturns || [])
+    .reduce((a, r) => a + parseFloat(r.credit_total || 0), 0);
+  const remaining = ELASHRY_TOTAL_TAKEN - returnedBuyCost - returnCredits - paid;
   const settled = remaining <= 0;
 
   const payRows = (supplierCache.payments || []).length
@@ -6741,6 +6924,7 @@ function renderSupplierAccount() {
         </h3>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-ghost btn-sm" onclick="downloadSupplierBreakdownExcel()">📥 Excel</button>
+          <button class="btn btn-ghost btn-sm" onclick="openReturnInvoice()">📄 Return invoice</button>
           <button class="btn btn-primary btn-sm" onclick="openSupplierPayment()">+ Record Payment</button>
         </div>
       </div>
@@ -6754,6 +6938,7 @@ function renderSupplierAccount() {
         Our-side returned buy cost: EGP ${fmt(returnedBuyCostOurs)} &nbsp;•&nbsp; Elashry-confirmed: EGP ${fmt(ELASHRY_TOTAL_RETURNED)}${returnedDiff !== 0 ? ` &nbsp;•&nbsp; diff: ${returnedDiff > 0 ? '+' : ''}EGP ${fmt(returnedDiff)} (buy-price inflation on returned mix — fix the affected product prices to close the gap)` : ''}
       </div>
       <div class="fin-row"><span>↩️ Returned (goods back to their warehouse)</span><span class="fin-val deduct">− EGP ${fmt(returnedBuyCost)}</span></div>
+      ${returnCredits > 0 ? `<div class="fin-row"><span>📄 Return invoices credited (${(cache.supplierReturns || []).length})</span><span class="fin-val deduct">− EGP ${fmt(returnCredits)}</span></div>` : ''}
       <div class="fin-row"><span>💵 Already paid to Elashry</span><span class="fin-val deduct">− EGP ${fmt(paid)}</span></div>
       <div class="fin-row ${settled ? 'profit' : 'loss'}" style="border-top:2px solid var(--line);padding-top:14px;margin-top:8px;font-size:1.15rem">
         <span>${settled ? (remaining < 0 ? '🟢 Overpaid / Credit' : '🟢 Fully Settled ✓') : '🔴 Remaining to pay'}</span>
