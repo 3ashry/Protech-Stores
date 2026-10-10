@@ -5175,225 +5175,318 @@ function renderWeeklySalesChart() {
 //  "Since last payment" = strictly greater than the most recent expense
 //  in the "Media Buyer" category. First payment ever → whole history.
 // ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+//  MEDIA BUYER (Phase 9) — per-month statement, ads-vs-sales split,
+//  manual adjustments, month lock, and a multi-month salary graph.
+//
+//  Salary formula (per month):
+//     20% × ad top-ups (Paid Ads expenses)
+//   +  1% × delivered sales (total − actual shipping)
+//   +  manual adjustments (bonuses / deductions)
+//   −  payments already recorded for that month
+//
+//  The ads-vs-sales SPLIT is shown so his pay can be judged on whether
+//  it's driven by real sales (good) or just by spending more on ads.
+//
+//  A LOCKED month freezes its numbers in a snapshot so a late delivery or
+//  an ad-spend correction can't retroactively move a figure already
+//  settled. Lock/adjustment state lives in the admin-only
+//  media_buyer_months table (cache.mbMonths).
+// ═══════════════════════════════════════════════════════════════════
+const MB_MO_EN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const MB_MO_AR = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
+const MB_MONTHS_EN = { jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,
+  jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12 };
+const MB_MONTHS_AR = { 'يناير':1,'فبراير':2,'مارس':3,'أبريل':4,'ابريل':4,'مايو':5,'يونيو':6,'يوليو':7,
+  'أغسطس':8,'اغسطس':8,'سبتمبر':9,'أكتوبر':10,'اكتوبر':10,'نوفمبر':11,'ديسمبر':12 };
+
+let _mbSel = null;    // {y,m} month currently being viewed
+let _mbChart = null;  // Chart.js instance for the salary-trend graph
+
+function mbKey(y, m) { return `${y}-${String(m).padStart(2, '0')}`; }
+function mbMonthRecord(key) { return (cache.mbMonths || []).find(r => r.month === key) || null; }
+function mbShipOf(o) { const a = parseFloat(o.actual_shipping || 0); return a > 0 ? a : parseFloat(o.est_shipping || 0); }
+
+// Which media-buyer month a payment counts against: a "for <month>" tag in
+// the description wins, else the payment's own month.
+function mbPaymentMonthKey(e) {
+  const desc = String(e.description || '').toLowerCase();
+  const fallback = cairoYMOfExpense(e);
+  const fallbackYear = fallback ? fallback.y : new Date().getFullYear();
+  const enRe = new RegExp('(?:\\bfor\\s+)?\\b(' + Object.keys(MB_MONTHS_EN).join('|') + ')\\b(?:\\s+(\\d{4}))?', 'i');
+  const enM = desc.match(enRe);
+  if (enM) { const mm = MB_MONTHS_EN[enM[1].toLowerCase()]; const yy = enM[2] ? parseInt(enM[2]) : fallbackYear; return mbKey(yy, mm); }
+  const raw = String(e.description || '');
+  for (const [name, mm] of Object.entries(MB_MONTHS_AR)) {
+    if (raw.includes(name)) { const yr = raw.match(/(\d{4})/); const yy = yr ? parseInt(yr[1]) : fallbackYear; return mbKey(yy, mm); }
+  }
+  return fallback ? mbKey(fallback.y, fallback.m) : null;
+}
+
+// Full statement for one month. Uses the frozen snapshot when the month is
+// locked; otherwise computes live from expenses + delivered orders.
+function computeMediaBuyerMonth(y, m) {
+  const key = mbKey(y, m);
+  const rec = mbMonthRecord(key);
+  const expenses = cache.expenses || [];
+  const delivered = (cache.orders || []).filter(o => o.status === 'Delivered');
+  const inM = (my) => !!my && my.y === y && my.m === m;
+  const monthDelivered = delivered.filter(o => inM(finMonthOfOrder(o)));
+  let adsTopups, salesNet, adsShare, salesShare;
+  if (rec && rec.locked && rec.snapshot) {
+    adsTopups  = parseFloat(rec.snapshot.ads_topups) || 0;
+    salesNet   = parseFloat(rec.snapshot.sales_net) || 0;
+    adsShare   = parseFloat(rec.snapshot.ads_share) || 0;
+    salesShare = parseFloat(rec.snapshot.sales_share) || 0;
+  } else {
+    adsTopups  = expenses.filter(e => e.category === 'Paid Ads' && inM(cairoYMOfExpense(e))).reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+    salesNet   = monthDelivered.reduce((a, o) => a + (parseFloat(o.total || 0) - mbShipOf(o)), 0);
+    adsShare   = adsTopups * 0.20;
+    salesShare = salesNet * 0.01;
+  }
+  const adjustments = Array.isArray(rec && rec.adjustments) ? rec.adjustments : [];
+  const adjTotal = adjustments.reduce((a, x) => a + (parseFloat(x.amount) || 0), 0);
+  const base = adsShare + salesShare;              // formula pay, ex-adjustments
+  const gross = base + adjTotal;
+  const adsPct = base > 0 ? adsShare / base * 100 : 0;
+  const salesPct = base > 0 ? salesShare / base * 100 : 0;
+  const paid = expenses.filter(e => e.category === 'Media Buyer' && mbPaymentMonthKey(e) === key)
+    .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const owed = Math.round(Math.max(0, gross - paid) * 100) / 100;
+  const metaSpend = finRealAdSpend((cache.metaAdSpend || [])
+    .filter(r => inM(cairoYM(r.spend_date)))
+    .reduce((a, r) => a + (parseFloat(r.spend) || 0), 0));
+  return { key, y, m, rec, locked: !!(rec && rec.locked), lockedAt: rec ? rec.locked_at : null,
+    adsTopups, salesNet, adsShare, salesShare, adjustments, adjTotal, base, gross,
+    adsPct, salesPct, paid, owed, metaSpend, monthDelivered };
+}
+
+// Upsert a media_buyer_months row by its `month` key (PK), merging fields.
+async function mbSaveMonth(key, fields) {
+  const body = [{ month: key, ...fields }];
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/media_buyer_months?on_conflict=month`, {
+    method: 'POST',
+    headers: sbHeaders({ 'Prefer': 'resolution=merge-duplicates,return=representation' }),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const rows = await res.json().catch(() => []);
+  const row = (Array.isArray(rows) && rows[0]) ? rows[0] : { month: key, ...fields };
+  cache.mbMonths = cache.mbMonths || [];
+  const i = cache.mbMonths.findIndex(r => r.month === key);
+  if (i >= 0) cache.mbMonths[i] = { ...cache.mbMonths[i], ...row };
+  else cache.mbMonths.unshift(row);
+  return row;
+}
+
+function mbSelectMonth(key) {
+  const [y, m] = String(key).split('-').map(Number);
+  if (y && m) _mbSel = { y, m };
+  _mbRerender();
+}
+// Re-render the financial screen (so KPIs that include the media buyer also
+// refresh); falls back to just the media-buyer card.
+function _mbRerender() {
+  if (typeof renderFinancials === 'function') renderFinancials();
+  else renderMediaBuyer();
+}
+
+async function mbAddAdjustment() {
+  const S = computeMediaBuyerMonth(_mbSel.y, _mbSel.m);
+  if (S.locked) { showToast('Month is locked — unlock to edit'); return; }
+  const label = (document.getElementById('mb-adj-label').value || '').trim();
+  const amt = parseFloat(document.getElementById('mb-adj-amt').value || 0);
+  if (!amt) { showToast('Enter an amount (use a minus sign for a deduction)'); return; }
+  const list = S.adjustments.slice();
+  list.push({ label: label || 'Adjustment', amount: Math.round(amt * 100) / 100 });
+  try { await mbSaveMonth(S.key, { adjustments: list }); _mbRerender(); }
+  catch (e) { showToast('Error: ' + e.message); }
+}
+
+async function mbRemoveAdjustment(idx) {
+  const S = computeMediaBuyerMonth(_mbSel.y, _mbSel.m);
+  if (S.locked) { showToast('Month is locked — unlock to edit'); return; }
+  const list = S.adjustments.slice();
+  if (idx < 0 || idx >= list.length) return;
+  list.splice(idx, 1);
+  try { await mbSaveMonth(S.key, { adjustments: list }); _mbRerender(); }
+  catch (e) { showToast('Error: ' + e.message); }
+}
+
+async function mbToggleLock() {
+  const S = computeMediaBuyerMonth(_mbSel.y, _mbSel.m);
+  if (S.locked) {
+    if (!confirm('Unlock this month? Its salary will recompute from live data again.')) return;
+    try { await mbSaveMonth(S.key, { locked: false }); showToast('Month unlocked 🔓'); _mbRerender(); }
+    catch (e) { showToast('Error: ' + e.message); }
+    return;
+  }
+  if (!confirm(`Lock ${MB_MO_EN[S.m - 1]} ${S.y}? The salary (EGP ${fmt(S.gross)}) will be frozen so later deliveries or ad-spend corrections can't change it. You can unlock later.`)) return;
+  const snapshot = { ads_topups: S.adsTopups, ads_share: S.adsShare, sales_net: S.salesNet, sales_share: S.salesShare, adj_total: S.adjTotal, gross: S.gross };
+  try { await mbSaveMonth(S.key, { locked: true, locked_at: new Date().toISOString(), snapshot }); showToast('Month locked 🔒'); _mbRerender(); }
+  catch (e) { showToast('Error: ' + e.message); }
+}
+
+// Record the payout for the currently-viewed month, tagging the description
+// with the month so it's attributed correctly regardless of the pay date.
+async function payMediaBuyerForMonth() {
+  const S = computeMediaBuyerMonth(_mbSel.y, _mbSel.m);
+  const amt = S.owed;
+  if (amt <= 0) { showToast('Nothing due for this month'); return; }
+  if (!confirm(`Record a media buyer payment of EGP ${fmt(amt)} for ${MB_MO_EN[S.m - 1]} ${S.y}?`)) return;
+  try {
+    const data = { id: genId(), category: 'Media Buyer', description: `Media buyer payment for ${MB_MO_EN[S.m - 1]} ${S.y}`, amount: amt, date: today(), created_at: new Date().toISOString() };
+    await dbInsert('expenses', data);
+    cache.expenses.unshift(data);
+    showToast('Media buyer paid ✓'); _mbRerender();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
 function renderMediaBuyer() {
   const el = document.getElementById('fin-mediabuyer');
   if (!el) return;
-  const orders = cache.orders || [];
-  const expenses = cache.expenses || [];
-  const delivered = orders.filter(o => o.status === 'Delivered');
+  const now = cairoYM(new Date().toISOString()) || { y: 2026, m: 1 };
+  if (!_mbSel) _mbSel = { y: now.y, m: now.m };
+  const seq = (typeof finMonthSeq === 'function' ? finMonthSeq() : [{ y: now.y, m: now.m }]);
+  const sel = _mbSel;
+  const S = computeMediaBuyerMonth(sel.y, sel.m);
+  const label = `${MB_MO_AR[sel.m - 1]} ${sel.y} · ${MB_MO_EN[sel.m - 1]} ${sel.y}`;
+  const adsPctR = Math.round(S.adsPct);
+  const salesPctR = Math.round(S.salesPct);
 
-  // ── Current calendar month window ──────────────────────────────────
-  // Two subtleties that used to skew the numbers:
-  //  1) `new Date(y, m, 1).toISOString()` returns UTC. For any browser
-  //     east of UTC (Egypt +02/+03), local Sep-1 midnight becomes
-  //     Aug-31 21:00 UTC — so the sliced "day" started with the
-  //     PREVIOUS month, which pulled Aug-31 rows into September.
-  //  2) Old expenses were saved with `date` in `DD/MM/YYYY` and newer
-  //     ones in `YYYY-MM-DD`. A string-compare against `2026-09-01`
-  //     silently excluded every `03/09/2026` row.
-  // The fix is to parse each row's date into a real `{y, m}` and
-  // compare against the local month/year, not lexicographic strings.
-  // "Now" in Africa/Cairo (not the browser's clock) so the current-month
-  // window is correct regardless of where the admin is sitting.
-  const _nowCairo = cairoYM(new Date().toISOString());
-  const curY = _nowCairo.y;
-  const curM = _nowCairo.m;                      // 1..12
-  const _parseMonthYear = cairoYM;               // all month logic → Cairo
-  // Honours the per-expense belongs_month override (see cairoYMOfExpense).
-  const monthOfExpense = (e) => cairoYMOfExpense(e);
-  // For delivered-orders bucketing we prefer the ACTUAL delivery date
-  // (the day Bosta finished the delivery, stamped into orders.delivered_at
-  // by the sync). Falls back to created_at for historical rows that
-  // pre-date the delivered_at column being populated.
-  const monthOfOrder = (o) =>
-    _parseMonthYear(o.delivered_at)
-    || _parseMonthYear(o.created_at)
-    || _parseMonthYear(o.date);
-  const inMonth = (my) => !!my && my.y === curY && my.m === curM;
-  // Compat labels used elsewhere in the render (drawer table etc).
-  const dateOfExpense = (e) => String(e.date || e.created_at || '').slice(0, 10);
-  const dateOfOrder   = (o) => String(o.delivered_at || o.created_at || o.date || '').slice(0, 10);
+  // Month dropdown (newest first); guarantee the current month is present.
+  const seqKeys = seq.map(p => mbKey(p.y, p.m));
+  const months = seqKeys.includes(mbKey(sel.y, sel.m)) ? seq.slice() : seq.concat([{ y: sel.y, m: sel.m }]);
+  const opts = months.slice().reverse().map(p =>
+    `<option value="${mbKey(p.y, p.m)}" ${p.y === sel.y && p.m === sel.m ? 'selected' : ''}>${MB_MO_EN[p.m - 1]} ${p.y}${p.y === now.y && p.m === now.m ? ' · current' : ''}</option>`
+  ).join('');
 
-  const MO_AR = ['يناير','فبراير','مارس','أبريل','مايو','يونيو','يوليو','أغسطس','سبتمبر','أكتوبر','نوفمبر','ديسمبر'];
-  const MO_EN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const monthLabel = `${MO_AR[curM - 1]} ${curY} · ${MO_EN[curM - 1]} ${curY}`;
+  // ── Ads-vs-sales split bar + incentive hint ──
+  const splitBar = S.base > 0 ? `
+    <div style="display:flex;height:18px;border-radius:9px;overflow:hidden;border:1px solid var(--line);margin:6px 0">
+      <div style="width:${S.adsPct}%;background:#F26A21" title="From ad top-ups"></div>
+      <div style="width:${S.salesPct}%;background:#10b981" title="From delivered sales"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600">
+      <span style="color:#F26A21">🟧 Ads 20%: EGP ${fmt(S.adsShare)} · ${adsPctR}%</span>
+      <span style="color:#10b981">🟩 Sales 1%: EGP ${fmt(S.salesShare)} · ${salesPctR}%</span>
+    </div>`
+    : '<div style="font-size:12px;color:var(--muted);margin:6px 0">No ads or sales recorded for this month yet.</div>';
+  const incentiveHint = S.base > 0 && adsPctR >= 70
+    ? `<div style="margin-top:8px;padding:8px 10px;background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;font-size:12px;color:#92400e">⚠️ ${adsPctR}% of his pay this month comes from ad spend, only ${salesPctR}% from sales. His incentive is tilted toward spending, not selling.</div>`
+    : (S.base > 0 && salesPctR >= 50
+      ? `<div style="margin-top:8px;padding:8px 10px;background:#dcfce7;border:1px solid #86efac;border-radius:8px;font-size:12px;color:#166534">✅ ${salesPctR}% of his pay is driven by real sales this month — the incentive is working.</div>`
+      : '');
 
-  // ── This month's owed amount ───────────────────────────────────────
-  //   Owed = 20% × Paid Ads spent this month
-  //        +  1% × delivered product sales (excl. shipping) this month
-  //        −  Media Buyer payments already made this month
-  // The media buyer's 20% is on what the admin TOPS UP the ad account with
-  // (e.g. charge 3,000 → he gets 600), NOT what Meta actually spends. Top-ups
-  // are recorded as "Paid Ads" expenses, so that's the payout base.
-  const paidAdsMonth = expenses
-    .filter(e => e.category === 'Paid Ads' && inMonth(monthOfExpense(e)))
-    .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-  // Meta's ACTUAL spend this month — shown for reference/ROAS only; it does
-  // NOT feed the media-buyer payout. Empty until /api/meta-sync has run.
-  const metaSpendMonth = finRealAdSpend((cache.metaAdSpend || [])
-    .filter(r => inMonth(cairoYM(r.spend_date)))
-    .reduce((a, r) => a + (parseFloat(r.spend) || 0), 0)); // grossed up for 14% VAT
+  // ── Adjustments editor ──
+  const adjRows = S.adjustments.length
+    ? S.adjustments.map((a, i) => `
+      <div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px">
+        <span style="flex:1">${esc(a.label || 'Adjustment')}</span>
+        <span style="font-weight:700;color:${(parseFloat(a.amount) || 0) >= 0 ? '#10b981' : '#dc2626'}">${(parseFloat(a.amount) || 0) >= 0 ? '+' : '−'} EGP ${fmt(Math.abs(parseFloat(a.amount) || 0))}</span>
+        ${S.locked ? '' : `<button class="btn btn-danger btn-xs" onclick="mbRemoveAdjustment(${i})">✕</button>`}
+      </div>`).join('')
+    : '<div style="font-size:12px;color:var(--muted)">No adjustments for this month.</div>';
+  const adjAdd = S.locked ? '' : `
+    <div style="display:flex;gap:6px;margin-top:8px">
+      <input id="mb-adj-label" placeholder="Reason (e.g. bonus)" style="flex:1;min-width:0">
+      <input id="mb-adj-amt" type="number" step="0.01" placeholder="± EGP" style="width:110px" inputmode="decimal">
+      <button class="btn btn-ghost btn-sm" onclick="mbAddAdjustment()">Add</button>
+    </div>`;
 
-  const monthDelivered = delivered
-    .filter(o => inMonth(monthOfOrder(o)))
-    .slice()
-    .sort((a, b) => String(a.created_at || a.date || '').localeCompare(String(b.created_at || b.date || '')));
-  // Sales base for the 1% share = total − actual_shipping (real Bosta
-  // fee once the cash cycle closes; falls back to est_shipping if the
-  // actual isn't populated yet so the number is never zero-inflated).
-  const shipOf = (o) => {
-    const a = parseFloat(o.actual_shipping || 0);
-    return a > 0 ? a : parseFloat(o.est_shipping || 0);
-  };
-  const monthSales = monthDelivered.reduce((a, o) =>
-    a + (parseFloat(o.total || 0) - shipOf(o)), 0);
-
-  const adsShare    = paidAdsMonth * 0.20;
-  const salesShare  = monthSales   * 0.01;
-  const grossOwed   = adsShare + salesShare;
-
-  const mbPayments = expenses.filter(e => e.category === 'Media Buyer');
-
-  // ── monthKeyForPayment moved up so BOTH the "already paid this
-  //    month" deduction AND the history table use the same rule:
-  //    respect a "for <month>" tag in the description, otherwise fall
-  //    back to the payment date's month. That way a payout dated in
-  //    September whose description says "for August" is counted
-  //    against August's owed, not September's.
-  const MONTHS_EN = { jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,
-    jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12 };
-  const MONTHS_AR = { 'يناير':1,'فبراير':2,'مارس':3,'أبريل':4,'ابريل':4,'مايو':5,'يونيو':6,'يوليو':7,
-    'أغسطس':8,'اغسطس':8,'سبتمبر':9,'أكتوبر':10,'اكتوبر':10,'نوفمبر':11,'ديسمبر':12 };
-  const monthKeyForPayment = (e) => {
-    const desc = String(e.description || '').toLowerCase();
-    // Parse the payment date properly so DD/MM/YYYY rows aren't ignored.
-    const fallback = monthOfExpense(e);
-    const fallbackYear = fallback ? fallback.y : new Date().getFullYear();
-    // English match: "for <month> [year]" or just "<month> [year]".
-    const enRe = new RegExp('(?:\\bfor\\s+)?\\b(' + Object.keys(MONTHS_EN).join('|') + ')\\b(?:\\s+(\\d{4}))?', 'i');
-    const enM = desc.match(enRe);
-    if (enM) {
-      const mm = MONTHS_EN[enM[1].toLowerCase()];
-      const yy = enM[2] ? parseInt(enM[2]) : fallbackYear;
-      return `${yy}-${String(mm).padStart(2, '0')}`;
-    }
-    // Arabic match: any month name, optional 4-digit year nearby.
-    const rawDesc = String(e.description || '');
-    for (const [name, mm] of Object.entries(MONTHS_AR)) {
-      if (rawDesc.includes(name)) {
-        const yr = rawDesc.match(/(\d{4})/);
-        const yy = yr ? parseInt(yr[1]) : fallbackYear;
-        return `${yy}-${String(mm).padStart(2, '0')}`;
-      }
-    }
-    // Fallback: group by the payment date's parsed month.
-    return fallback ? `${fallback.y}-${String(fallback.m).padStart(2, '0')}` : null;
-  };
-
-  // "Already paid this month" respects the "for <month>" tag too —
-  // so a payment dated 07/09 with description "for August 2026" is
-  // deducted from August's owed, not September's.
-  const curMonthKey = `${curY}-${String(curM).padStart(2, '0')}`;
-  const paidThisMonth = mbPayments
-    .filter(e => monthKeyForPayment(e) === curMonthKey)
-    .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-  const mbOwed = Math.round(Math.max(0, grossOwed - paidThisMonth) * 100) / 100;
-
-  const byMonth = new Map();
-  for (const e of mbPayments) {
-    const key = monthKeyForPayment(e);
-    if (!key) continue;
-    const cur = byMonth.get(key) || { total: 0, count: 0, entries: [] };
-    cur.total += parseFloat(e.amount || 0) || 0;
-    cur.count += 1;
-    cur.entries.push(e);
-    byMonth.set(key, cur);
-  }
-  const historyKeys = Array.from(byMonth.keys()).sort().reverse();
-  const historyRows = historyKeys.length
-    ? historyKeys.map(k => {
-        const [yy, mm] = k.split('-').map(Number);
-        const label = `${MO_AR[mm - 1]} ${yy} · ${MO_EN[mm - 1]} ${yy}`;
-        const b = byMonth.get(k);
-        const detail = b.entries.map(e => {
-          const day = dateOfExpense(e);
-          return `<div style="opacity:.75;font-size:11px">${esc(day)} — EGP ${fmt(e.amount)}${e.description ? ` · ${esc(e.description)}` : ''}</div>`;
-        }).join('');
-        return `
-          <tr>
-            <td style="padding:6px 4px">${label}</td>
-            <td style="padding:6px 4px;text-align:right"><b>EGP ${fmt(b.total)}</b></td>
-            <td style="padding:6px 4px;text-align:right">${b.count}</td>
-            <td style="padding:6px 4px">${detail}</td>
-          </tr>`;
-      }).join('')
-    : '<tr><td colspan="4" style="text-align:center;opacity:.6;padding:12px">لا توجد دفعات مسجلة سابقاً — No prior Media Buyer payouts recorded</td></tr>';
-
-  const totalEverPaid = mbPayments.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-
-  // ── Cycle delivered-orders drawer (for verification) ───────────────
-  const ordersRows = monthDelivered.length
-    ? monthDelivered.map(o => `
-        <tr>
-          <td style="padding:4px">${esc(o.code || '')}</td>
-          <td style="padding:4px;opacity:.75">${esc(dateOfOrder(o))}</td>
-          <td style="padding:4px">${esc(o.customer_name || '')}</td>
-          <td style="padding:4px;text-align:right">EGP ${fmt(parseFloat(o.total || 0) - shipOf(o))}</td>
-        </tr>`).join('')
-    : '<tr><td colspan="4" style="text-align:center;opacity:.6;padding:12px">لا توجد طلبات مسلّمة هذا الشهر</td></tr>';
+  const lockBtn = S.locked
+    ? `<button class="btn btn-ghost btn-sm" onclick="mbToggleLock()">🔓 Unlock month</button>
+       <span style="font-size:11px;color:var(--muted)">🔒 Locked${S.lockedAt ? ' · ' + new Date(S.lockedAt).toLocaleDateString() : ''}</span>`
+    : `<button class="btn btn-ghost btn-sm" onclick="mbToggleLock()">🔒 Lock month</button>`;
 
   el.innerHTML = `
-    <div class="fin-row" style="opacity:.75;font-size:12px">
-      <span>الشهر الحالي: ${monthLabel}</span>
-      <span>${monthDelivered.length} طلب مسلّم</span>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+      <select onchange="mbSelectMonth(this.value)" style="font-weight:700;padding:6px 10px;border:1px solid var(--line);border-radius:8px">${opts}</select>
+      <span style="font-size:12px;color:var(--muted)">${S.monthDelivered.length} delivered</span>
+      <span style="margin-inline-start:auto;display:flex;align-items:center;gap:8px">${lockBtn}</span>
     </div>
-    <div class="fin-row"><span>Ad top-ups (this month)</span><span class="fin-val">EGP ${fmt(paidAdsMonth)}</span></div>
-    <div class="fin-row"><span>20% of top-ups</span><span class="fin-val">EGP ${fmt(adsShare)}</span></div>
-    <div class="fin-row" style="opacity:.75;font-size:11px"><span>Meta actual spend (this month) <span style="font-size:10px;color:var(--muted)">· incl. 14% VAT · for ROAS only, not the payout</span> <button class="btn btn-ghost btn-xs" onclick="syncMetaAds()" title="Pull the latest ad spend from Meta">🔄 Sync Meta</button></span><span class="fin-val">EGP ${fmt(metaSpendMonth)}</span></div>
-    <div class="fin-row"><span>Delivered sales (this month, net of actual shipping)</span><span class="fin-val">EGP ${fmt(monthSales)}</span></div>
-    <div class="fin-row"><span>1% of delivered sales</span><span class="fin-val">EGP ${fmt(salesShare)}</span></div>
-    <div class="fin-row"><span>Gross salary for this month</span><span class="fin-val">EGP ${fmt(grossOwed)}</span></div>
-    ${paidThisMonth > 0 ? `<div class="fin-row"><span>Already paid this month</span><span class="fin-val deduct">− EGP ${fmt(paidThisMonth)}</span></div>` : ''}
-    <div class="fin-row subtotal"><span>Owed now (${monthLabel})</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(mbOwed)}</span></div>
 
-    <details style="margin-top:12px;border:1px solid var(--line);padding:8px 12px">
-      <summary style="cursor:pointer;font-weight:600">📋 Delivered orders this month (${monthDelivered.length})</summary>
-      <div style="max-height:280px;overflow:auto;margin-top:8px">
-        <table style="width:100%;border-collapse:collapse;font-size:13px">
-          <thead>
-            <tr style="text-align:left;border-bottom:1px solid var(--line)">
-              <th style="padding:6px 4px">Code</th>
-              <th style="padding:6px 4px">Date</th>
-              <th style="padding:6px 4px">Customer</th>
-              <th style="padding:6px 4px;text-align:right">Product sales</th>
-            </tr>
-          </thead>
-          <tbody>${ordersRows}</tbody>
-        </table>
-      </div>
-    </details>
+    <div class="fin-row"><span>Ad top-ups (this month)</span><span class="fin-val">EGP ${fmt(S.adsTopups)}</span></div>
+    <div class="fin-row"><span>20% of top-ups</span><span class="fin-val">EGP ${fmt(S.adsShare)}</span></div>
+    <div class="fin-row" style="opacity:.75;font-size:11px"><span>Meta actual spend <span style="font-size:10px;color:var(--muted)">· incl. 14% VAT · ROAS only</span> <button class="btn btn-ghost btn-xs" onclick="syncMetaAds()">🔄 Sync Meta</button></span><span class="fin-val">EGP ${fmt(S.metaSpend)}</span></div>
+    <div class="fin-row"><span>Delivered sales (net of shipping)</span><span class="fin-val">EGP ${fmt(S.salesNet)}</span></div>
+    <div class="fin-row"><span>1% of delivered sales</span><span class="fin-val">EGP ${fmt(S.salesShare)}</span></div>
+
+    <div style="margin:12px 0 4px;font-size:12px;color:var(--muted);font-weight:700">How his pay is split — ads vs sales</div>
+    ${splitBar}
+    ${incentiveHint}
+
+    <div style="margin:16px 0 4px;font-size:12px;color:var(--muted);font-weight:700">Adjustments (bonuses / deductions)</div>
+    ${adjRows}
+    ${adjAdd}
+    ${S.adjTotal ? `<div class="fin-row" style="margin-top:6px"><span>Adjustments total</span><span class="fin-val" style="color:${S.adjTotal >= 0 ? '#10b981' : '#dc2626'}">${S.adjTotal >= 0 ? '+' : '−'} EGP ${fmt(Math.abs(S.adjTotal))}</span></div>` : ''}
+
+    <div class="fin-row subtotal" style="margin-top:10px"><span>Gross salary (${MB_MO_EN[sel.m - 1]} ${sel.y})</span><span class="fin-val">EGP ${fmt(S.gross)}</span></div>
+    ${S.paid > 0 ? `<div class="fin-row"><span>Already paid for this month</span><span class="fin-val deduct">− EGP ${fmt(S.paid)}</span></div>` : ''}
+    <div class="fin-row subtotal"><span>Owed now</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(S.owed)}</span></div>
 
     <div style="margin-top:12px">
-      <button class="btn btn-primary btn-sm" ${mbOwed > 0 ? '' : 'disabled'} onclick="payMediaBuyer(${mbOwed})">✅ Mark as paid (record EGP ${fmt(mbOwed)} to expenses)</button>
+      <button class="btn btn-primary btn-sm" ${S.owed > 0 ? '' : 'disabled'} onclick="payMediaBuyerForMonth()">✅ Mark as paid (EGP ${fmt(S.owed)})</button>
     </div>
 
-    <h4 style="margin:22px 0 6px;font-size:13px;color:var(--muted)">🗓️ Media Buyer payouts — history</h4>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:6px">
-      Grouped by month from the Expenses ledger (category = Media Buyer). Total paid to date: <b>EGP ${fmt(totalEverPaid)}</b> across ${mbPayments.length} payout(s).
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Month</th>
-            <th style="text-align:right">Total paid</th>
-            <th style="text-align:right">Payouts</th>
-            <th>Entries</th>
-          </tr>
-        </thead>
-        <tbody>${historyRows}</tbody>
-      </table>
-    </div>`;
+    <div style="margin:22px 0 4px;font-size:12px;color:var(--muted);font-weight:700">📈 Salary over months — ads (🟧) vs sales (🟩) + sales-driven %</div>
+    <div style="height:210px"><canvas id="mb-trend-chart"></canvas></div>
+
+    <details style="margin-top:12px;border:1px solid var(--line);padding:8px 12px">
+      <summary style="cursor:pointer;font-weight:600">📋 Delivered orders — ${MB_MO_EN[sel.m - 1]} ${sel.y} (${S.monthDelivered.length})</summary>
+      <div style="max-height:280px;overflow:auto;margin-top:8px">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead><tr style="text-align:left;border-bottom:1px solid var(--line)">
+            <th style="padding:6px 4px">Code</th><th style="padding:6px 4px">Date</th><th style="padding:6px 4px">Customer</th><th style="padding:6px 4px;text-align:right">Product sales</th>
+          </tr></thead>
+          <tbody>${S.monthDelivered.length ? S.monthDelivered.map(o => `
+            <tr>
+              <td style="padding:4px">${esc(o.code || '')}</td>
+              <td style="padding:4px;opacity:.75">${esc(String(o.delivered_at || o.created_at || o.date || '').slice(0, 10))}</td>
+              <td style="padding:4px">${esc(o.customer_name || '')}</td>
+              <td style="padding:4px;text-align:right">EGP ${fmt(parseFloat(o.total || 0) - mbShipOf(o))}</td>
+            </tr>`).join('') : '<tr><td colspan="4" style="text-align:center;opacity:.6;padding:12px">No delivered orders this month</td></tr>'}</tbody>
+        </table>
+      </div>
+    </details>`;
+
+  renderMbTrendChart(seq);
+}
+
+// Multi-month salary graph: stacked bars (ads vs sales) + a sales-% line so
+// the owner can see at a glance whether the pay is shifting toward sales.
+function renderMbTrendChart(seq) {
+  const cv = document.getElementById('mb-trend-chart');
+  if (!cv || typeof Chart === 'undefined') return;
+  const last = seq.slice(-12);
+  const labels = last.map(p => `${MB_MO_EN[p.m - 1]} ${String(p.y).slice(2)}`);
+  const ads = [], sales = [], salesPct = [];
+  for (const p of last) {
+    const c = computeMediaBuyerMonth(p.y, p.m);
+    ads.push(Math.round(c.adsShare));
+    sales.push(Math.round(c.salesShare));
+    salesPct.push(Math.round(c.salesPct));
+  }
+  if (_mbChart) { try { _mbChart.destroy(); } catch (_) {} _mbChart = null; }
+  _mbChart = new Chart(cv.getContext('2d'), {
+    data: {
+      labels,
+      datasets: [
+        { type: 'bar', label: 'From ads (20%)', data: ads, backgroundColor: '#F26A21', stack: 's', order: 2 },
+        { type: 'bar', label: 'From sales (1%)', data: sales, backgroundColor: '#10b981', stack: 's', order: 2 },
+        { type: 'line', label: 'Sales-driven %', data: salesPct, yAxisID: 'y1', borderColor: '#2563eb', backgroundColor: '#2563eb', tension: 0.3, pointRadius: 3, order: 1 },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { boxWidth: 12, font: { size: 11 } } } },
+      scales: {
+        x: { stacked: true },
+        y: { stacked: true, beginAtZero: true, title: { display: true, text: 'EGP' } },
+        y1: { position: 'right', min: 0, max: 100, grid: { drawOnChartArea: false }, title: { display: true, text: 'Sales %' } },
+      },
+    },
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════

@@ -272,7 +272,7 @@ function localDelete(table, id) {
 }
 
 // ── IN-MEMORY CACHE ──
-let cache = { products: [], orders: [], expenses: [], feedbacks: [], metaAdSpend: [], supplierReturns: [] };
+let cache = { products: [], orders: [], expenses: [], feedbacks: [], metaAdSpend: [], supplierReturns: [], mbMonths: [] };
 
 async function loadAll() {
   try {
@@ -296,6 +296,9 @@ async function loadAll() {
     // Elashry return invoices — credits that reduce what we owe the supplier.
     try { cache.supplierReturns = await dbFetch('supplier_returns', { order: 'created_at.desc' }) || []; }
     catch (_) { cache.supplierReturns = cache.supplierReturns || []; }
+    // Media-buyer per-month records (adjustments + lock snapshots).
+    try { cache.mbMonths = await dbFetch('media_buyer_months', { order: 'month.desc' }) || []; }
+    catch (_) { cache.mbMonths = cache.mbMonths || []; }
   } catch (e) {
     console.warn('DB load error:', e);
     showToast('Connection error — check your internet');
