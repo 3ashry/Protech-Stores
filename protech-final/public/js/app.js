@@ -4577,6 +4577,45 @@ function renderFinTrends() {
 }
 window.renderFinTrends = renderFinTrends;
 
+// ── Phase 6: Wednesday (Bosta payout day) reminder ─────────────────
+// Bosta settles collected cash weekly, on Wednesdays. On a Wednesday
+// (Cairo time) show a prominent reminder of how much is ready to be paid
+// out (delivered, cash-cycle-closed, not yet received) with a one-tap
+// "record the transfer" action. Dismissable for the day, per device.
+function cairoDateStr(d = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+}
+function cairoWeekdayShort(d = new Date()) {
+  return new Intl.DateTimeFormat('en-US', { timeZone: 'Africa/Cairo', weekday: 'short' }).format(d);
+}
+function dismissWedReminder() {
+  try { sessionStorage.setItem('pt_wed_dismiss', cairoDateStr()); } catch (_) {}
+  renderBostaWednesdayReminder();
+}
+window.dismissWedReminder = dismissWedReminder;
+function renderBostaWednesdayReminder() {
+  const host = document.getElementById('fin-wednesday'); if (!host) return;
+  let dismissed = false;
+  try { dismissed = sessionStorage.getItem('pt_wed_dismiss') === cairoDateStr(); } catch (_) {}
+  if (cairoWeekdayShort() !== 'Wed' || dismissed) { host.innerHTML = ''; return; }
+  let amt = 0; try { amt = finComputeKpis().nextWed || 0; } catch (_) {}
+  host.innerHTML = `
+    <div class="card" style="border-inline-start:5px solid #0ea5e9;background:#f0f9ff;display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:14px 18px;margin-bottom:14px">
+      <div style="font-size:22px">📅</div>
+      <div style="flex:1;min-width:220px">
+        <div style="font-weight:800;font-size:15px">It's Wednesday — Bosta payout day</div>
+        <div style="font-size:12.5px;color:#444;margin-top:2px">${amt > 0
+          ? `About <b>EGP ${finFm(amt)}</b> is ready to be transferred (delivered, cash-cycle closed, not yet received). Record it when it lands in your account.`
+          : 'No cash-cycle-closed amount is pending right now — check Bosta and record any transfer that arrives.'}</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-primary btn-sm" onclick="finOpenDetail('det-bosta'); setTimeout(function(){ if(typeof openBostaReceipt==='function') openBostaReceipt(); }, 150)">+ Record transfer</button>
+        <button class="btn btn-ghost btn-sm" onclick="dismissWedReminder()">Dismiss</button>
+      </div>
+    </div>`;
+}
+window.renderBostaWednesdayReminder = renderBostaWednesdayReminder;
+
 function renderFinancials() {
   // Expenses table (kept inside the Expenses action-card drawer).
   const generalExpenses = (cache.expenses || []).filter(e => e.category !== 'Elashry');
@@ -4600,6 +4639,7 @@ function renderFinancials() {
     finRenderNotCounted(nc);
     finRenderMonths(model);
     finRenderActionCards(kpis, nc, model);
+    renderBostaWednesdayReminder();
   } catch (e) { console.error('fin dashboard', e); }
 
   // Detailed ledgers (inside the collapsible drawers below).
