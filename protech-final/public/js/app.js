@@ -4305,10 +4305,10 @@ function finComputeMonth(y, m) {
     // result uses exactly the pinned number.
     if (ov.shipping != null && ov.shipping !== '') { actualShipping = parseFloat(ov.shipping) || 0; bostaFeesReturns = 0; }
   }
-  // Owner's spec: the month's buying cost is the FULL cost of goods bought this
-  // month (delivered + returned). The returns credit reduces the Elashry balance
-  // separately (supplier account), NOT this P&L.
-  const buyingCost    = totalBought;
+  // Owner's spec: net goods cost = total bought (delivered + returned) minus the
+  // returns credit Elashry gives back. (Gross buying and the credit are shown as
+  // two lines in the panel so it's auditable.)
+  const buyingCost    = totalBought - returnsCost;
   const shippingTotal = actualShipping + bostaFeesReturns;   // delivered + returned fees
   const profitFromOrders = collected - actualShipping - buyingCost;
 
@@ -4321,8 +4321,12 @@ function finComputeMonth(y, m) {
   const paidAds    = expInM.filter(e => e.category === 'Paid Ads').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
   const mediaBuyer = expInM.filter(e => e.category === 'Media Buyer').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
   const marketingTotal = -(paidAds + mediaBuyer);
+  // 'Elashry' (goods/costs that belong to the supplier account) and 'Bosta Fees'
+  // (already inside actual shipping) are recorded but NEVER counted in the P&L —
+  // counting them would double-count buying cost / shipping.
+  const PNL_EXCLUDED_CATS = ['Paid Ads', 'Media Buyer', 'Elashry', 'Bosta Fees'];
   const otherCats = {};
-  expInM.filter(e => e.category !== 'Paid Ads' && e.category !== 'Media Buyer').forEach(e => {
+  expInM.filter(e => !PNL_EXCLUDED_CATS.includes(e.category)).forEach(e => {
     const c = e.category || 'Other';
     otherCats[c] = (otherCats[c] || 0) + parseFloat(e.amount || 0);
   });
@@ -4619,7 +4623,8 @@ function finRenderMonths(model) {
       ['Returned orders', String(mo.refusedReturned), 'color:#111'],
       ['Total collected', finFm(mo.collected), 'color:#15803d'],
       ['Actual shipping (delivered + returned)', finNeg(mo.shippingTotal), 'color:#dc2626'],
-      ['Buying cost (delivered + returned)', finNeg(mo.buyingCost), 'color:#dc2626'],
+      ['Buying cost (delivered + returned)', finNeg(mo.totalBought), 'color:#dc2626'],
+      ['Returns credit (Elashry refund)', '+ EGP ' + finFm(mo.returnsCost), 'color:#15803d'],
       ['Paid ads (Meta)', finNeg(mo.paidAds), 'color:#dc2626'],
       ['Media buyer salary', finNeg(mo.mediaBuyer), 'color:#dc2626'],
       ...other,
@@ -4629,7 +4634,7 @@ function finRenderMonths(model) {
         ${colList(pnl, finSigned(mo.result).replace('EGP ', '') + ' EGP', 'Profit')}
         <div style="margin-top:8px;font-size:11.5px;color:var(--muted);line-height:1.6">
           ℹ️ Fees on returns (already inside shipping above): <b>${finFm(mo.bostaFeesReturns)}</b><br>
-          ℹ️ Buying cost of returned orders (included in buying cost above; the Elashry credit for goods sent back is handled in the supplier account): <b>${finFm(mo.returnsCost)}</b>
+          ℹ️ Net goods cost (buying − returns credit): <b>${finFm(mo.buyingCost)}</b> · Elashry / Bosta-fee expenses are recorded but excluded here (already counted).
           ${mo.overridden ? '<br><span style="color:var(--orange);font-weight:700">● This month is pinned to your provided numbers</span>' : ''}
         </div>
       </div>
