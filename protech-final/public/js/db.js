@@ -272,7 +272,7 @@ function localDelete(table, id) {
 }
 
 // ── IN-MEMORY CACHE ──
-let cache = { products: [], orders: [], expenses: [], feedbacks: [], metaAdSpend: [], supplierReturns: [], mbMonths: [] };
+let cache = { products: [], orders: [], expenses: [], feedbacks: [], metaAdSpend: [], supplierReturns: [], mbMonths: [], finOverrides: [] };
 
 async function loadAll() {
   try {
@@ -299,6 +299,10 @@ async function loadAll() {
     // Media-buyer per-month records (adjustments + lock snapshots).
     try { cache.mbMonths = await dbFetch('media_buyer_months', { order: 'month.desc' }) || []; }
     catch (_) { cache.mbMonths = cache.mbMonths || []; }
+    // Manual corrections for historical months (collected / buying cost /
+    // returns credit) that the raw order data can't reproduce.
+    try { cache.finOverrides = await dbFetch('fin_month_overrides', { order: 'month.desc' }) || []; }
+    catch (_) { cache.finOverrides = cache.finOverrides || []; }
   } catch (e) {
     console.warn('DB load error:', e);
     showToast('Connection error — check your internet');

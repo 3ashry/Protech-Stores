@@ -4229,6 +4229,15 @@ function cairoYMOfExpense(e) {
 function finMonthOfExpense(e) { return cairoYMOfExpense(e); }
 function finSameMonth(my, y, m) { return !!my && my.y === y && my.m === m; }
 
+// A locked manual correction for a historical month, or null. When present,
+// finComputeMonth uses its authoritative collected / total-bought / returns
+// figures instead of the (incomplete) raw order data.
+function finOverrideFor(y, m) {
+  const key = `${y}-${String(m).padStart(2, '0')}`;
+  const r = (cache.finOverrides || []).find(x => x.month === key);
+  return (r && r.locked) ? r : null;
+}
+
 // The earliest Cairo month that has any real activity (a delivered/returned
 // order or an expense). Drives the month range so no real month is hidden.
 function finEarliestMonth() {
@@ -4263,9 +4272,28 @@ function finComputeMonth(y, m) {
   const delivered = orders.filter(o => o.status === 'Delivered' && inM(o));
   const returned  = orders.filter(o => o.status === 'Returned'  && inM(o));
 
-  const collected       = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
+  let collected         = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
   const actualShipping  = delivered.reduce((a, o) => a + finShipOf(o), 0);
-  const buyingCost      = delivered.reduce((a, o) => a + finBuyCostOf(o), 0);
+  const deliveredBuy    = delivered.reduce((a, o) => a + finBuyCostOf(o), 0);
+  const returnedBuy     = returned.reduce((a, o) => a + finBuyCostOf(o), 0);
+  // Gross goods bought this month (delivered + returned) and the slice of it
+  // credited back by Elashry on returns. COGS expensed against delivered
+  // revenue = what you kept = bought − returns credit.
+  let totalBought = deliveredBuy + returnedBuy;
+  let returnsCost = returnedBuy;
+  let buyingCost  = deliveredBuy;
+
+  // Historical override: for a locked past month whose raw order data can't
+  // reproduce the real figures, use the admin-entered authoritative numbers
+  // for collected / total bought / returns credit. Shipping and expenses stay
+  // computed (Bosta API + logged expenses are reliable).
+  const ov = finOverrideFor(y, m);
+  if (ov) {
+    if (ov.collected != null && ov.collected !== '') collected = parseFloat(ov.collected) || 0;
+    if (ov.buying_cost != null && ov.buying_cost !== '') totalBought = parseFloat(ov.buying_cost) || 0;
+    if (ov.returns_cost != null && ov.returns_cost !== '') returnsCost = parseFloat(ov.returns_cost) || 0;
+    buyingCost = totalBought - returnsCost;   // net cost of goods actually kept/sold
+  }
   const profitFromOrders = collected - actualShipping - buyingCost;
 
   const bostaFeesReturns      = returned.reduce((a, o) => a + finShipOf(o), 0);
@@ -4291,6 +4319,7 @@ function finComputeMonth(y, m) {
   return {
     y, m, delivered, returned, completedOrders: delivered.length,
     collected, actualShipping, buyingCost, profitFromOrders,
+    totalBought, returnsCost, deliveredBuy, returnedBuy, overridden: !!ov,
     refusedReturned: returned.length, bostaFeesReturns, returnedAfterDelivery, returnsTotal,
     paidAds, mediaBuyer, marketingTotal, otherCats, otherTotal, result,
     returnRate: denom ? returned.length / denom : 0,
@@ -4308,6 +4337,93 @@ function finComputeModel() {
   months.forEach(mo => { mo.opening = running; running += mo.result; mo.closing = running; mo.settling = (mo.y === now.y && mo.m === now.m); });
   const sinceGoLive = months.reduce((a, mo) => a + mo.result, 0);
   return { months, now, openingBalance: FIN_OPENING_BALANCE, sinceGoLive, allTimeNet: FIN_OPENING_BALANCE + sinceGoLive, current: months[months.length - 1] || null };
+}
+
+// ── HISTORICAL MONTH OVERRIDES ──────────────────────────────────────
+// Editor to pin authoritative figures for past months the raw data can't
+// reproduce. Upserts fin_month_overrides (admin-only) and the financial
+// model (finComputeMonth) uses them automatically.
+async function finSaveOverrideRow(month) {
+  const g = (k) => {
+    const el = document.getElementById(`ov-${k}-${month}`);
+    const v = el ? el.value.trim() : '';
+    return v === '' ? null : (parseFloat(v) || 0);
+  };
+  const fields = { collected: g('col'), buying_cost: g('buy'), returns_cost: g('ret'), locked: true };
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/fin_month_overrides?on_conflict=month`, {
+      method: 'POST',
+      headers: sbHeaders({ 'Prefer': 'resolution=merge-duplicates,return=representation' }),
+      body: JSON.stringify([{ month, ...fields }]),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const rows = await res.json().catch(() => []);
+    const row = (Array.isArray(rows) && rows[0]) ? rows[0] : { month, ...fields };
+    cache.finOverrides = cache.finOverrides || [];
+    const i = cache.finOverrides.findIndex(r => r.month === month);
+    if (i >= 0) cache.finOverrides[i] = { ...cache.finOverrides[i], ...row }; else cache.finOverrides.unshift(row);
+    showToast(`${month} locked to your numbers ✓`);
+    renderFinancials();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+async function finClearOverride(month) {
+  if (!confirm(`Remove the manual correction for ${month}? It will go back to computing from orders.`)) return;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/fin_month_overrides?month=eq.${encodeURIComponent(month)}`, {
+      method: 'DELETE', headers: sbHeaders(),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    cache.finOverrides = (cache.finOverrides || []).filter(r => r.month !== month);
+    showToast(`${month} correction removed`);
+    renderFinancials();
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+
+function renderFinOverrides() {
+  const host = document.getElementById('fin-overrides-body');
+  if (!host) return;
+  const now = cairoYM(new Date().toISOString()) || { y: 2026, m: 1 };
+  // Past months only (current + future always compute live).
+  const months = (typeof finMonthSeq === 'function' ? finMonthSeq() : [])
+    .filter(p => p.y < now.y || (p.y === now.y && p.m < now.m))
+    .reverse();
+  if (!months.length) { host.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px">No closed months yet.</div>'; return; }
+  const ovMap = new Map((cache.finOverrides || []).map(r => [r.month, r]));
+  const rows = months.map(p => {
+    const key = `${p.y}-${String(p.m).padStart(2, '0')}`;
+    const ov = ovMap.get(key);
+    const locked = !!(ov && ov.locked);
+    // Live computed figures (shown as the placeholder / reference).
+    const liveOv = (cache.finOverrides || []).filter(r => r.month !== key); // compute as if no override for this month
+    const saved = cache.finOverrides; cache.finOverrides = liveOv;
+    const c = finComputeMonth(p.y, p.m); cache.finOverrides = saved;
+    const val = (k, fallback) => ov && ov[k] != null && ov[k] !== '' ? Math.round(ov[k]) : '';
+    const ph = (n) => `≈ ${fmt(Math.round(n))}`;
+    return `
+      <tr style="${locked ? 'background:#f0fdf4' : ''}">
+        <td style="padding:6px 4px;white-space:nowrap"><b>${MB_MO_EN[p.m - 1]} ${p.y}</b>${locked ? ' <span class="badge b-success" style="font-size:10px">locked</span>' : ''}</td>
+        <td style="padding:6px 4px"><input id="ov-col-${key}" type="number" step="1" value="${val('collected')}" placeholder="${ph(c.collected)}" style="width:110px"></td>
+        <td style="padding:6px 4px"><input id="ov-buy-${key}" type="number" step="1" value="${val('buying_cost')}" placeholder="${ph(c.totalBought)}" style="width:110px"></td>
+        <td style="padding:6px 4px"><input id="ov-ret-${key}" type="number" step="1" value="${val('returns_cost')}" placeholder="${ph(c.returnsCost)}" style="width:110px"></td>
+        <td style="padding:6px 4px;white-space:nowrap">
+          <button class="btn btn-primary btn-xs" onclick="finSaveOverrideRow('${key}')">${locked ? 'Update' : 'Lock'}</button>
+          ${locked ? `<button class="btn btn-ghost btn-xs" onclick="finClearOverride('${key}')">Clear</button>` : ''}
+        </td>
+      </tr>`;
+  }).join('');
+  host.innerHTML = `
+    <div class="table-wrap"><table>
+      <thead><tr>
+        <th>Month</th>
+        <th>Collected by Bosta</th>
+        <th>Total buying cost</th>
+        <th>Returns cost (Elashry credit)</th>
+        <th></th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <div style="font-size:11px;color:var(--muted);margin-top:8px">The grey <b>≈</b> placeholder is what the system currently computes. Type a number to override; leave blank to keep computing that one field.</div>`;
 }
 
 // The four KPI cards' numbers, computed the same way the detailed
@@ -4790,6 +4906,7 @@ function renderFinancials() {
   if (typeof renderBostaCash === 'function') renderBostaCash();
   if (typeof renderSupplierAccount === 'function') renderSupplierAccount();
   if (typeof renderMediaBuyer === 'function') renderMediaBuyer();
+  if (typeof renderFinOverrides === 'function' && document.getElementById('det-fin-overrides')?.open) renderFinOverrides();
   if (typeof renderWeeklySalesChart === 'function') renderWeeklySalesChart();
   if (typeof renderNetProfitBlock === 'function') renderNetProfitBlock();
 }

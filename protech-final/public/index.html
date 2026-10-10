@@ -307,6 +307,16 @@
       </div>
     </details>
 
+    <details id="det-fin-overrides" style="margin:10px 0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff" ontoggle="if(this.open && typeof renderFinOverrides==='function') renderFinOverrides()">
+      <summary style="cursor:pointer;padding:14px 16px;font-weight:700;font-size:14px;list-style:none">🛠️ Historical corrections — lock real numbers for past months</summary>
+      <div style="padding:0 12px 12px">
+        <div style="font-size:12px;color:var(--muted);line-height:1.5;margin:4px 0 10px">
+          Early months' raw orders can't reproduce the real figures (missing return/collection dates, un-logged orders). Enter the authoritative numbers here to pin them. Shipping fees and expenses stay computed from Bosta/your ledger. Blank = keep the computed value.
+        </div>
+        <div class="card"><div class="card-body" id="fin-overrides-body"></div></div>
+      </div>
+    </details>
+
     <details id="det-buycost" style="margin:10px 0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff">
       <summary style="cursor:pointer;padding:14px 16px;font-weight:700;font-size:14px;list-style:none">📦 Buy cost — in-flight &amp; finalised orders</summary>
       <div style="padding:0 12px 12px">
