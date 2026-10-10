@@ -6792,19 +6792,23 @@ function renderReturnInvoiceCompare() {
   if (!_ri.parsed || !Object.keys(_ri.parsed.invoiceMap).length) { host.innerHTML = '<div style="color:var(--muted);padding:10px">No products matched — check the pasted text, or set the products\' Elashry codes.</div>'; return; }
   const rec = _riReconcile();
   const qtyTable = `
-    <div style="font-weight:800;font-size:13px;margin:4px 0 6px">1) Quantity check — return invoice vs what's in the warehouse</div>
+    <div style="font-weight:800;font-size:13px;margin:4px 0 2px">1) Loss / theft check — did everything that shipped come back?</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Shipped (from the returned orders) vs what Elashry actually credited on the return invoice. A shortfall means units went missing in transit or weren't returned by the customer.</div>
     <div class="table-wrap"><table style="width:100%;font-size:12px">
-      <thead><tr><th>Code</th><th>Name</th><th style="text-align:center">Invoice qty</th><th style="text-align:center">Warehouse qty</th><th style="text-align:center">Δ</th><th style="text-align:right">Buy/unit</th><th>Elashry code</th></tr></thead>
-      <tbody>${rec.qtyRows.map(r => `
-        <tr style="${r.dq !== 0 ? 'background:#fef2f2' : ''}">
+      <thead><tr><th>Code</th><th>Name</th><th style="text-align:center">Shipped</th><th style="text-align:center">Returned (invoice)</th><th style="text-align:center">Missing</th><th style="text-align:right">Buy/unit</th><th>Elashry code</th></tr></thead>
+      <tbody>${rec.qtyRows.map(r => {
+        const missing = r.expectedQty - r.invoiceQty; // >0 = short (possible loss/theft)
+        const label = missing > 0 ? `⚠️ −${missing}` : (missing < 0 ? `+${-missing} extra` : '✓ 0');
+        return `
+        <tr style="${missing !== 0 ? 'background:#fef2f2' : ''}">
           <td style="font-family:var(--f-mono,monospace)">${esc(r.code)}</td>
           <td>${esc(r.name)}</td>
-          <td style="text-align:center"><input value="${r.invoiceQty}" onchange="editReturnQty('${esc(r.code)}', this.value)" style="width:46px;text-align:center;border:1px solid var(--line);border-radius:5px;padding:3px"></td>
           <td style="text-align:center">${r.expectedQty}</td>
-          <td style="text-align:center;font-weight:800;color:${r.dq === 0 ? '#16a34a' : '#dc2626'}">${r.dq > 0 ? '+' : ''}${r.dq}</td>
+          <td style="text-align:center"><input value="${r.invoiceQty}" onchange="editReturnQty('${esc(r.code)}', this.value)" style="width:46px;text-align:center;border:1px solid var(--line);border-radius:5px;padding:3px"></td>
+          <td style="text-align:center;font-weight:800;color:${missing === 0 ? '#16a34a' : '#dc2626'}">${label}</td>
           <td style="text-align:right">EGP ${fmt(r.buyUnit)}</td>
           <td><input value="${esc(r.elashry_code)}" placeholder="كود الصنف" onchange="setRowElashryCode('${esc(r.code)}', this.value)" style="width:84px;border:1px solid var(--line);border-radius:5px;padding:3px;font-size:11px"></td>
-        </tr>`).join('')}</tbody>
+        </tr>`; }).join('')}</tbody>
     </table></div>`;
   const orderTable = rec.coveredOrders.length ? `
     <div style="font-weight:800;font-size:13px;margin:14px 0 6px">2) Per-order buy price — X (at shipping) vs Z (this return invoice)</div>
@@ -6824,8 +6828,8 @@ function renderReturnInvoiceCompare() {
   host.innerHTML = qtyTable + orderTable + `
     <div class="fin-row" style="margin-top:12px;font-weight:800"><span>Total return credit (subtracted from what you owe Elashry)</span><span>EGP ${fmt(rec.creditTotal)}</span></div>
     ${problems
-      ? `<div style="margin-top:6px;color:#dc2626;font-size:12px">⚠️ ${rec.qtyMismatch} quantity mismatch${rec.qtyMismatch === 1 ? '' : 'es'} · ${rec.priceMismatch} order${rec.priceMismatch === 1 ? '' : 's'} where X ≠ Z — you'll be asked to confirm before saving.</div>`
-      : '<div style="margin-top:6px;color:#16a34a;font-size:12px">✓ Quantities and buy prices all match.</div>'}`;
+      ? `<div style="margin-top:6px;color:#dc2626;font-size:12px">⚠️ ${rec.qtyMismatch} product${rec.qtyMismatch === 1 ? '' : 's'} with a quantity shortfall/extra (possible loss or theft) · ${rec.priceMismatch} order${rec.priceMismatch === 1 ? '' : 's'} where X ≠ Z — you'll be asked to confirm before saving.</div>`
+      : '<div style="margin-top:6px;color:#16a34a;font-size:12px">✓ Everything that shipped came back and all buy prices match.</div>'}`;
 }
 window.renderReturnInvoiceCompare = renderReturnInvoiceCompare;
 
@@ -6849,7 +6853,7 @@ async function saveReturnInvoice() {
   if (!_ri.parsed || !Object.keys(_ri.parsed.invoiceMap).length) { showToast('Scan a return invoice first'); return; }
   const rec = _riReconcile();
   if (rec.qtyMismatch || rec.priceMismatch) {
-    const qd = rec.qtyRows.filter(r => r.dq !== 0).map(r => `• ${r.code}: invoice ${r.invoiceQty} vs warehouse ${r.expectedQty}`);
+    const qd = rec.qtyRows.filter(r => r.dq !== 0).map(r => { const m = r.expectedQty - r.invoiceQty; return `• ${r.code}: shipped ${r.expectedQty}, returned ${r.invoiceQty}${m > 0 ? ` — ${m} MISSING (loss/theft?)` : ` — ${-m} extra`}`; });
     const pd = rec.coveredOrders.filter(o => !o.match).map(o => `• ${o.orderCode}: X ${fmt(o.X)} vs Z ${fmt(o.Z)}`);
     const detail = [...qd, ...pd].join('\n');
     if (!confirm(`Mismatches found:\n\n${detail}\n\nSave the return invoice anyway?\n(Cancel to discard and upload a corrected one.)`)) return;
