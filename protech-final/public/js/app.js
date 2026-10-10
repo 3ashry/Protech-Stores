@@ -5465,7 +5465,9 @@ async function payMediaBuyerForMonth() {
   if (amt <= 0) { showToast('Nothing due for this month'); return; }
   if (!confirm(`Record a media buyer payment of EGP ${fmt(amt)} for ${MB_MO_EN[S.m - 1]} ${S.y}?`)) return;
   try {
-    const data = { id: genId(), category: 'Media Buyer', description: `Media buyer payment for ${MB_MO_EN[S.m - 1]} ${S.y}`, amount: amt, date: today(), created_at: new Date().toISOString() };
+    // belongs_month = the month the salary was EARNED (the viewed month), so the
+    // financials count it in the work month even when it's paid the next month.
+    const data = { id: genId(), category: 'Media Buyer', description: `Media buyer payment for ${MB_MO_EN[S.m - 1]} ${S.y}`, amount: amt, date: today(), belongs_month: S.key, created_at: new Date().toISOString() };
     await dbInsert('expenses', data);
     cache.expenses.unshift(data);
     showToast('Media buyer paid ✓'); _mbRerender();
