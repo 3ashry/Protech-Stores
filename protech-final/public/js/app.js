@@ -4273,7 +4273,10 @@ function finMonthSeq() {
 function finComputeMonth(y, m) {
   const orders = cache.orders || [];
   const expenses = cache.expenses || [];
-  const inM = (o) => finSameMonth(finMonthOfOrderFinancial(o), y, m);
+  // Month basis = the day the order was DELIVERED (delivered_at), falling back
+  // to created_at when a delivery timestamp is missing. (Reverted from the
+  // Bosta-settlement basis per the owner's spec.)
+  const inM = (o) => finSameMonth(finMonthOfOrder(o), y, m);
   const delivered = orders.filter(o => o.status === 'Delivered' && inM(o));
   const returned  = orders.filter(o => o.status === 'Returned'  && inM(o));
 
@@ -4287,7 +4290,6 @@ function finComputeMonth(y, m) {
   // revenue = what you kept = bought − returns credit.
   let totalBought = deliveredBuy + returnedBuy;
   let returnsCost = returnedBuy;
-  let buyingCost  = deliveredBuy;
 
   // Historical override: for a locked past month whose raw order data can't
   // reproduce the real figures, use the admin-entered authoritative numbers for
@@ -4298,12 +4300,16 @@ function finComputeMonth(y, m) {
     if (ov.collected != null && ov.collected !== '') collected = parseFloat(ov.collected) || 0;
     if (ov.buying_cost != null && ov.buying_cost !== '') totalBought = parseFloat(ov.buying_cost) || 0;
     if (ov.returns_cost != null && ov.returns_cost !== '') returnsCost = parseFloat(ov.returns_cost) || 0;
-    buyingCost = totalBought - returnsCost;   // net cost of goods actually kept/sold
     // Pinned total shipping = Bosta's monthly figure (delivered + returned fees).
     // Fold it into actualShipping and zero the return-fee line so the month's
     // result uses exactly the pinned number.
     if (ov.shipping != null && ov.shipping !== '') { actualShipping = parseFloat(ov.shipping) || 0; bostaFeesReturns = 0; }
   }
+  // Owner's spec: the month's buying cost is the FULL cost of goods bought this
+  // month (delivered + returned). The returns credit reduces the Elashry balance
+  // separately (supplier account), NOT this P&L.
+  const buyingCost    = totalBought;
+  const shippingTotal = actualShipping + bostaFeesReturns;   // delivered + returned fees
   const profitFromOrders = collected - actualShipping - buyingCost;
 
   const returnedAfterDelivery = returned
@@ -4327,7 +4333,7 @@ function finComputeMonth(y, m) {
   const denom = delivered.length + returned.length;
   return {
     y, m, delivered, returned, completedOrders: delivered.length,
-    collected, actualShipping, buyingCost, profitFromOrders,
+    collected, actualShipping, shippingTotal, buyingCost, profitFromOrders,
     totalBought, returnsCost, deliveredBuy, returnedBuy, overridden: !!ov,
     refusedReturned: returned.length, bostaFeesReturns, returnedAfterDelivery, returnsTotal,
     paidAds, mediaBuyer, marketingTotal, otherCats, otherTotal, result,
@@ -4606,41 +4612,32 @@ function finRenderMonths(model) {
   const panel = (mo) => {
     const other = Object.keys(mo.otherCats).length
       ? Object.entries(mo.otherCats).map(([c, v]) => [c, finNeg(v), 'color:#dc2626'])
-      : [['—', '', '']];
+      : [];
+    // One clean P&L, in the exact order/definition the owner specified.
+    const pnl = [
+      ['Completed orders (delivered)', String(mo.completedOrders), 'color:#111'],
+      ['Returned orders', String(mo.refusedReturned), 'color:#111'],
+      ['Total collected', finFm(mo.collected), 'color:#15803d'],
+      ['Actual shipping (delivered + returned)', finNeg(mo.shippingTotal), 'color:#dc2626'],
+      ['Buying cost (delivered + returned)', finNeg(mo.buyingCost), 'color:#dc2626'],
+      ['Paid ads (Meta)', finNeg(mo.paidAds), 'color:#dc2626'],
+      ['Media buyer salary', finNeg(mo.mediaBuyer), 'color:#dc2626'],
+      ...other,
+    ];
     return `
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:20px;padding:14px 4px 4px">
-        <div><div style="font-size:11px;font-weight:800;color:var(--orange);letter-spacing:.04em;margin-bottom:6px">ORDERS</div>
-          ${colList([
-            ['Completed orders', String(mo.completedOrders), ''],
-            ['Collected', finFm(mo.collected), ''],
-            ['Actual shipping', finNeg(mo.actualShipping), 'color:#dc2626'],
-            ['Buying cost (invoices)', finNeg(mo.buyingCost), 'color:#dc2626'],
-          ], finSigned(mo.profitFromOrders).replace('EGP ', ''), 'Profit from orders')}
-        </div>
-        <div><div style="font-size:11px;font-weight:800;color:var(--orange);letter-spacing:.04em;margin-bottom:6px">RETURNS</div>
-          ${colList([
-            ['Refused / returned', String(mo.refusedReturned), ''],
-            ['Bosta fees on returns', finNeg(mo.bostaFeesReturns), 'color:#dc2626'],
-            ['Returned after delivery', finNeg(mo.returnedAfterDelivery), 'color:#dc2626'],
-          ], finFm(mo.returnsTotal), 'Total')}
-        </div>
-        <div><div style="font-size:11px;font-weight:800;color:var(--orange);letter-spacing:.04em;margin-bottom:6px">MARKETING</div>
-          ${colList([
-            ['Paid ads (Meta)', finNeg(mo.paidAds), 'color:#dc2626'],
-            ['Media buyer', finNeg(mo.mediaBuyer), 'color:#dc2626'],
-          ], finFm(mo.marketingTotal), 'Total')}
-        </div>
-        <div><div style="font-size:11px;font-weight:800;color:var(--orange);letter-spacing:.04em;margin-bottom:6px">OTHER EXPENSES</div>
-          ${colList(other, finFm(mo.otherTotal), 'Total')}
+      <div style="padding:14px 4px 4px;max-width:560px">
+        ${colList(pnl, finSigned(mo.result).replace('EGP ', '') + ' EGP', 'Profit')}
+        <div style="margin-top:8px;font-size:11.5px;color:var(--muted);line-height:1.6">
+          ℹ️ Fees on returns (already inside shipping above): <b>${finFm(mo.bostaFeesReturns)}</b><br>
+          ℹ️ Buying cost of returned orders (included in buying cost above; the Elashry credit for goods sent back is handled in the supplier account): <b>${finFm(mo.returnsCost)}</b>
+          ${mo.overridden ? '<br><span style="color:var(--orange);font-weight:700">● This month is pinned to your provided numbers</span>' : ''}
         </div>
       </div>
       <div style="background:${mo.result >= 0 ? '#dcfce7' : '#fee2e2'};border-radius:8px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;margin:10px 0 6px;font-weight:800">
-        <span>Month result</span><span style="color:${mo.result >= 0 ? '#15803d' : '#b91c1c'}">${finSigned(mo.result).replace('EGP ', '')} EGP</span>
+        <span>Month result (profit)</span><span style="color:${mo.result >= 0 ? '#15803d' : '#b91c1c'}">${finSigned(mo.result).replace('EGP ', '')} EGP</span>
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:18px;font-size:12px;color:var(--muted)">
         <span>Return rate <b style="color:#111">${Math.round(mo.returnRate * 100)}%</b></span>
-        <span>Profit per order <b style="color:#111">${finFm(mo.profitPerOrder)}</b></span>
-        <span>Marketing per order <b style="color:#111">${finFm(mo.marketingPerOrder)}</b></span>
         <span>Avg order <b style="color:#111">${finFm(mo.avgOrder)}</b></span>
       </div>`;
   };
