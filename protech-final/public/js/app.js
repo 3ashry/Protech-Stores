@@ -594,13 +594,16 @@ function renderInvoiceMatch() {
   const agg = new Map();
   for (const o of list) {
     for (const p of (Array.isArray(o.products) ? o.products : [])) {
-      const code = String(p.code || '').toUpperCase();
-      if (!code) continue;
-      const q = parseInt(p.qty || 1) || 1;
-      const cur = agg.get(code) || { code, name: p.name || byCode.get(code)?.name || '', qty: 0 };
-      cur.qty += q;
-      if (!cur.name && p.name) cur.name = p.name;
-      agg.set(code, cur);
+      // Expand bundles → components: Elashry's invoice lists the real products,
+      // so the batch totals must be at the component level, not the bundle.
+      for (const it of expandBundleLine(p)) {
+        const code = it.code;
+        if (!code || code === '(no code)') continue;
+        const cur = agg.get(code) || { code, name: it.name || byCode.get(code)?.name || '', qty: 0 };
+        cur.qty += it.qty;
+        if (!cur.name && it.name) cur.name = it.name;
+        agg.set(code, cur);
+      }
     }
   }
   // Manual adjustments — for orders whose products were split across two
@@ -674,7 +677,7 @@ function renderBatchesBoard() {
   let pending = 0;
   const rows = dates.map(d => {
     const list = _im.ordersByDate[d] || [];
-    const units = list.reduce((s, o) => s + (o.products || []).reduce((a, p) => a + parseInt(p.qty || 1), 0), 0);
+    const units = list.reduce((s, o) => s + (o.products || []).reduce((a, p) => a + expandBundleLine(p).reduce((x, it) => x + it.qty, 0), 0), 0);
     const buyTotal = list.reduce((s, o) => s + buyOf(o), 0);
     const saved = savedByDate[d] || [];
     const matched = saved.length > 0;
@@ -2300,19 +2303,41 @@ async function toggleSentToPicker(orderId, isCurrentlySent) {
 window.toggleSentToPicker = toggleSentToPicker;
 
 // Aggregate all products across queued orders → [{code, name, qty, orders:[codes]}]
+// Expand one order product line into the physical items staff actually pull.
+// A bundle (a product whose bundle_of lists components) becomes its component
+// products — component qty × the line qty — because a bundle is a CUSTOMER-only
+// idea: the warehouse and the supplier invoice only ever deal with the real
+// products. A normal line stays itself. Falls back to the line as-is if the
+// product/bundle can't be resolved.
+function expandBundleLine(p) {
+  const prods = cache.products || [];
+  const find = (c) => prods.find(x => String(x.code || '').toUpperCase() === String(c || '').toUpperCase());
+  const lineQty = parseInt(p.qty || 1) || 1;
+  const prod = find(p.code);
+  const comps = prod && Array.isArray(prod.bundle_of) ? prod.bundle_of.filter(c => c && c.code) : null;
+  if (comps && comps.length) {
+    return comps.map(c => {
+      const cp = find(c.code);
+      return { code: String(c.code || '').toUpperCase(), name: (cp && cp.name) || c.code, qty: (parseInt(c.qty || 1) || 1) * lineQty };
+    });
+  }
+  return [{ code: String(p.code || '').toUpperCase().trim() || '(no code)', name: p.name || (prod && prod.name) || '', qty: lineQty }];
+}
+
 function aggregatePickup() {
   const ids = getPickupIds();
   const orders = (cache.orders || []).filter(o => ids.includes(o.id));
   const bag = new Map(); // code → { code, name, qty, orders:Set }
   for (const o of orders) {
     for (const p of (o.products || [])) {
-      const code = String(p.code || '').toUpperCase().trim() || '(no code)';
-      const cur = bag.get(code) || { code, name: p.name || '', qty: 0, orders: new Set() };
-      cur.qty += parseInt(p.qty || 1);
-      cur.orders.add(o.code || o.id);
-      // Prefer a non-empty name if one appears later.
-      if (!cur.name && p.name) cur.name = p.name;
-      bag.set(code, cur);
+      // Expand bundles → components so the picker pulls the real items.
+      for (const it of expandBundleLine(p)) {
+        const cur = bag.get(it.code) || { code: it.code, name: it.name || '', qty: 0, orders: new Set() };
+        cur.qty += it.qty;
+        cur.orders.add(o.code || o.id);
+        if (!cur.name && it.name) cur.name = it.name;
+        bag.set(it.code, cur);
+      }
     }
   }
   return { orders, items: Array.from(bag.values()).sort((a, b) => a.code.localeCompare(b.code)) };
