@@ -1,6 +1,7 @@
 {
   "crons": [
-    { "path": "/api/wa-cron", "schedule": "0 9 * * *" }
+    { "path": "/api/wa-cron", "schedule": "0 9 * * *" },
+    { "path": "/api/meta-sync", "schedule": "0 3 * * *" }
   ],
   "rewrites": [
     {
