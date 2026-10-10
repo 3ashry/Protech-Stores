@@ -224,8 +224,8 @@ async function fetchDeliveryFee(bostaId, searchObj, feeLog) {
   const fromSearch = pickFee(searchObj);
   // Cash cycle is on the detail endpoint; the search hit never has it. So if we
   // short-circuit on the search fee, mark cashCycleClosed=false.
-  if (fromSearch) return { fee: fromSearch, cashCycleClosed: false };
-  if (!bostaId) return { fee: null, cashCycleClosed: false };
+  if (fromSearch) return { fee: fromSearch, cashCycleClosed: false, cashCycleDate: null };
+  if (!bostaId) return { fee: null, cashCycleClosed: false, cashCycleDate: null };
   try {
     const r = await fetch(`${BOSTA_BASE_URL}/deliveries/business/${encodeURIComponent(bostaId)}`, {
       headers: { Authorization: BOSTA_API_KEY },
@@ -235,8 +235,13 @@ async function fetchDeliveryFee(bostaId, searchObj, feeLog) {
     if (feeLog && del && del.pricing) feeLog.push({ id: bostaId, pricing: del.pricing });
     const walletFee = parseFloat(del?.wallet?.cashCycle?.bosta_fees);
     const cashCycleClosed = !isNaN(walletFee) && walletFee > 0;
-    return { fee: pickFee(del), cashCycleClosed };
-  } catch { return { fee: null, cashCycleClosed: false }; }
+    // The month Bosta assigns the shipment to is its cash-cycle (settlement)
+    // date — weeks after delivery. Capture it so the financials can bucket by
+    // the same date Bosta does. Fields vary; fall back to null (caller uses now()).
+    const cc = del?.wallet?.cashCycle || {};
+    const cashCycleDate = cc.date || cc.settlementDate || cc.updatedAt || cc.createdAt || del?.updatedAt || null;
+    return { fee: pickFee(del), cashCycleClosed, cashCycleDate };
+  } catch { return { fee: null, cashCycleClosed: false, cashCycleDate: null }; }
 }
 
 async function sbGet(path) {
@@ -1156,6 +1161,15 @@ export default async function handler(req, res) {
         // Always keep the cash-cycle flag fresh so the dashboard badge is accurate,
         // even on runs where the fee itself didn't change.
         if (o.cash_cycle_closed !== cashCycleClosed) patch.cash_cycle_closed = cashCycleClosed;
+        // Stamp the settlement date the first time we OBSERVE the cash cycle
+        // close (false → true) and the order has none yet. The financials
+        // bucket each month by this date, matching how Bosta reports. Prefer
+        // Bosta's own cash-cycle date; fall back to now(). We only stamp on the
+        // observed transition, so orders that were already closed before this
+        // column existed are never retroactively moved.
+        if (cashCycleClosed && o.cash_cycle_closed !== true && !o.settled_at) {
+          patch.settled_at = feeInfo.cashCycleDate || new Date().toISOString();
+        }
       }
 
       if (trace) trace.steps.push({ step: 'patch', currentStatus: o.status, finalMapped: mapped, patch, warehouse_confirmed: o.warehouse_confirmed });
