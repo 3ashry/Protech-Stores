@@ -4278,7 +4278,8 @@ function finComputeMonth(y, m) {
   const returned  = orders.filter(o => o.status === 'Returned'  && inM(o));
 
   let collected         = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
-  const actualShipping  = delivered.reduce((a, o) => a + finShipOf(o), 0);
+  let actualShipping    = delivered.reduce((a, o) => a + finShipOf(o), 0);
+  let bostaFeesReturns  = returned.reduce((a, o) => a + finShipOf(o), 0);
   const deliveredBuy    = delivered.reduce((a, o) => a + finBuyCostOf(o), 0);
   const returnedBuy     = returned.reduce((a, o) => a + finBuyCostOf(o), 0);
   // Gross goods bought this month (delivered + returned) and the slice of it
@@ -4289,19 +4290,22 @@ function finComputeMonth(y, m) {
   let buyingCost  = deliveredBuy;
 
   // Historical override: for a locked past month whose raw order data can't
-  // reproduce the real figures, use the admin-entered authoritative numbers
-  // for collected / total bought / returns credit. Shipping and expenses stay
-  // computed (Bosta API + logged expenses are reliable).
+  // reproduce the real figures, use the admin-entered authoritative numbers for
+  // collected / total bought / returns credit / total shipping. Expenses stay
+  // computed (your logged ledger is reliable).
   const ov = finOverrideFor(y, m);
   if (ov) {
     if (ov.collected != null && ov.collected !== '') collected = parseFloat(ov.collected) || 0;
     if (ov.buying_cost != null && ov.buying_cost !== '') totalBought = parseFloat(ov.buying_cost) || 0;
     if (ov.returns_cost != null && ov.returns_cost !== '') returnsCost = parseFloat(ov.returns_cost) || 0;
     buyingCost = totalBought - returnsCost;   // net cost of goods actually kept/sold
+    // Pinned total shipping = Bosta's monthly figure (delivered + returned fees).
+    // Fold it into actualShipping and zero the return-fee line so the month's
+    // result uses exactly the pinned number.
+    if (ov.shipping != null && ov.shipping !== '') { actualShipping = parseFloat(ov.shipping) || 0; bostaFeesReturns = 0; }
   }
   const profitFromOrders = collected - actualShipping - buyingCost;
 
-  const bostaFeesReturns      = returned.reduce((a, o) => a + finShipOf(o), 0);
   const returnedAfterDelivery = returned
     .filter(o => o.returned_after_delivery)
     .reduce((a, o) => a + (parseFloat(o.compensation || 0) || 0), 0);
@@ -4354,7 +4358,7 @@ async function finSaveOverrideRow(month) {
     const v = el ? el.value.trim() : '';
     return v === '' ? null : (parseFloat(v) || 0);
   };
-  const fields = { collected: g('col'), buying_cost: g('buy'), returns_cost: g('ret'), locked: true };
+  const fields = { collected: g('col'), buying_cost: g('buy'), returns_cost: g('ret'), shipping: g('shp'), locked: true };
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/fin_month_overrides?on_conflict=month`, {
       method: 'POST',
@@ -4411,6 +4415,7 @@ function renderFinOverrides() {
         <td style="padding:6px 4px"><input id="ov-col-${key}" type="number" step="1" value="${val('collected')}" placeholder="${ph(c.collected)}" style="width:110px"></td>
         <td style="padding:6px 4px"><input id="ov-buy-${key}" type="number" step="1" value="${val('buying_cost')}" placeholder="${ph(c.totalBought)}" style="width:110px"></td>
         <td style="padding:6px 4px"><input id="ov-ret-${key}" type="number" step="1" value="${val('returns_cost')}" placeholder="${ph(c.returnsCost)}" style="width:110px"></td>
+        <td style="padding:6px 4px"><input id="ov-shp-${key}" type="number" step="1" value="${val('shipping')}" placeholder="${ph(c.actualShipping + c.bostaFeesReturns)}" style="width:110px"></td>
         <td style="padding:6px 4px;white-space:nowrap">
           <button class="btn btn-primary btn-xs" onclick="finSaveOverrideRow('${key}')">${locked ? 'Update' : 'Lock'}</button>
           ${locked ? `<button class="btn btn-ghost btn-xs" onclick="finClearOverride('${key}')">Clear</button>` : ''}
@@ -4424,6 +4429,7 @@ function renderFinOverrides() {
         <th>Collected by Bosta</th>
         <th>Total buying cost</th>
         <th>Returns cost (Elashry credit)</th>
+        <th>Shipping (Bosta)</th>
         <th></th>
       </tr></thead>
       <tbody>${rows}</tbody>
