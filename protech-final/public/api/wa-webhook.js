@@ -174,8 +174,12 @@ export default async function handler(req, res) {
 
       // 1) Precise: match the order by the id of the template message we sent.
       let updated = [];
+      let matchedId = null;
       const repliedToId = msg.context?.id;
-      if (repliedToId) updated = await sbPatchRep(`orders?wa_msg_id=eq.${encodeURIComponent(repliedToId)}`, update);
+      if (repliedToId) {
+        updated = await sbPatchRep(`orders?wa_msg_id=eq.${encodeURIComponent(repliedToId)}`, update);
+        if (updated.length) matchedId = updated[0].id;
+      }
 
       // 2) Fallback: match by the sender's phone → newest messaged, unresolved order.
       if (!updated.length) {
@@ -183,8 +187,16 @@ export default async function handler(req, res) {
         if (from) {
           const rows = await sbGet('orders?select=id,phone,wa_sent_at&customer_confirmed=is.null&wa_sent_at=not.is.null&order=wa_sent_at.desc&limit=100');
           const match = rows.find(o => waPhone(o.phone) === from);
-          if (match) await sbPatchRep(`orders?id=eq.${encodeURIComponent(match.id)}`, update);
+          if (match) { await sbPatchRep(`orders?id=eq.${encodeURIComponent(match.id)}`, update); matchedId = match.id; }
         }
+      }
+
+      // Phase 3: a customer cancelling an order that was already SENT TO PREP
+      // flags it "DO NOT SHIP" for the prep center. The filter makes this a
+      // no-op for orders that never reached prep.
+      if (intent === 'cancel' && matchedId) {
+        await sbPatchRep(`orders?id=eq.${encodeURIComponent(matchedId)}&sent_to_picker_at=not.is.null`,
+          { post_prep_cancel_at: new Date().toISOString(), post_prep_cancel_ack_at: null });
       }
 
       // 3) Auto-reply to the customer (the 24h window is open since they just messaged us).
