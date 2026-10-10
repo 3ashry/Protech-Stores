@@ -849,6 +849,18 @@ function scanInvoice() {
     }
   }
 
+  // Elashry's stable item codes (كود الصنف) → canonical T-code, for the rows
+  // where the embedded T-code is garbled on the invoice. Short numeric codes,
+  // matched with digit boundaries and only as a fallback (below), so they never
+  // get picked out of the middle of a price.
+  const prodByCode = new Map((cache.products || []).map(p => [String(p.code || '').toUpperCase(), p]));
+  const elashryVariants = new Map();
+  for (const code of codes) {
+    const prod = prodByCode.get(code.toUpperCase());
+    const ec = prod && prod.elashry_code ? String(prod.elashry_code).toUpperCase().trim() : '';
+    if (ec) elashryVariants.set(ec, code);
+  }
+
   _im.invoiceMap = {};
   _im.priceMap = {};
 
@@ -907,6 +919,15 @@ function scanInvoice() {
       if (blockUpper.includes(variant) && variant.length > longest) {
         longest = variant.length;
         matchedCode = canonical;
+      }
+    }
+    // Fallback: the T-code was garbled on this row — match by Elashry's stable
+    // item code instead, bounded by non-digits so it isn't pulled from a price.
+    if (!matchedCode && elashryVariants.size) {
+      for (const [ec, canonical] of elashryVariants) {
+        if (_im.invoiceMap[canonical]) continue;
+        const esc2 = ec.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if (new RegExp('(?<![0-9])' + esc2 + '(?![0-9])').test(blockUpper)) { matchedCode = canonical; break; }
       }
     }
     if (!matchedCode) continue;
@@ -1945,6 +1966,7 @@ function editProduct(id) {
   showModal('tpl-product');
   setTimeout(() => {
     document.getElementById('p-code').value = p.code;
+    { const el = document.getElementById('p-elashry-code'); if (el) el.value = p.elashry_code || ''; }
     document.getElementById('p-name').value = p.name;
     document.getElementById('p-qty').value = p.qty;
     document.getElementById('p-price').value = p.price;
@@ -1976,6 +1998,7 @@ function editProduct(id) {
 
 async function saveProduct() {
   const code = document.getElementById('p-code').value.trim();
+  const elashry_code = (document.getElementById('p-elashry-code')?.value || '').trim() || null;
   const name = document.getElementById('p-name').value.trim();
   const qty = parseInt(document.getElementById('p-qty').value || 0);
   const price = parseFloat(document.getElementById('p-price').value || 0);
@@ -2006,7 +2029,7 @@ async function saveProduct() {
   if (is_offer && !offer_price) { showToast('Please enter the discounted price'); return; }
 
   const id = document.getElementById('p-idx').value;
-const payload = { code, name, qty, price, buy_price, brand, description, is_offer, offer_price, is_published, free_shipping, is_suggested, is_flash_offer, bundle_with, accessories_with, bundle_of, categories, category, variants, images: currentProductImages };
+const payload = { code, elashry_code, name, qty, price, buy_price, brand, description, is_offer, offer_price, is_published, free_shipping, is_suggested, is_flash_offer, bundle_with, accessories_with, bundle_of, categories, category, variants, images: currentProductImages };
   // If the DB is missing a new column PostgREST replies with "Could not find
   // the 'X' column …". Retry with each unknown column stripped so pre-migration
   // installs still save the rest, with a clear toast telling the admin how
