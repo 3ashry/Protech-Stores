@@ -87,7 +87,7 @@ protechstores.com
   btn.innerHTML = `
     <button onclick="generateInvoicePDF(${JSON.stringify({...o, ship_code: document.getElementById('o-shipcode').value.trim()}).replace(/'/g, "\\'")})"
       style="display:inline-flex;align-items:center;gap:8px;background:#f97316;color:white;padding:11px 20px;border-radius:8px;border:none;cursor:pointer;font-weight:700;font-size:14px;">
-      🧾 طباعة الفاتورة PDF
+      🧾 Print invoice PDF
     </button>`;
 
   const shipGroup = document.getElementById('o-shipcode')?.closest('.form-group');
@@ -2211,15 +2211,15 @@ function openPickupPanel() {
           <td style="text-align:center;font-weight:800;font-size:16px;color:#F26A21">${r.qty}</td>
           <td style="font-size:11px;color:#888">${Array.from(r.orders).slice(0, 4).join(', ')}${r.orders.size > 4 ? '…' : ''}</td>
         </tr>`).join('')
-    : `<tr><td colspan="4" style="text-align:center;padding:24px;color:#888">القائمة فارغة</td></tr>`;
+    : `<tr><td colspan="4" style="text-align:center;padding:24px;color:#888">The list is empty</td></tr>`;
   const totalUnits = items.reduce((a, r) => a + r.qty, 0);
   document.body.insertAdjacentHTML('beforeend', `
     <div id="pickup-modal" class="modal-wrap" style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:flex-end;justify-content:center;padding:0" onclick="if(event.target===this)closePickupPanel()">
       <div class="modal" style="background:#fff;max-width:820px;width:100%;max-height:92vh;border-radius:16px 16px 0 0;display:flex;flex-direction:column;overflow:hidden" onclick="event.stopPropagation()">
         <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #eee">
           <div>
-            <div style="font-weight:900;font-size:17px;font-family:Cairo,sans-serif">📋 قائمة اليوم للسحب من المخزن</div>
-            <div style="font-size:12px;color:#666;margin-top:2px">${orders.length} طلب · ${items.length} منتج مختلف · ${totalUnits} قطعة</div>
+            <div style="font-weight:900;font-size:17px;font-family:Cairo,sans-serif">📋 Today's warehouse pick list</div>
+            <div style="font-size:12px;color:#666;margin-top:2px">${orders.length} orders · ${items.length} distinct products · ${totalUnits} pcs</div>
           </div>
           <button onclick="closePickupPanel()" style="border:0;background:transparent;font-size:26px;cursor:pointer;color:#666;line-height:1">×</button>
         </div>
@@ -2227,18 +2227,18 @@ function openPickupPanel() {
           <table style="width:100%;border-collapse:collapse;font-family:Cairo,sans-serif;font-size:14px">
             <thead style="position:sticky;top:0;background:#fff;box-shadow:0 1px 0 #eee">
               <tr style="text-align:right">
-                <th style="padding:12px 4px">الكود</th>
-                <th style="padding:12px 4px">اسم المنتج</th>
-                <th style="padding:12px 4px;text-align:center">الكمية</th>
-                <th style="padding:12px 4px">الطلبات</th>
+                <th style="padding:12px 4px">Code</th>
+                <th style="padding:12px 4px">Product name</th>
+                <th style="padding:12px 4px;text-align:center">Qty</th>
+                <th style="padding:12px 4px">Orders</th>
               </tr>
             </thead>
             <tbody>${rowsHtml}</tbody>
           </table>
         </div>
         <div style="display:flex;gap:10px;padding:14px 20px;border-top:1px solid #eee">
-          <button class="btn btn-primary" onclick="generatePickupSheet()" ${items.length ? '' : 'disabled'} style="flex:1">📥 تحميل ورقة السحب PDF</button>
-          <button class="btn btn-danger" onclick="clearPickup()" ${items.length ? '' : 'disabled'}>مسح القائمة</button>
+          <button class="btn btn-primary" onclick="generatePickupSheet()" ${items.length ? '' : 'disabled'} style="flex:1">📥 Download pick sheet PDF</button>
+          <button class="btn btn-danger" onclick="clearPickup()" ${items.length ? '' : 'disabled'}>Clear list</button>
         </div>
       </div>
     </div>`);
@@ -7324,9 +7324,9 @@ function renderTasks() {
   const bgFor = (s) => s === 'done' ? '#dcfce7' : s === 'in_progress' ? '#fef3c7' : '#fff';
   host.innerHTML = sorted.map(t => `
     <div style="display:flex;gap:10px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;background:${bgFor(t.status)}">
-      <button onclick="cycleTaskStatus('${t.id}')" title="اضغط لتغيير الحالة" style="background:none;border:0;font-size:22px;cursor:pointer;padding:2px 6px">${iconFor(t.status)}</button>
+      <button onclick="cycleTaskStatus('${t.id}')" title="Tap to change status" style="background:none;border:0;font-size:22px;cursor:pointer;padding:2px 6px">${iconFor(t.status)}</button>
       <div style="flex:1;font-size:15px;${t.status==='done'?'text-decoration:line-through;color:var(--muted)':''}">${esc(t.text)}</div>
-      <button class="btn btn-danger btn-xs" onclick="deleteTask('${t.id}')" title="حذف">✕</button>
+      <button class="btn btn-danger btn-xs" onclick="deleteTask('${t.id}')" title="Delete">✕</button>
     </div>
   `).join('');
 }
@@ -7412,7 +7412,7 @@ function toggleVoiceCapture() {
   const hint = document.getElementById('voice-hint');
   if (!_speech) _speech = _initSpeech();
   if (!_speech) {
-    hint.textContent = 'الإدخال الصوتي غير مدعوم في هذا المتصفح. استخدم Chrome على الأندرويد أو الكمبيوتر.';
+    hint.textContent = 'Voice input is not supported in this browser. Use Chrome on Android or desktop.';
     btn.style.opacity = '.5'; btn.disabled = true;
     return;
   }
@@ -7425,8 +7425,8 @@ function toggleVoiceCapture() {
     _speechActive = true;
     btn.style.background = '#dc2626';
     icon.textContent = '⏹';
-    label.textContent = 'اضغط للإيقاف — يستمع الآن…';
-    hint.textContent = 'تكلم بوضوح ثم انتظر…';
+    label.textContent = 'Tap to stop — listening…';
+    hint.textContent = 'Speak clearly, then wait…';
   };
   _speech.onresult = (ev) => {
     let interim = '';
@@ -7438,19 +7438,19 @@ function toggleVoiceCapture() {
     hint.textContent = (finalTxt + interim).trim() || '…';
   };
   _speech.onerror = (ev) => {
-    hint.textContent = 'خطأ: ' + (ev.error || 'غير معروف') + (ev.error === 'not-allowed' ? ' — اسمح بالميكروفون من إعدادات المتصفح' : '');
+    hint.textContent = 'Error: ' + (ev.error || 'unknown') + (ev.error === 'not-allowed' ? ' — allow the microphone in the browser settings' : '');
   };
   _speech.onend = () => {
     _speechActive = false;
     btn.style.background = 'var(--orange)';
     icon.textContent = '🎤';
-    label.textContent = 'اضغط للتحدث وإضافة مهمة';
+    label.textContent = 'Tap to speak and add a task';
     const txt = finalTxt.trim();
-    if (txt) { addTask(txt); hint.textContent = '✓ تم إضافة: ' + txt; }
-    else if (!hint.textContent.startsWith('خطأ')) hint.textContent = 'لم يتم التقاط أي كلام. حاول مرة أخرى.';
+    if (txt) { addTask(txt); hint.textContent = '✓ Added: ' + txt; }
+    else if (!hint.textContent.startsWith('Error')) hint.textContent = 'No speech captured. Try again.';
   };
   try { _speech.start(); }
-  catch (e) { hint.textContent = 'تعذّر البدء: ' + e.message; }
+  catch (e) { hint.textContent = 'Could not start: ' + e.message; }
 }
 
 // Auto-load when the tasks screen is opened for the first time.
