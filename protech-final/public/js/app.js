@@ -96,7 +96,13 @@ protechstores.com
 
 // ── NAVIGATION ──
 const SCREENS = ['home', 'inventory', 'orders', 'returns', 'financials', 'invoices', 'invoice-match', 'carts', 'accounts', 'tasks', 'analytics'];
+const ADMIN_ONLY_SCREENS = ['financials', 'invoices', 'analytics', 'accounts', 'inventory', 'invoice-match'];
 function go(id) {
+  // Phase 1: money/cost screens are admin-only. The DB already blocks the
+  // data for non-admins; this stops a non-admin even opening the screen.
+  if (typeof isAdminRole === 'function' && !isAdminRole() && ADMIN_ONLY_SCREENS.includes(id)) {
+    id = 'home';
+  }
   if (id === 'analytics' && !analyticsCache.loaded) loadAnalytics();
   if (id === 'carts') loadAbandonedCarts();
   if (id === 'invoice-match') initInvoiceMatch();
