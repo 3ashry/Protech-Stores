@@ -2050,24 +2050,24 @@ function renderOrders() {
     : '';
   document.getElementById('orders-tbody').innerHTML = visibleOrders.length ? visibleOrders.map(o => `
     <tr${o.status === 'Awaiting Action' ? ' style="background:#fff4f4"' : ''}>
-      <td><span class="badge b-orange">${esc(o.code)}</span> ${orderProgressBadge(o)}${o.allow_open ? ' <span class="badge b-warning" title="يريد فتح الشحنة">📦</span>' : ''}${o.status === 'Returned' && !o.warehouse_confirmed ? ' <span class="badge b-danger" title="مرتجع — لم يُرجع للمخزن بعد">↩️ لم يُرجع للمخزن</span>' : ''}${o.picker_prepared_at ? ' <span class="badge b-success" title="جهّزها موظف التجهيز">✅ جاهز</span>' : ''}${o.revised_at ? ' <span class="badge b-success" title="تمت مراجعته">📝 مُراجَع</span>' : ''}${o.pending_elashry_at ? ' <span class="badge b-warning" title="في قائمة المرتجعات للأشري">📦 قائمة الأشري</span>' : ''}${o.needs_call ? ` <span class="badge b-danger" title="${esc(o.needs_call_reason || 'محتاج مكالمة')}">📞 محتاج مكالمة</span>` : ''}${cashCycleBadge(o)}</td>
+      <td><span class="badge b-orange">${esc(o.code)}</span> ${orderProgressBadge(o)}${o.allow_open ? ' <span class="badge b-warning" title="Wants to open the package before paying">📦</span>' : ''}${o.status === 'Returned' && !o.warehouse_confirmed ? ' <span class="badge b-danger" title="Returned — not back in the warehouse yet">↩️ Not in warehouse</span>' : ''}${o.picker_prepared_at ? ' <span class="badge b-success" title="Prepared by the picker">✅ Ready</span>' : ''}${o.revised_at ? ' <span class="badge b-success" title="Reviewed">📝 Reviewed</span>' : ''}${o.pending_elashry_at ? ' <span class="badge b-warning" title="In the Elashry returns list">📦 Elashry list</span>' : ''}${o.needs_call ? ` <span class="badge b-danger" title="${esc(o.needs_call_reason || 'Needs a call')}">📞 Needs call</span>` : ''}${cashCycleBadge(o)}</td>
       <td><strong>${esc(o.customer_name)}</strong></td>
       <td>${esc(o.phone)}</td>
       <td>EGP ${fmt(o.total)}</td>
       <td>${o.status === 'Awaiting Action'
         ? `<span style="display:inline-block;background:#dc2626;color:#fff;font-weight:800;font-size:13px;padding:6px 12px;border-radius:8px;animation:none">⚠️ AWAITING ACTION</span>`
         : `<span class="badge ${smap[o.status] || 'b-gray'}">${esc(o.status)}</span>`}${
-          o.customer_confirmed === true ? `<div style="font-size:11px;color:#16a34a;font-weight:700;margin-top:3px">✅ ${o.confirm_outcome === 'confirmed_call' ? 'مؤكد (تليفون)' : 'مؤكد'}</div>`
-          : o.customer_confirmed === false ? `<div style="font-size:11px;color:#dc2626;font-weight:700;margin-top:3px">❌ ملغي</div>`
-          : o.confirm_outcome === 'no_answer' ? `<div style="font-size:11px;color:#b45309;font-weight:700;margin-top:3px">⏳ لم يرد</div>`
-          : ''}${o.allow_open ? `<div style="font-size:11px;color:#F26A21;font-weight:700;margin-top:3px">📦 فتح الشحنة</div>` : ''}</td>
+          o.customer_confirmed === true ? `<div style="font-size:11px;color:#16a34a;font-weight:700;margin-top:3px">✅ ${o.confirm_outcome === 'confirmed_call' ? 'Confirmed (call)' : 'Confirmed'}</div>`
+          : o.customer_confirmed === false ? `<div style="font-size:11px;color:#dc2626;font-weight:700;margin-top:3px">❌ Cancelled</div>`
+          : o.confirm_outcome === 'no_answer' ? `<div style="font-size:11px;color:#b45309;font-weight:700;margin-top:3px">⏳ No answer</div>`
+          : ''}${o.allow_open ? `<div style="font-size:11px;color:#F26A21;font-weight:700;margin-top:3px">📦 Open package</div>` : ''}</td>
       <td><div class="actions">
         <button class="btn btn-ghost btn-xs" onclick="viewOrder('${o.id}')">View</button>
         <button class="btn btn-dark btn-xs" onclick="editOrder('${o.id}')">Edit</button>
-        <button class="btn ${o.sent_to_picker_at ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="toggleSentToPicker('${o.id}', ${!!o.sent_to_picker_at})" title="${o.sent_to_picker_at ? 'إلغاء الإرسال للتجهيز' : 'إرسال للتجهيز'}">${o.sent_to_picker_at ? '📤 تم الإرسال' : '📦 إرسال للتجهيز'}</button>
-        <button class="btn ${o.revised_at ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="toggleRevised('${o.id}', ${!!o.revised_at})" title="${o.revised_at ? 'إلغاء المراجعة' : 'تحديد كمُراجَع — تمت مراجعة الطلب والتأكد منه'}">${o.revised_at ? '✓ مُراجَع' : '📝 مراجعة'}</button>
-        ${o.status === 'Processing' && o.customer_confirmed !== true ? `<button class="btn ${o.needs_call ? 'btn-danger' : 'btn-ghost'} btn-xs" onclick="markConfirmedByCall('${o.id}')" title="تأكيد الطلب عن طريق مكالمة تليفون">📞 أكد بالتليفون</button>` : ''}
-        ${o.status === 'Returned' ? `<button class="btn ${o.pending_elashry_at ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="toggleElashryReturn('${o.id}', ${!!o.pending_elashry_at})" title="${o.pending_elashry_at ? 'إخراج من قائمة الأشري' : 'أضف هذا الطلب إلى قائمة المرتجعات الجاهزة للأشري'}">${o.pending_elashry_at ? '✓ بقائمة الأشري' : '📦 أرسل لقائمة الأشري'}</button>` : ''}
+        <button class="btn ${o.sent_to_picker_at ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="toggleSentToPicker('${o.id}', ${!!o.sent_to_picker_at})" title="${o.sent_to_picker_at ? 'Undo send to prep' : 'Send to prep'}">${o.sent_to_picker_at ? '📤 Sent to prep' : '📦 Send to prep'}</button>
+        <button class="btn ${o.revised_at ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="toggleRevised('${o.id}', ${!!o.revised_at})" title="${o.revised_at ? 'Undo review' : 'Mark as reviewed — order checked and verified'}">${o.revised_at ? '✓ Reviewed' : '📝 Review'}</button>
+        ${o.status === 'Processing' && o.customer_confirmed !== true ? `<button class="btn ${o.needs_call ? 'btn-danger' : 'btn-ghost'} btn-xs" onclick="markConfirmedByCall('${o.id}')" title="Confirm the order over a phone call">📞 Confirm by call</button>` : ''}
+        ${o.status === 'Returned' ? `<button class="btn ${o.pending_elashry_at ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="toggleElashryReturn('${o.id}', ${!!o.pending_elashry_at})" title="${o.pending_elashry_at ? 'Remove from the Elashry list' : 'Add this order to the Elashry returns list'}">${o.pending_elashry_at ? '✓ In Elashry list' : '📦 Send to Elashry list'}</button>` : ''}
         <button class="btn btn-danger btn-xs" onclick="delOrder('${o.id}')">Delete</button>
       </div></td>
     </tr>`).join('') : `<tr><td colspan="6"><div class="empty"><div class="empty-icon">🛒</div>${rawQ ? 'No orders match “' + esc(rawQ) + '”' : 'No orders yet'}</div></td></tr>`;
@@ -2104,7 +2104,7 @@ function clearPickup() {
   savePickupIds([]);
   renderOrders();
   closeModal();
-  showToast('تم مسح القائمة');
+  showToast('List cleared');
 }
 
 // Toggle an order's visibility on the packaging staff's /picker.html.
@@ -2251,7 +2251,7 @@ function closePickupPanel() {
 // Print-friendly warehouse pickup sheet — opens a new window like the invoice.
 function generatePickupSheet() {
   const { orders, items } = aggregatePickup();
-  if (!items.length) { showToast('القائمة فارغة'); return; }
+  if (!items.length) { showToast('The list is empty'); return; }
   const totalUnits = items.reduce((a, r) => a + r.qty, 0);
   const dateStr = new Date().toLocaleDateString('ar-EG', { year: 'numeric', month: 'long', day: 'numeric' });
   const rowsHtml = items.map((r, i) => `
@@ -2400,7 +2400,7 @@ window.toggleRevised = toggleRevised;
 // can restore the exact state (not just blanket re-mark everything).
 async function resetAllRevised() {
   const marked = (cache.orders || []).filter(o => !!o.revised_at);
-  if (!marked.length) { showToast('لا توجد طلبات مُحددة كمُراجَعة حالياً'); return; }
+  if (!marked.length) { showToast('No orders are currently marked as reviewed'); return; }
   if (!confirm(`إعادة ضبط حالة المراجعة لـ ${marked.length} طلب؟\nكل الطلبات سترجع إلى "غير مُراجَع".`)) return;
   const snapshots = marked.map(o => ({ id: o.id, prev: o.revised_at }));
   const patch = async (id, value) => {
@@ -3002,7 +3002,7 @@ async function markConfirmedByCall(id) {
     const i = cache.orders.findIndex(o => o.id === id);
     if (i >= 0) cache.orders[i] = { ...cache.orders[i], ...patch };
     try { logAudit('order.confirm_call', { entity: 'orders', entity_id: (i >= 0 ? cache.orders[i].code : id), summary: 'Order confirmed by phone call' }); } catch (_) {}
-    showToast('✅ تم تأكيد الطلب بالتليفون');
+    showToast('✅ Order confirmed by phone');
     renderAllKeepScroll();
   } catch (e) { showToast('Error: ' + e.message); }
 }
@@ -3098,7 +3098,7 @@ async function undoLastOrdersAction() {
   renderUndoFab();
   try {
     await top.revert();
-    showToast('✓ تم التراجع');
+    showToast('✓ Undone');
   } catch (e) {
     _undoStack.push(top);
     renderUndoFab();
@@ -3538,7 +3538,7 @@ function renderElashryPopup() {
 // pending list. One PATCH per order; one combined undo entry.
 async function addAllWarehouseReturnsToElashry() {
   const lines = returnsInWarehouseNotYetListed();
-  if (!lines.length) { showToast('لا توجد مرتجعات في المخزن'); return; }
+  if (!lines.length) { showToast('No returns in the warehouse'); return; }
   const orderIds = Array.from(new Set(lines.map(l => l.orderId)));
   if (!confirm(`إضافة ${orderIds.length} طلب (${lines.reduce((s,l)=>s+l.qty,0)} قطعة) إلى قائمة الأشري؟`)) return;
   const now = new Date().toISOString();
@@ -3603,7 +3603,7 @@ function buildReturnsToElashryMessage() {
 
 function sendReturnsToElashryWA() {
   const { text, totalUnits } = buildReturnsToElashryMessage();
-  if (!totalUnits) { showToast('لا توجد مرتجعات في المخزن حالياً'); return; }
+  if (!totalUnits) { showToast('No returns in the warehouse right now'); return; }
   // wa.me without a number opens the WhatsApp contact picker with the
   // text pre-filled, so the admin picks Elashry's chat and sends.
   window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
@@ -3611,9 +3611,9 @@ function sendReturnsToElashryWA() {
 
 function copyReturnsToElashry() {
   const { text, totalUnits } = buildReturnsToElashryMessage();
-  if (!totalUnits) { showToast('لا توجد مرتجعات في المخزن حالياً'); return; }
+  if (!totalUnits) { showToast('No returns in the warehouse right now'); return; }
   (navigator.clipboard?.writeText(text) || Promise.reject())
-    .then(() => showToast('نُسخت القائمة للحافظة ✓'))
+    .then(() => showToast('List copied to clipboard ✓'))
     .catch(() => { try { prompt('Copy the returns list:', text); } catch {} });
 }
 
@@ -3751,7 +3751,7 @@ async function markReturnReused(orderId, lineIdx) {
     if (isWarehousePopupOpen()) renderWarehousePopup();
     renderOrders();
   });
-  showToast('✓ أُخرج من قائمة أشري');
+  showToast('✓ Removed from the Elashry list');
 }
 window.markReturnReused = markReturnReused;
 
@@ -3808,7 +3808,7 @@ async function markAllReturnsSentToElashry() {
   // Only touch lines still awaiting a decision — a line already marked
   // reused/sent_back shouldn't be flipped by the bulk button.
   const pending = returnsAwaitingSupplier().filter(l => !l.status);
-  if (!pending.length) { showToast('لا توجد مرتجعات في القائمة'); return; }
+  if (!pending.length) { showToast('No returns in the list'); return; }
   const total = pending.reduce((s, l) => s + l.qty, 0);
   if (!confirm(`تحديد كل القائمة (${pending.length} سطر · ${total} قطعة) كمُرسَلة لأشري؟`)) return;
   // Group targets by orderId so we PATCH each order once.
@@ -3873,7 +3873,7 @@ async function resetOrderLineDispositions(orderId) {
   if (!o) return;
   const items = Array.isArray(o.products) ? o.products.slice() : [];
   const dispLines = items.filter(p => p && (p.supplier_return_status === 'reused' || p.supplier_return_status === 'sent_back'));
-  if (!dispLines.length) { showToast('لا توجد سطور مُغلقة لإعادة فتحها'); return; }
+  if (!dispLines.length) { showToast('No closed lines to reopen'); return; }
   if (!confirm(`إعادة فتح ${dispLines.length} سطر على طلب ${o.code || ''}؟\n(سيُعاد كل شيء لحالته الأولى داخل القائمة)`)) return;
   const prev = items.map(p => ({ ...p }));
   const next = items.map(p => {
@@ -3947,7 +3947,7 @@ async function unmarkReturnSentToElashry(orderId, lineIdx) {
       renderOrders();
       renderElashryFab();
     });
-    showToast('↶ تم رجوعها إلى قائمة الانتظار');
+    showToast('↶ Moved back to the waiting list');
   } catch (e) { showToast('Error: ' + e.message); }
 }
 window.unmarkReturnSentToElashry = unmarkReturnSentToElashry;
@@ -6207,7 +6207,7 @@ async function loadSupplierPayments() {
   renderSupplierAccount();
   const rows = await sbSupplierGet('supplier_payments');
   if (rows) supplierCache.payments = rows;
-  else if (supplierCache.loaded) showToast('تعذّر تحديث دفعات العشري — عرض آخر نسخة محفوظة');
+  else if (supplierCache.loaded) showToast('Could not refresh Elashry payments — showing the last saved copy');
   supplierCache.loaded = true;
   supplierCache.loading = false;
   renderSupplierAccount();
@@ -6508,7 +6508,7 @@ async function loadBostaReceipts() {
   renderBostaCash();
   const rows = await sbSupplierGet('bosta_receipts');
   if (rows) { bostaCashCache.receipts = rows; bostaCashCache.loaded = true; }
-  else if (bostaCashCache.loaded) showToast('تعذّر تحديث مدفوعات بوسطة — عرض آخر نسخة محفوظة');
+  else if (bostaCashCache.loaded) showToast('Could not refresh Bosta payments — showing the last saved copy');
   bostaCashCache.loading = false;
   renderBostaCash();
 }
@@ -7062,9 +7062,9 @@ function cashCycleBadge(o) {
   const isFinal = o.status === 'Delivered' || o.status === 'Returned';
   if (!isFinal) return '';
   if (o.cash_cycle_closed === true) {
-    return ' <span title="Bosta cash cycle closed — this is the exact invoiced amount" style="display:inline-block;background:#dcfce7;color:#166534;font-weight:700;font-size:11px;padding:2px 6px;border-radius:10px;border:1px solid #86efac;margin-right:4px">🔒 مؤكد</span>';
+    return ' <span title="Bosta cash cycle closed — this is the exact invoiced amount" style="display:inline-block;background:#dcfce7;color:#166534;font-weight:700;font-size:11px;padding:2px 6px;border-radius:10px;border:1px solid #86efac;margin-right:4px">🔒 Final</span>';
   }
-  return ' <span title="Cash cycle not closed yet — actual shipping is still an estimate; Bosta will finalise within ~2 days" style="display:inline-block;background:#fef3c7;color:#92400e;font-weight:700;font-size:11px;padding:2px 6px;border-radius:10px;border:1px solid #fcd34d;margin-right:4px">🕒 تقديري</span>';
+  return ' <span title="Cash cycle not closed yet — actual shipping is still an estimate; Bosta will finalise within ~2 days" style="display:inline-block;background:#fef3c7;color:#92400e;font-weight:700;font-size:11px;padding:2px 6px;border-radius:10px;border:1px solid #fcd34d;margin-right:4px">🕒 Estimate</span>';
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -7345,7 +7345,7 @@ async function addTask(text) {
     if (Array.isArray(saved) && saved[0]) tasksCache.rows.unshift(saved[0]);
     else await loadTasks();
     renderTasks();
-    showToast('✓ أُضيفت المهمة');
+    showToast('✓ Task added');
   } catch (e) { showToast('Error: ' + e.message); }
 }
 
