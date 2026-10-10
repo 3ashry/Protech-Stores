@@ -2888,10 +2888,10 @@ protechstores.com
   const confirmLink = `https://wa.me/${waPhone}?text=${confirmText}`;
   const cc = o.customer_confirmed;
   const ccBadge = cc === true
-    ? `<span style="color:#16a34a;font-weight:800;font-size:13px;display:inline-flex;align-items:center;gap:6px">✅ العميل أكد الحجز</span>`
+    ? `<span style="color:#16a34a;font-weight:800;font-size:13px;display:inline-flex;align-items:center;gap:6px">✅ Customer confirmed</span>`
     : cc === false
-    ? `<span style="color:#dc2626;font-weight:800;font-size:13px;display:inline-flex;align-items:center;gap:6px">❌ العميل ألغى الحجز</span>`
-    : `<span style="color:#92702a;font-weight:700;font-size:13px;display:inline-flex;align-items:center;gap:6px">⏳ بانتظار تأكيد العميل</span>`;
+    ? `<span style="color:#dc2626;font-weight:800;font-size:13px;display:inline-flex;align-items:center;gap:6px">❌ Customer cancelled</span>`
+    : `<span style="color:#92702a;font-weight:700;font-size:13px;display:inline-flex;align-items:center;gap:6px">⏳ Awaiting customer confirmation</span>`;
 
   document.getElementById('m-detail-body').innerHTML = `
     ${o.status === 'Awaiting Action' ? `<div style="background:#dc2626;color:#fff;font-weight:800;font-size:16px;text-align:center;padding:14px;border-radius:10px;margin-bottom:14px">⚠️ هذا الطلب يحتاج إجراء — AWAITING ACTION</div>` : ''}
@@ -2908,10 +2908,10 @@ protechstores.com
       <div><div class="detail-label">Address</div>${esc(o.address) || '—'}</div>
       <div><div class="detail-label">Shipping Code</div>${esc(o.ship_code) || '—'}</div>
       <div><div class="detail-label">Est. Shipping</div>EGP ${fmt(o.est_shipping || 0)}</div>
-      <div style="grid-column:1/-1"><div class="detail-label">Open Package — فتح الشحنة</div>
+      <div style="grid-column:1/-1"><div class="detail-label">Open Package</div>
         <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-weight:700">
           <input type="checkbox" id="d-allowopen" ${o.allow_open ? 'checked' : ''} style="width:18px;height:18px;accent-color:#F26A21">
-          <span>📦 العميل يريد فتح الشحنة قبل الاستلام</span>
+          <span>📦 Customer wants to open the package before paying</span>
         </label></div>
       ${o.notes ? `<div style="grid-column:1/-1"><div class="detail-label">Notes</div>${esc(o.notes)}</div>` : ''}
     </div>
@@ -2933,15 +2933,15 @@ protechstores.com
       <select id="d-status">${statuses.map(s => `<option${o.status === s ? ' selected' : ''}>${s}</option>`).join('')}</select>
     </div>
     <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:12px;margin:6px 0 14px;display:flex;flex-wrap:wrap;gap:10px;align-items:center">
-      <span style="font-weight:800;font-size:13px;color:#166534">تأكيد الطلب عبر واتساب</span>
+      <span style="font-weight:800;font-size:13px;color:#166534">Confirm order via WhatsApp</span>
       ${ccBadge}
       <div style="flex-basis:100%;height:0"></div>
       <a href="${confirmLink}" target="_blank" onclick="markConfirmSent('${id}')"
         style="display:inline-flex;align-items:center;gap:8px;background:#25D366;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:700;font-size:13px">
-        📲 إرسال رسالة تأكيد الشحن
+        📲 Send shipping confirmation
       </a>
-      <button class="btn" style="background:#16a34a;color:#fff" onclick="setConfirm('${id}',true)">✅ تم التأكيد</button>
-      <button class="btn" style="background:#dc2626;color:#fff" onclick="setConfirm('${id}',false)">❌ تم الإلغاء</button>
+      <button class="btn" style="background:#16a34a;color:#fff" onclick="setConfirm('${id}',true)">✅ Confirmed</button>
+      <button class="btn" style="background:#dc2626;color:#fff" onclick="setConfirm('${id}',false)">❌ Cancelled</button>
     </div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
       <button class="btn btn-primary" onclick="saveDetail('${id}')">Save Changes</button>
@@ -3018,7 +3018,7 @@ function renderReturns() {
   document.getElementById('ret-stats').innerHTML = `
     <div class="stat-card red"><div class="stat-val">${rets.length}</div><div class="stat-label">Total Returns</div></div>
     <div class="stat-card orange"><div class="stat-val">EGP ${fmt(totalShip)}</div><div class="stat-label">Total Return Shipping</div></div>
-    <div class="stat-card blue"><div class="stat-val">${inWarehouseUnits}</div><div class="stat-label">قطعة في قائمة الأشري</div></div>`;
+    <div class="stat-card blue"><div class="stat-val">${inWarehouseUnits}</div><div class="stat-label">pcs in the Elashry list</div></div>`;
   document.getElementById('ret-tbody').innerHTML = rets.length ? rets.map(o => `
     <tr>
       <td><strong>${esc(o.customer_name)}</strong></td>
@@ -3059,7 +3059,7 @@ function returnsAwaitingSupplier() {
         // placed the stale snapshot on the order line is confusing (admin
         // sees one name in View and a different one here). Falls back to
         // the snapshot and then the code.
-        name: sysProd?.name || p.name || p.code || '(بدون اسم)',
+        name: sysProd?.name || p.name || p.code || '(no name)',
         qty: parseInt(p.qty || 1),
         buyPrice: lineBuyPrice(p, products),
         status: p.supplier_return_status || null,
@@ -3424,20 +3424,20 @@ function renderElashryPopup() {
 
   const header = `
     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:0 14px 10px">
-      <span style="flex:1;font-size:12px;color:var(--muted);font-weight:600">${lines.length} سطر · ${agg.length} SKU · ${totalUnits} قطعة</span>
-      <button class="btn btn-primary btn-sm" onclick="sendReturnsToElashryWA()">📲 إرسال للأشري</button>
-      <button class="btn btn-ghost btn-sm" onclick="copyReturnsToElashry()">📋 نسخ</button>
-      ${lines.length ? '<button class="btn btn-dark btn-sm" onclick="markAllReturnsSentToElashry()" title="تمييز كل القائمة كمُرجَعة للمخزن الرئيسي">🏭 أرجع الكل للمخزن</button>' : ''}
+      <span style="flex:1;font-size:12px;color:var(--muted);font-weight:600">${lines.length} lines · ${agg.length} SKU · ${totalUnits} pcs</span>
+      <button class="btn btn-primary btn-sm" onclick="sendReturnsToElashryWA()">📲 Send to Elashry</button>
+      <button class="btn btn-ghost btn-sm" onclick="copyReturnsToElashry()">📋 Copy</button>
+      ${lines.length ? '<button class="btn btn-dark btn-sm" onclick="markAllReturnsSentToElashry()" title="Mark the whole list as returned to the main warehouse">🏭 Return all to warehouse</button>' : ''}
     </div>
     <div style="padding:0 14px 10px;font-size:12px;color:var(--muted);line-height:1.55">
-      كل طلب تضغط <b>📦 بقائمة الأشري</b> على سطره في شاشة الطلبات يظهر هنا تلقائياً. لكل قطعة قراران: <b>💰 بيع</b> تبقى في المخزون لتُباع في طلب جديد بنفس سعر الشراء، أو <b>🏭 رجوع للمخزن الرئيسي</b> تنزل للقائمة بالأسفل بسعر شرائها الحالي.
+      Every order where you tap <b>📦 Send to Elashry list</b> on its row in the Orders screen appears here automatically. Each piece has two choices: <b>💰 Sell</b> keeps it in stock to be sold again in a new order at the same buy price, or <b>🏭 Return to main warehouse</b> moves it to the list below at its current buy price.
     </div>`;
 
   // Group pending lines by their source order so each order gets its own
   // header row with: the order code, customer, how many lines exist on
   // the order (DB truth), how many are still open, and a 🔄 reset button
   // that re-opens every dispositioned line of that order. The header's
-  // "N لائحة · M مفتوحة" badge is the diagnostic the admin asked for —
+  // "N lists · M open" badge is the diagnostic the admin asked for —
   // if the DB says the order has only 1 line when they expect 2, it
   // shows here instead of the UI silently hiding anything.
   const groups = new Map();
@@ -3450,13 +3450,13 @@ function renderElashryPopup() {
 
   const renderRow = (l) => {
     const actions = l.status === 'reused'
-      ? `<span class="badge b-success" style="font-size:11px">💰 مُباع</span>
-         <button class="btn btn-ghost btn-xs" title="إلغاء — رجّع للقائمة" onclick="unmarkReturnSentToElashry('${l.orderId}', ${l.lineIdx})">↶</button>`
+      ? `<span class="badge b-success" style="font-size:11px">💰 Sold</span>
+         <button class="btn btn-ghost btn-xs" title="Undo — back to the list" onclick="unmarkReturnSentToElashry('${l.orderId}', ${l.lineIdx})">↶</button>`
       : l.status === 'sent_back'
-      ? `<span class="badge b-warning" style="font-size:11px">🏭 رجع للمخزن</span>
-         <button class="btn btn-ghost btn-xs" title="إلغاء — رجّع للقائمة" onclick="unmarkReturnSentToElashry('${l.orderId}', ${l.lineIdx})">↶</button>`
-      : `<button class="btn btn-dark btn-xs" title="بيع هذه القطعة — تبقى في المخزون بنفس سعر الشراء" onclick="reuseWarehouseReturn('${l.orderId}', ${l.lineIdx})">💰 بيع</button>
-         <button class="btn btn-primary btn-xs" title="رجوع للمخزن الرئيسي بسعر الشراء الحالي" onclick="markReturnSentToElashry('${l.orderId}', ${l.lineIdx})">🏭 رجوع للمخزن</button>`;
+      ? `<span class="badge b-warning" style="font-size:11px">🏭 Back to warehouse</span>
+         <button class="btn btn-ghost btn-xs" title="Undo — back to the list" onclick="unmarkReturnSentToElashry('${l.orderId}', ${l.lineIdx})">↶</button>`
+      : `<button class="btn btn-dark btn-xs" title="Sell this piece — stays in stock at the same buy price" onclick="reuseWarehouseReturn('${l.orderId}', ${l.lineIdx})">💰 Sell</button>
+         <button class="btn btn-primary btn-xs" title="Return to the main warehouse at the current buy price" onclick="markReturnSentToElashry('${l.orderId}', ${l.lineIdx})">🏭 Back to warehouse</button>`;
     return `<tr${l.status ? ' style="opacity:.78"' : ''}>
       <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(l.code || '—')}</td>
       <td>${esc(l.name)}</td>
@@ -3468,7 +3468,7 @@ function renderElashryPopup() {
   };
 
   const pendingSection = !lines.length
-    ? '<div class="empty" style="margin:20px 0"><div class="empty-icon">📦</div>لا توجد مرتجعات في القائمة حالياً<br><span style="font-size:12px;color:var(--muted);font-weight:400">افتح شاشة الطلبات واضغط 📦 أرسل لقائمة الأشري على أي طلب مرتجع</span></div>'
+    ? '<div class="empty" style="margin:20px 0"><div class="empty-icon">📦</div>No returns in the list right now<br><span style="font-size:12px;color:var(--muted);font-weight:400">Open the Orders screen and tap 📦 Send to Elashry list on any returned order</span></div>'
     : Array.from(groups.values()).map(g => {
         const openCount = g.items.filter(x => !x.status).length;
         const dispCount = g.items.length - openCount;
@@ -3476,8 +3476,8 @@ function renderElashryPopup() {
           <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 10px;background:var(--bg-2);border-radius:8px 8px 0 0;border:1px solid var(--line);border-bottom:0">
             <span class="badge b-orange" style="font-size:12px">${esc(g.orderCode || '—')}</span>
             <span style="font-size:12px;font-weight:700">${esc(g.customer || '')}</span>
-            <span style="font-size:11px;color:var(--muted)">${g.items.length} سطر · ${openCount} مفتوحة${dispCount ? ` · ${dispCount} مُغلقة` : ''}</span>
-            ${dispCount ? `<button class="btn btn-ghost btn-xs" style="margin-inline-start:auto" title="إعادة فتح كل سطور هذا الطلب" onclick="resetOrderLineDispositions('${g.orderId}')">🔄 إعادة فتح الكل</button>` : ''}
+            <span style="font-size:11px;color:var(--muted)">${g.items.length} lines · ${openCount} open${dispCount ? ` · ${dispCount} closed` : ''}</span>
+            ${dispCount ? `<button class="btn btn-ghost btn-xs" style="margin-inline-start:auto" title="Reopen all lines of this order" onclick="resetOrderLineDispositions('${g.orderId}')">🔄 إعادة فتح الكل</button>` : ''}
           </div>
           <div class="table-wrap" style="margin:0">
             <table style="margin:0">
@@ -3494,7 +3494,7 @@ function renderElashryPopup() {
       <div class="table-wrap" style="margin:0 2px">
         <table>
           <tfoot>
-            <tr><th colspan="6" style="padding:12px 10px;background:var(--bg-2);text-align:start;font-size:13px;color:var(--ink-2)">📊 الإجمالي حسب المنتج (${agg.length} SKU · ${totalUnits} قطعة مفتوحة)</th></tr>
+            <tr><th colspan="6" style="padding:12px 10px;background:var(--bg-2);text-align:start;font-size:13px;color:var(--ink-2)">📊 Totals by product (${agg.length} SKU · ${totalUnits} pcs open)</th></tr>
             ${agg.map(r => `
               <tr style="background:var(--bg-2)">
                 <td style="font-family:var(--f-mono,monospace);font-size:12px">${esc(r.code)}</td>
@@ -3509,8 +3509,8 @@ function renderElashryPopup() {
   const sentValue = sent.reduce((s, l) => s + l.qty * l.buyPrice, 0);
   const sentSection = sent.length ? `
     <div style="margin:18px 14px 4px;display:flex;flex-wrap:wrap;align-items:center;gap:8px">
-      <span style="font-weight:800;font-size:13px">🏭 تم إرجاعها للمخزن الرئيسي</span>
-      <span style="font-size:12px;color:var(--muted)">${sent.length} سطر · ${sentUnits} قطعة · EGP ${fmt(sentValue)}</span>
+      <span style="font-weight:800;font-size:13px">🏭 Returned to the main warehouse</span>
+      <span style="font-size:12px;color:var(--muted)">${sent.length} lines · ${sentUnits} pcs · EGP ${fmt(sentValue)}</span>
     </div>
     <div class="table-wrap" style="margin:0 2px;opacity:.92">
       <table style="font-size:12px">
@@ -3526,7 +3526,7 @@ function renderElashryPopup() {
             <td style="font-family:var(--f-mono,monospace)">EGP ${fmt(l.buyPrice)}</td>
             <td><span class="badge b-orange">${esc(l.orderCode || '—')}</span></td>
             <td style="font-family:var(--f-mono,monospace);color:var(--muted)">${esc(String(l.sentAt).slice(0, 16).replace('T', ' '))}</td>
-            <td style="text-align:center"><button class="btn btn-ghost btn-xs" title="رجّع إلى قائمة الانتظار" onclick="unmarkReturnSentToElashry('${l.orderId}', ${l.lineIdx})">↶ تراجع</button></td>
+            <td style="text-align:center"><button class="btn btn-ghost btn-xs" title="Move back to the waiting list" onclick="unmarkReturnSentToElashry('${l.orderId}', ${l.lineIdx})">↶ تراجع</button></td>
           </tr>`).join('')}</tbody>
       </table>
     </div>` : '';
