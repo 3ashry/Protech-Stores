@@ -6734,48 +6734,98 @@ function scanReturnInvoice() {
 }
 window.scanReturnInvoice = scanReturnInvoice;
 
-function _riRows() {
-  const parsed = _ri.parsed; if (!parsed) return [];
-  const byCode = new Map((cache.products || []).map(p => [String(p.code || '').toUpperCase(), p]));
-  return Object.keys(parsed.invoiceMap).map(code => {
-    const qty = parsed.invoiceMap[code] || 0;
-    const list = parseFloat((parsed.priceMap[code] || {}).list || 0) || 0;
-    const retBuyUnit = Math.round(list * 0.97 * 100) / 100;
-    const prod = byCode.get(String(code).toUpperCase());
-    const sysBuyUnit = prod ? (parseFloat(prod.buy_price || 0) || 0) : 0;
-    const delta = Math.round((retBuyUnit - sysBuyUnit) * 100) / 100;
-    return { code, name: prod?.name || '', qty, list, retBuyUnit, sysBuyUnit, delta, elashry_code: prod?.elashry_code || '', productId: prod?.id || null };
-  });
+// Reconcile the parsed return invoice against what the warehouse actually
+// has pending for Elashry (returnsAwaitingSupplier): per returned ORDER it
+// gets X = total buy price at shipping, and Z = total buy from this return
+// invoice, and per PRODUCT it compares the returned quantity vs the invoice's.
+function _riReconcile() {
+  const parsed = _ri.parsed;
+  const byCodeProd = new Map((cache.products || []).map(p => [String(p.code || '').toUpperCase(), p]));
+  const invoiceBuy = {}, invoiceQty = {};
+  if (parsed) {
+    for (const code of Object.keys(parsed.invoiceMap)) {
+      invoiceQty[code] = parsed.invoiceMap[code] || 0;
+      const list = parseFloat((parsed.priceMap[code] || {}).list || 0) || 0;
+      invoiceBuy[code] = Math.round(list * 0.97 * 100) / 100;
+    }
+  }
+  // Expected returns = lines of orders in the Elashry list (received back,
+  // pending supplier credit). Each line carries its shipping buy price (X).
+  const exp = (typeof returnsAwaitingSupplier === 'function' ? returnsAwaitingSupplier() : [])
+    .filter(l => l.status !== 'reused'); // "reused" lines are kept/sold, not returned to Elashry
+  const ordersMap = new Map();
+  const expQty = {};
+  for (const l of exp) {
+    const code = String(l.code || '').toUpperCase();
+    expQty[code] = (expQty[code] || 0) + l.qty;
+    let o = ordersMap.get(l.orderId);
+    if (!o) { o = { orderId: l.orderId, orderCode: l.orderCode, customer: l.customer, lines: [] }; ordersMap.set(l.orderId, o); }
+    o.lines.push({ code, name: l.name, qty: l.qty, buyX: parseFloat(l.buyPrice || 0) || 0 });
+  }
+  const orders = [];
+  for (const o of ordersMap.values()) {
+    let X = 0, Z = 0; let onInvoice = false;
+    for (const ln of o.lines) {
+      X += ln.buyX * ln.qty;
+      const zUnit = invoiceBuy[ln.code];
+      if (zUnit != null) { Z += zUnit * ln.qty; onInvoice = true; }
+    }
+    orders.push({ ...o, X: Math.round(X * 100) / 100, Z: Math.round(Z * 100) / 100, onInvoice, match: Math.abs(X - Z) < 0.01 });
+  }
+  const codes = new Set([...Object.keys(invoiceQty), ...Object.keys(expQty)]);
+  const qtyRows = [];
+  for (const code of codes) {
+    const iq = invoiceQty[code] || 0, eq = expQty[code] || 0;
+    const prod = byCodeProd.get(code);
+    qtyRows.push({ code, name: prod?.name || '', invoiceQty: iq, expectedQty: eq, dq: iq - eq, buyUnit: invoiceBuy[code] || 0, elashry_code: prod?.elashry_code || '', productId: prod?.id || null });
+  }
+  qtyRows.sort((a, b) => Math.abs(b.dq) - Math.abs(a.dq));
+  const creditTotal = Math.round(Object.keys(invoiceQty).reduce((a, c) => a + (invoiceBuy[c] || 0) * invoiceQty[c], 0) * 100) / 100;
+  const coveredOrders = orders.filter(o => o.onInvoice);
+  const priceMismatch = coveredOrders.filter(o => !o.match).length;
+  const qtyMismatch = qtyRows.filter(r => r.dq !== 0).length;
+  return { orders, coveredOrders, qtyRows, creditTotal, priceMismatch, qtyMismatch };
 }
 
 function renderReturnInvoiceCompare() {
   const host = document.getElementById('ri-compare'); if (!host) return;
-  const rows = _riRows();
-  if (!rows.length) { host.innerHTML = '<div style="color:var(--muted);padding:10px">No products matched — check the pasted text, or set the products\' Elashry codes.</div>'; return; }
-  const creditTotal = rows.reduce((a, r) => a + r.retBuyUnit * r.qty, 0);
-  const mismatches = rows.filter(r => Math.abs(r.delta) >= 0.01).length;
-  host.innerHTML = `
+  if (!_ri.parsed || !Object.keys(_ri.parsed.invoiceMap).length) { host.innerHTML = '<div style="color:var(--muted);padding:10px">No products matched — check the pasted text, or set the products\' Elashry codes.</div>'; return; }
+  const rec = _riReconcile();
+  const qtyTable = `
+    <div style="font-weight:800;font-size:13px;margin:4px 0 6px">1) Quantity check — return invoice vs what's in the warehouse</div>
     <div class="table-wrap"><table style="width:100%;font-size:12px">
-      <thead><tr>
-        <th>Code</th><th>Name</th><th style="text-align:center">Qty</th>
-        <th style="text-align:right">Return buy/unit</th><th style="text-align:right">System buy/unit</th>
-        <th style="text-align:right">Δ</th><th>Elashry code</th>
-      </tr></thead>
-      <tbody>${rows.map(r => `
-        <tr style="${Math.abs(r.delta) >= 0.01 ? 'background:#fef2f2' : ''}">
+      <thead><tr><th>Code</th><th>Name</th><th style="text-align:center">Invoice qty</th><th style="text-align:center">Warehouse qty</th><th style="text-align:center">Δ</th><th style="text-align:right">Buy/unit</th><th>Elashry code</th></tr></thead>
+      <tbody>${rec.qtyRows.map(r => `
+        <tr style="${r.dq !== 0 ? 'background:#fef2f2' : ''}">
           <td style="font-family:var(--f-mono,monospace)">${esc(r.code)}</td>
           <td>${esc(r.name)}</td>
-          <td style="text-align:center"><input value="${r.qty}" onchange="editReturnQty('${esc(r.code)}', this.value)" style="width:48px;text-align:center;border:1px solid var(--line);border-radius:5px;padding:3px"></td>
-          <td style="text-align:right">EGP ${fmt(r.retBuyUnit)}</td>
-          <td style="text-align:right">EGP ${fmt(r.sysBuyUnit)}</td>
-          <td style="text-align:right;font-weight:800;color:${Math.abs(r.delta) < 0.01 ? '#16a34a' : '#dc2626'}">${r.delta > 0 ? '+' : ''}${fmt(r.delta)}</td>
-          <td><input value="${esc(r.elashry_code)}" placeholder="كود الصنف" onchange="setRowElashryCode('${esc(r.code)}', this.value)" style="width:90px;border:1px solid var(--line);border-radius:5px;padding:3px;font-size:11px"></td>
+          <td style="text-align:center"><input value="${r.invoiceQty}" onchange="editReturnQty('${esc(r.code)}', this.value)" style="width:46px;text-align:center;border:1px solid var(--line);border-radius:5px;padding:3px"></td>
+          <td style="text-align:center">${r.expectedQty}</td>
+          <td style="text-align:center;font-weight:800;color:${r.dq === 0 ? '#16a34a' : '#dc2626'}">${r.dq > 0 ? '+' : ''}${r.dq}</td>
+          <td style="text-align:right">EGP ${fmt(r.buyUnit)}</td>
+          <td><input value="${esc(r.elashry_code)}" placeholder="كود الصنف" onchange="setRowElashryCode('${esc(r.code)}', this.value)" style="width:84px;border:1px solid var(--line);border-radius:5px;padding:3px;font-size:11px"></td>
         </tr>`).join('')}</tbody>
-    </table></div>
-    <div class="fin-row" style="margin-top:10px;font-weight:800"><span>Total return credit</span><span>EGP ${fmt(creditTotal)}</span></div>
-    ${mismatches
-      ? `<div style="margin-top:6px;color:#dc2626;font-size:12px">⚠️ ${mismatches} row${mismatches === 1 ? '' : 's'} where the credited buy price ≠ the system's recorded buy price — you'll be asked to confirm before saving.</div>`
-      : '<div style="margin-top:6px;color:#16a34a;font-size:12px">✓ All credited buy prices match the system.</div>'}`;
+    </table></div>`;
+  const orderTable = rec.coveredOrders.length ? `
+    <div style="font-weight:800;font-size:13px;margin:14px 0 6px">2) Per-order buy price — X (at shipping) vs Z (this return invoice)</div>
+    <div class="table-wrap"><table style="width:100%;font-size:12px">
+      <thead><tr><th>Order</th><th>Customer</th><th style="text-align:right">X — shipping buy</th><th style="text-align:right">Z — return buy</th><th style="text-align:right">Δ</th><th style="text-align:center">Match</th></tr></thead>
+      <tbody>${rec.coveredOrders.map(o => `
+        <tr style="${o.match ? '' : 'background:#fef2f2'}">
+          <td style="font-family:var(--f-mono,monospace)">${esc(o.orderCode)}</td>
+          <td>${esc(o.customer)}</td>
+          <td style="text-align:right">EGP ${fmt(o.X)}</td>
+          <td style="text-align:right">EGP ${fmt(o.Z)}</td>
+          <td style="text-align:right;font-weight:800;color:${o.match ? '#16a34a' : '#dc2626'}">${o.X - o.Z > 0 ? '+' : ''}${fmt(o.X - o.Z)}</td>
+          <td style="text-align:center">${o.match ? '✅' : '⚠️'}</td>
+        </tr>`).join('')}</tbody>
+    </table></div>` : '<div style="margin-top:12px;color:var(--muted);font-size:12px">No warehouse returns in the Elashry list match these products — mark the returned orders with 📦 Send to Elashry list first, or this invoice covers returns not yet in the warehouse.</div>';
+  const problems = rec.qtyMismatch + rec.priceMismatch;
+  host.innerHTML = qtyTable + orderTable + `
+    <div class="fin-row" style="margin-top:12px;font-weight:800"><span>Total return credit (subtracted from what you owe Elashry)</span><span>EGP ${fmt(rec.creditTotal)}</span></div>
+    ${problems
+      ? `<div style="margin-top:6px;color:#dc2626;font-size:12px">⚠️ ${rec.qtyMismatch} quantity mismatch${rec.qtyMismatch === 1 ? '' : 'es'} · ${rec.priceMismatch} order${rec.priceMismatch === 1 ? '' : 's'} where X ≠ Z — you'll be asked to confirm before saving.</div>`
+      : '<div style="margin-top:6px;color:#16a34a;font-size:12px">✓ Quantities and buy prices all match.</div>'}`;
 }
 window.renderReturnInvoiceCompare = renderReturnInvoiceCompare;
 
@@ -6797,33 +6847,34 @@ window.setRowElashryCode = setRowElashryCode;
 
 async function saveReturnInvoice() {
   if (!_ri.parsed || !Object.keys(_ri.parsed.invoiceMap).length) { showToast('Scan a return invoice first'); return; }
-  const rows = _riRows();
-  const mism = rows.filter(r => Math.abs(r.delta) >= 0.01);
-  if (mism.length) {
-    const detail = mism.map(r => `• ${r.code}: return ${fmt(r.retBuyUnit)} vs system ${fmt(r.sysBuyUnit)}`).join('\n');
-    if (!confirm(`${mism.length} row(s) have a buy-price mismatch:\n\n${detail}\n\nSave the return invoice anyway?\n(Cancel to discard and upload another.)`)) return;
+  const rec = _riReconcile();
+  if (rec.qtyMismatch || rec.priceMismatch) {
+    const qd = rec.qtyRows.filter(r => r.dq !== 0).map(r => `• ${r.code}: invoice ${r.invoiceQty} vs warehouse ${r.expectedQty}`);
+    const pd = rec.coveredOrders.filter(o => !o.match).map(o => `• ${o.orderCode}: X ${fmt(o.X)} vs Z ${fmt(o.Z)}`);
+    const detail = [...qd, ...pd].join('\n');
+    if (!confirm(`Mismatches found:\n\n${detail}\n\nSave the return invoice anyway?\n(Cancel to discard and upload a corrected one.)`)) return;
   }
-  const creditTotal = Math.round(rows.reduce((a, r) => a + r.retBuyUnit * r.qty, 0) * 100) / 100;
   const serial = (document.getElementById('ri-serial')?.value || '').trim() || null;
   const rdate = (document.getElementById('ri-date')?.value || '').trim() || null;
   const record = {
     id: genId(),
     name: `Elashry return — ${rdate || today()}${serial ? ' (#' + serial + ')' : ''}`,
     return_date: rdate, dispense_date: null, invoice_serial: serial,
-    lines: rows.map(r => ({ code: r.code, name: r.name, qty: r.qty, list: r.list, buy: r.retBuyUnit, line_credit: Math.round(r.retBuyUnit * r.qty * 100) / 100, sys_buy: r.sysBuyUnit, delta: r.delta })),
-    credit_total: creditTotal,
+    lines: rec.qtyRows.map(r => ({ code: r.code, name: r.name, invoice_qty: r.invoiceQty, warehouse_qty: r.expectedQty, dq: r.dq, buy: r.buyUnit, line_credit: Math.round(r.buyUnit * r.invoiceQty * 100) / 100 })),
+    orders: rec.coveredOrders.map(o => ({ code: o.orderCode, X: o.X, Z: o.Z, match: o.match })),
+    credit_total: rec.creditTotal,
     invoice_text: (document.getElementById('ri-text')?.value || '').trim(),
     original_file: _ri.pendingFile || null,
-    has_mismatch: mism.length > 0,
+    has_mismatch: (rec.qtyMismatch + rec.priceMismatch) > 0,
     created_at: new Date().toISOString(),
   };
   try {
     await dbInsert('supplier_returns', record);
     (cache.supplierReturns = cache.supplierReturns || []).unshift(record);
-    // Auto-learn: persist any entered/confirmed Elashry codes onto the products.
+    // Auto-learn Elashry codes.
     const edits = _ri._codeEdits || {};
     let learned = 0;
-    for (const r of rows) {
+    for (const r of rec.qtyRows) {
       const entered = String(edits[String(r.code).toUpperCase()] ?? r.elashry_code ?? '').trim();
       if (entered && r.productId) {
         const prod = cache.products.find(p => p.id === r.productId);
@@ -6832,8 +6883,12 @@ async function saveReturnInvoice() {
         }
       }
     }
-    try { logAudit('return.save', { entity: 'supplier_returns', entity_id: serial || record.id, summary: `Return invoice ${serial ? '#' + serial : ''} — credit EGP ${fmt(creditTotal)} (${rows.length} SKUs)${mism.length ? ' · ' + mism.length + ' price mismatch' : ''}`, new_value: { credit: creditTotal, skus: rows.length, mismatches: mism.length } }); } catch (_) {}
-    showToast(`Return saved ✓ — EGP ${fmt(creditTotal)} credited${learned ? ` · ${learned} Elashry codes learned` : ''}`);
+    // Stamp the covered orders as credited so they clear from "credits pending".
+    for (const o of rec.coveredOrders) {
+      try { await dbUpdate('orders', o.orderId, { supplier_return_invoice_id: record.id }); const i = cache.orders.findIndex(x => x.id === o.orderId); if (i >= 0) cache.orders[i].supplier_return_invoice_id = record.id; } catch (_) {}
+    }
+    try { logAudit('return.save', { entity: 'supplier_returns', entity_id: serial || record.id, summary: `Return invoice ${serial ? '#' + serial : ''} — credit EGP ${fmt(rec.creditTotal)} · ${rec.coveredOrders.length} orders${record.has_mismatch ? ' · mismatch saved' : ''}`, new_value: { credit: rec.creditTotal, orders: rec.coveredOrders.length, qtyMismatch: rec.qtyMismatch, priceMismatch: rec.priceMismatch } }); } catch (_) {}
+    showToast(`Return saved ✓ — EGP ${fmt(rec.creditTotal)} credited${learned ? ` · ${learned} codes learned` : ''}`);
     closeModal();
     renderAll();
   } catch (e) {
