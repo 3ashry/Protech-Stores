@@ -4216,11 +4216,11 @@ function finBuyCostOf(o) {
 // Delivered orders bucket by actual delivery date; everything else falls
 // back to created_at so historical rows still land in a month.
 function finMonthOfOrder(o) { return cairoYM(o.delivered_at) || cairoYM(o.created_at) || cairoYM(o.date); }
-// For the financial P&L we bucket by Bosta's cash-cycle SETTLEMENT date when
-// it's known (settled_at), to match how Bosta reports each month. Only new
-// orders get a settled_at (stamped when the sync first sees the cycle close),
-// so historical orders keep their delivery-date month unchanged.
-function finMonthOfOrderFinancial(o) { return cairoYM(o.settled_at) || cairoYM(o.delivered_at) || cairoYM(o.created_at) || cairoYM(o.date); }
+// For the financial P&L we bucket each order by the date the ORDER WAS MADE
+// (created_at) — "orders made in September" count in September regardless of
+// when they were delivered. Falls back to the stored date / delivery date only
+// if created_at is missing.
+function finMonthOfOrderFinancial(o) { return cairoYM(o.created_at) || cairoYM(o.date) || cairoYM(o.delivered_at); }
 // An expense counts in its `belongs_month` override (YYYY-MM) when set —
 // e.g. an ad top-up paid Oct 31 you want counted in November — otherwise
 // in the month of its actual date, falling back to created_at.
@@ -4273,10 +4273,10 @@ function finMonthSeq() {
 function finComputeMonth(y, m) {
   const orders = cache.orders || [];
   const expenses = cache.expenses || [];
-  // Month basis = the day the order was DELIVERED (delivered_at), falling back
-  // to created_at when a delivery timestamp is missing. (Reverted from the
-  // Bosta-settlement basis per the owner's spec.)
-  const inM = (o) => finSameMonth(finMonthOfOrder(o), y, m);
+  // Month basis = the day the ORDER WAS MADE (created_at). Per the owner: in
+  // September we count orders made in September, in October orders made in
+  // October, etc.
+  const inM = (o) => finSameMonth(finMonthOfOrderFinancial(o), y, m);
   const delivered = orders.filter(o => o.status === 'Delivered' && inM(o));
   const returned  = orders.filter(o => o.status === 'Returned'  && inM(o));
 
