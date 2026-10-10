@@ -104,7 +104,7 @@
       <button class="nav-tab" onclick="go('returns')">Returns</button>
       <button class="nav-tab" onclick="go('financials')">Financials</button>
       <button class="nav-tab" onclick="go('invoices')">Invoices</button>
-      <button class="nav-tab" onclick="go('invoice-match')">📊 Invoice Match</button>
+      <button class="nav-tab" onclick="go('invoice-match')">🗂️ Prep Batches</button>
       <button class="nav-tab" onclick="go('carts')">🛒 Carts</button>
       <button class="nav-tab" onclick="go('accounts')">👥 Users</button>
       <button class="nav-tab" onclick="go('tasks')">📝 To-do</button>
@@ -346,8 +346,18 @@
   <!-- SUPPLIER INVOICE MATCH -->
   <div class="screen" id="screen-invoice-match">
     <div class="page-header">
-      <div class="page-title">Invoice <span>Match</span></div>
+      <div class="page-title">Prep <span>Batches</span></div>
     </div>
+
+    <!-- Phase 2: Batches board — every preparation day as a batch, with its
+         match status (tied to a supplier invoice) and buy total. -->
+    <div class="card" style="margin-bottom:14px">
+      <div class="card-header"><span class="card-title">🗂️ Prep batches — by preparation day</span>
+        <span id="im-batches-summary" style="margin-inline-start:auto;font-size:12px;color:var(--muted)"></span>
+      </div>
+      <div class="card-body" style="padding:0" id="im-batches"></div>
+    </div>
+
     <div class="card" style="margin-bottom:14px">
       <div class="card-header" style="flex-wrap:wrap;gap:12px">
         <span class="card-title">🗓️ Pick a day</span>
@@ -614,7 +624,7 @@
     <button class="sidebar-btn" onclick="goSb('inventory')"><span>📦</span> Inventory</button>
     <button class="sidebar-btn" onclick="goSb('financials')"><span>💰</span> Financials</button>
     <button class="sidebar-btn" onclick="goSb('invoices')"><span>🧾</span> Invoices</button>
-    <button class="sidebar-btn" onclick="goSb('invoice-match')"><span>📊</span> Invoice Match</button>
+    <button class="sidebar-btn" onclick="goSb('invoice-match')"><span>🗂️</span> Prep Batches</button>
     <button class="sidebar-btn" onclick="goSb('analytics')"><span>📊</span> Analytics</button>
 
     <div class="sidebar-group">Admin</div>

@@ -648,7 +648,64 @@ function renderInvoiceMatch() {
 
   // Rebuild the comparison table if there's already a scanned invoice.
   if (Object.keys(_im.invoiceMap).length) renderInvoiceCompare();
+  if (typeof renderBatchesBoard === 'function') renderBatchesBoard();
 }
+
+// Phase 2: the Batches board — every preparation day is a batch. Shows its
+// order count, units and buy total, and whether it's been matched to a
+// supplier invoice yet (pending batches are the ones still to reconcile
+// against Elashry's invoice). Clicking a batch loads it below.
+function renderBatchesBoard() {
+  const host = document.getElementById('im-batches'); if (!host) return;
+  const summary = document.getElementById('im-batches-summary');
+  const dates = _im.dates || [];
+  if (!dates.length) {
+    host.innerHTML = '<div class="empty" style="padding:24px"><div class="empty-icon">🗂️</div>No prepared orders yet — once the picker prepares orders they form a batch for that day</div>';
+    if (summary) summary.textContent = '';
+    return;
+  }
+  const savedByDate = {};
+  for (const r of (_im.saved || [])) {
+    const d = String(r.prepared_date || '').slice(0, 10);
+    if (d) (savedByDate[d] = savedByDate[d] || []).push(r);
+  }
+  const products = cache.products || [];
+  const buyOf = (o) => (o.products || []).reduce((s, p) => s + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0);
+  let pending = 0;
+  const rows = dates.map(d => {
+    const list = _im.ordersByDate[d] || [];
+    const units = list.reduce((s, o) => s + (o.products || []).reduce((a, p) => a + parseInt(p.qty || 1), 0), 0);
+    const buyTotal = list.reduce((s, o) => s + buyOf(o), 0);
+    const saved = savedByDate[d] || [];
+    const matched = saved.length > 0;
+    if (!matched) pending++;
+    const serials = saved.map(s => s.invoice_serial ? '#' + esc(s.invoice_serial) : (s.name ? esc(s.name) : 'saved')).join(', ');
+    const statusBadge = matched
+      ? `<span class="badge b-success">✅ Matched${serials ? ' · ' + serials : ''}</span>`
+      : '<span class="badge b-warning">⚠️ Not matched yet</span>';
+    const isSel = d === _im.selectedDate;
+    return `<div onclick="selectBatch('${d}')" style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line);cursor:pointer;${isSel ? 'background:#fff7ed' : ''}">
+      <span style="font-family:var(--f-mono,monospace);font-weight:800;min-width:100px">${esc(d)}</span>
+      <span style="font-size:12px;color:var(--muted);min-width:140px">${list.length} orders · ${units} pcs</span>
+      <span style="font-size:12px;min-width:120px">Buy: <b>EGP ${fmt(buyTotal)}</b></span>
+      <span style="margin-inline-start:auto">${statusBadge}</span>
+      <button class="btn ${matched ? 'btn-ghost' : 'btn-primary'} btn-xs" onclick="event.stopPropagation();selectBatch('${d}')">${matched ? 'View' : 'Match now'}</button>
+    </div>`;
+  }).join('');
+  host.innerHTML = rows;
+  if (summary) summary.textContent = `${dates.length} batch${dates.length === 1 ? '' : 'es'} · ${pending} pending match`;
+}
+window.renderBatchesBoard = renderBatchesBoard;
+
+// Load a batch (prep day) into the match area below.
+function selectBatch(d) {
+  const sel = document.getElementById('im-date-select');
+  if (sel) sel.value = d;
+  _im.selectedDate = d;
+  renderInvoiceMatch();
+  document.getElementById('im-two-cols')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+window.selectBatch = selectBatch;
 
 function addInvoiceAdjustment() {
   if (!_im.selectedDate) { showToast('Pick a date first'); return; }
@@ -1270,10 +1327,12 @@ async function loadSavedInvoices() {
     // Table probably missing — show a hint row rather than a scary error.
     if (/relation|does not exist|schema cache|supplier_invoices/i.test(String(e.message || ''))) {
       tbody.innerHTML = '<tr><td colspan="7" style="padding:20px;text-align:center;color:var(--muted)">Table not created yet — hit 💾 Save once to see the SQL you need.</td></tr>';
+      if (typeof renderBatchesBoard === 'function') renderBatchesBoard();
       return;
     }
   }
   renderSavedInvoices();
+  if (typeof renderBatchesBoard === 'function') renderBatchesBoard();
 }
 
 function renderSavedInvoices() {
