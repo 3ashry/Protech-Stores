@@ -57,7 +57,7 @@
     font-weight: 700 !important;
   }
 </style>
-<meta name="apple-mobile-web-app-title" content="بروتيك Admin" />
+<meta name="apple-mobile-web-app-title" content="Protech Admin" />
 <link rel="apple-touch-icon" href="/favicon.png" />
 </head>
 <body>
@@ -178,7 +178,7 @@
     <div class="card">
       <div class="card-header" style="gap:10px;flex-wrap:wrap">
         <span class="card-title">All Products</span>
-        <input id="inv-search" type="search" oninput="renderInventory()" placeholder="🔍 ابحث بالكود أو اسم المنتج…"
+        <input id="inv-search" type="search" oninput="renderInventory()" placeholder="🔍 Search by code or product name…"
           style="flex:1;min-width:200px;max-width:360px;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px">
       </div>
       <div class="table-wrap">
@@ -199,7 +199,7 @@
       <button class="btn btn-ghost btn-sm" onclick="downloadOrdersFullReportExcel()" style="margin-inline-start:8px">📊 Full Report (Excel)</button>
       <button class="btn btn-ghost btn-sm" onclick="downloadDeliveredOrdersExcel()" style="margin-inline-start:8px">📦 Delivered — Full Report</button>
       <button class="btn btn-ghost btn-sm" onclick="downloadReturnsFullReportExcel()" style="margin-inline-start:8px">↩️ Returns — Full Report</button>
-      <button class="btn btn-ghost btn-sm" onclick="resetAllRevised()" style="margin-inline-start:8px" title="رجّع كل الطلبات إلى حالة غير مراجَع">🧹 إعادة ضبط المراجعة</button>
+      <button class="btn btn-ghost btn-sm" onclick="resetAllRevised()" style="margin-inline-start:8px" title="Reset all orders to not-reviewed">🧹 Reset reviews</button>
     </div>
     <div class="card">
       <div class="card-header" style="flex-wrap:wrap;gap:10px">
@@ -393,9 +393,9 @@
             <button class="btn btn-ghost btn-sm" onclick="clearInvoiceScan()">Clear</button>
           </div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <label for="im-invoice-serial" style="font-weight:700;font-size:12px;white-space:nowrap">📄 مسلسل اذن البيع</label>
+            <label for="im-invoice-serial" style="font-weight:700;font-size:12px;white-space:nowrap">📄 Invoice serial (مسلسل اذن البيع)</label>
             <input type="text" id="im-invoice-serial" oninput="onInvoiceSerialInput(event)"
-              placeholder="يُستخرج تلقائياً من الـ PDF — عدّله لو احتجت"
+              placeholder="Auto-extracted from the PDF — edit if needed"
               style="flex:1;min-width:160px;padding:8px 10px;border:1.5px solid var(--line);border-radius:8px;font-family:var(--f-mono,monospace);font-size:13px;background:var(--bg)">
           </div>
           <textarea id="im-invoice-text" rows="10" placeholder="Paste supplier invoice text here…"
@@ -444,7 +444,7 @@
         <span id="im-price-summary" style="margin-inline-start:auto;font-size:12px;color:var(--muted)"></span>
       </div>
       <div style="padding:10px 16px;font-size:12px;color:var(--muted);line-height:1.55">
-        Per-unit invoice price = <b>سعر القائمة × 0.97</b> (list minus the fixed 3% supplier discount) — same value as <b>الإجمالي ÷ qty</b>. That's what your system stores on <code>buy_price</code>, so Δ &gt; 0 means Elashry charged more per unit than your system says, Δ &lt; 0 means less.
+        Per-unit invoice price = <b>list price × 0.97</b> (list minus the fixed 3% supplier discount) — same value as <b>total ÷ qty</b>. That's what your system stores on <code>buy_price</code>, so Δ &gt; 0 means Elashry charged more per unit than your system says, Δ &lt; 0 means less.
       </div>
       <div class="table-wrap">
         <table>
@@ -455,7 +455,7 @@
             <th style="text-align:center">System buy /unit</th>
             <th style="text-align:center">Invoice /unit</th>
             <th style="text-align:center">Δ /unit</th>
-            <th style="text-align:center">Invoice total (الإجمالى)</th>
+            <th style="text-align:center">Invoice total</th>
             <th>Status</th>
           </tr></thead>
           <tbody id="im-price-tbody"></tbody>
@@ -543,12 +543,12 @@
     <div class="card">
       <div style="padding:16px;display:flex;flex-direction:column;gap:12px">
         <div style="display:flex;gap:10px;align-items:center">
-          <input type="text" id="task-input" placeholder="اكتب مهمة جديدة…" onkeydown="if(event.key==='Enter')submitTypedTask()" style="flex:1;padding:12px 14px;border:1.5px solid var(--line);border-radius:10px;font-size:15px;font-family:inherit">
-          <button class="btn btn-primary" onclick="submitTypedTask()" style="white-space:nowrap">+ إضافة</button>
+          <input type="text" id="task-input" placeholder="Type a new task…" onkeydown="if(event.key==='Enter')submitTypedTask()" style="flex:1;padding:12px 14px;border:1.5px solid var(--line);border-radius:10px;font-size:15px;font-family:inherit">
+          <button class="btn btn-primary" onclick="submitTypedTask()" style="white-space:nowrap">+ Add</button>
         </div>
         <button id="voice-btn" class="btn" onclick="toggleVoiceCapture()" style="background:var(--orange);color:#fff;font-size:16px;font-weight:800;padding:16px;border:0;border-radius:12px;display:flex;align-items:center;justify-content:center;gap:10px">
           <span id="voice-icon" style="font-size:22px">🎤</span>
-          <span id="voice-label">اضغط للتحدث وإضافة مهمة</span>
+          <span id="voice-label">Tap to speak and add a task</span>
         </button>
         <div id="voice-hint" style="font-size:12px;color:var(--muted);text-align:center;min-height:16px"></div>
       </div>
@@ -557,10 +557,10 @@
       <div class="card-header" style="gap:8px;flex-wrap:wrap">
         <span class="card-title">Tasks</span>
         <div id="task-filter" style="display:flex;gap:6px;margin-inline-start:auto">
-          <button class="btn btn-ghost btn-xs task-fbtn active" data-filter="all" onclick="setTaskFilter('all')">الكل</button>
-          <button class="btn btn-ghost btn-xs task-fbtn" data-filter="todo" onclick="setTaskFilter('todo')">🔲 لم يبدأ</button>
-          <button class="btn btn-ghost btn-xs task-fbtn" data-filter="in_progress" onclick="setTaskFilter('in_progress')">🔄 يعمل عليها</button>
-          <button class="btn btn-ghost btn-xs task-fbtn" data-filter="done" onclick="setTaskFilter('done')">✅ منتهية</button>
+          <button class="btn btn-ghost btn-xs task-fbtn active" data-filter="all" onclick="setTaskFilter('all')">All</button>
+          <button class="btn btn-ghost btn-xs task-fbtn" data-filter="todo" onclick="setTaskFilter('todo')">🔲 To do</button>
+          <button class="btn btn-ghost btn-xs task-fbtn" data-filter="in_progress" onclick="setTaskFilter('in_progress')">🔄 In progress</button>
+          <button class="btn btn-ghost btn-xs task-fbtn" data-filter="done" onclick="setTaskFilter('done')">✅ Done</button>
         </div>
       </div>
       <div id="tasks-body" style="padding:12px"></div>
@@ -624,12 +624,12 @@
 <div id="orders-fab-stack" style="display:none;position:fixed;bottom:20px;inset-inline-end:20px;z-index:9999;flex-direction:column;align-items:flex-end;gap:10px;pointer-events:none">
   <button type="button" id="orders-undo-fab" onclick="undoLastOrdersAction()"
     style="display:none;align-items:center;gap:10px;padding:11px 16px;border:1.5px solid #e5e7eb;border-radius:999px;background:#fff;color:#111;font-weight:700;font-size:13px;box-shadow:0 6px 18px rgba(0,0,0,.08);cursor:pointer;pointer-events:auto">
-    <span>↶ تراجع</span>
+    <span>↶ Undo</span>
     <span id="orders-undo-fab-label" style="font-weight:500;color:#6b7280;font-size:12px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
   </button>
   <button type="button" id="elashry-fab" onclick="openElashryReturnsPopup()"
     style="display:inline-flex;align-items:center;gap:10px;padding:14px 20px;border:0;border-radius:999px;background:#F26A21;color:#fff;font-weight:800;font-size:14px;box-shadow:0 10px 24px rgba(242,106,33,.35);cursor:pointer;pointer-events:auto">
-    <span>📦 قائمة الأشري</span>
+    <span>📦 Elashry list</span>
     <span id="elashry-fab-count" style="min-width:22px;height:22px;padding:0 6px;border-radius:999px;background:#fff;color:#F26A21;font-size:12px;font-weight:800;display:inline-flex;align-items:center;justify-content:center">0</span>
   </button>
 </div>
@@ -896,7 +896,7 @@
   <div class="modal" style="max-width:1000px">
     <span class="modal-handle"></span>
     <div class="modal-header">
-      <span class="modal-title">📦 قائمة المرتجعات للأشري</span>
+      <span class="modal-title">📦 Elashry returns list</span>
       <button class="close-btn" onclick="closeModal()">✕</button>
     </div>
     <div id="m-elashry-body" style="padding:4px 2px"></div>
