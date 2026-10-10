@@ -4216,6 +4216,11 @@ function finBuyCostOf(o) {
 // Delivered orders bucket by actual delivery date; everything else falls
 // back to created_at so historical rows still land in a month.
 function finMonthOfOrder(o) { return cairoYM(o.delivered_at) || cairoYM(o.created_at) || cairoYM(o.date); }
+// For the financial P&L we bucket by Bosta's cash-cycle SETTLEMENT date when
+// it's known (settled_at), to match how Bosta reports each month. Only new
+// orders get a settled_at (stamped when the sync first sees the cycle close),
+// so historical orders keep their delivery-date month unchanged.
+function finMonthOfOrderFinancial(o) { return cairoYM(o.settled_at) || cairoYM(o.delivered_at) || cairoYM(o.created_at) || cairoYM(o.date); }
 // An expense counts in its `belongs_month` override (YYYY-MM) when set —
 // e.g. an ad top-up paid Oct 31 you want counted in November — otherwise
 // in the month of its actual date, falling back to created_at.
@@ -4268,7 +4273,7 @@ function finMonthSeq() {
 function finComputeMonth(y, m) {
   const orders = cache.orders || [];
   const expenses = cache.expenses || [];
-  const inM = (o) => finSameMonth(finMonthOfOrder(o), y, m);
+  const inM = (o) => finSameMonth(finMonthOfOrderFinancial(o), y, m);
   const delivered = orders.filter(o => o.status === 'Delivered' && inM(o));
   const returned  = orders.filter(o => o.status === 'Returned'  && inM(o));
 
