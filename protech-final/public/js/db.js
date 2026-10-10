@@ -41,10 +41,58 @@ async function refreshSession() {
   } catch { return false; }
 }
 
+// ── APP ROLE (Phase 1) ──────────────────────────────────────────────
+// The DB is the real guard: every money/cost table is gated to is_admin()
+// via RLS, so a non-admin login simply gets no rows. This layer is the
+// cosmetic companion — it hides money UI so a non-admin never sees empty
+// Financials/Invoices/Inventory panels. It fails OPEN to 'admin' on any
+// network error so the owner can never be locked out of their own tools.
+let currentUserRole = 'admin';
+function isAdminRole() { return currentUserRole === 'admin'; }
+
+async function loadUserRole() {
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/profiles?select=role`, {
+      headers: { apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + (accessToken || SUPABASE_ANON_KEY) }
+    });
+    if (r.ok) {
+      const rows = await r.json().catch(() => []);
+      // Successful read + an admin row → admin. Successful read with no
+      // row (a fresh account) or an explicit non-admin role → warehouse.
+      currentUserRole = (Array.isArray(rows) && rows[0] && rows[0].role === 'admin') ? 'admin' : 'warehouse';
+    } else {
+      currentUserRole = 'admin'; // couldn't check — don't lock the owner out
+    }
+  } catch { currentUserRole = 'admin'; }
+  applyRoleGating();
+}
+
+// Hide money/admin navigation for non-admins. Operational screens
+// (home, orders, returns, carts, to-do) stay visible.
+function applyRoleGating() {
+  try {
+    document.body.dataset.role = currentUserRole;
+    const adminOnly = ['financials', 'invoices', 'analytics', 'accounts', 'inventory', 'invoice-match'];
+    const hide = !isAdminRole();
+    document.querySelectorAll('#top-nav .nav-tab, .bnav-btn, .sidebar-btn').forEach(btn => {
+      const oc = btn.getAttribute('onclick') || '';
+      const m = oc.match(/go(?:Sb)?\(['"]([^'"]+)['"]\)/);
+      if (m && adminOnly.includes(m[1])) btn.style.display = hide ? 'none' : '';
+    });
+    // If a non-admin is parked on a now-hidden money screen, bounce home.
+    if (hide && typeof go === 'function') {
+      const active = document.querySelector('.screen.active');
+      const activeId = active ? active.id.replace(/^screen-/, '') : '';
+      if (adminOnly.includes(activeId)) go('home');
+    }
+  } catch {}
+}
+
 function showApp() {
   isLoggedIn = true;
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = 'block';
+  loadUserRole();
   loadAll();
   try { const a = new Audio('/cash.mp3'); a.volume = 0; a.play().catch(()=>{}); } catch(e) {}
 }
@@ -224,7 +272,7 @@ function localDelete(table, id) {
 }
 
 // ── IN-MEMORY CACHE ──
-let cache = { products: [], orders: [], expenses: [], feedbacks: [], metaAdSpend: [], supplierReturns: [] };
+let cache = { products: [], orders: [], expenses: [], feedbacks: [], metaAdSpend: [], supplierReturns: [], mbMonths: [] };
 
 async function loadAll() {
   try {
@@ -248,6 +296,9 @@ async function loadAll() {
     // Elashry return invoices — credits that reduce what we owe the supplier.
     try { cache.supplierReturns = await dbFetch('supplier_returns', { order: 'created_at.desc' }) || []; }
     catch (_) { cache.supplierReturns = cache.supplierReturns || []; }
+    // Media-buyer per-month records (adjustments + lock snapshots).
+    try { cache.mbMonths = await dbFetch('media_buyer_months', { order: 'month.desc' }) || []; }
+    catch (_) { cache.mbMonths = cache.mbMonths || []; }
   } catch (e) {
     console.warn('DB load error:', e);
     showToast('Connection error — check your internet');
