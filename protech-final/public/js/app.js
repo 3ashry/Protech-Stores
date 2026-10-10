@@ -4216,7 +4216,17 @@ function finBuyCostOf(o) {
 // Delivered orders bucket by actual delivery date; everything else falls
 // back to created_at so historical rows still land in a month.
 function finMonthOfOrder(o) { return cairoYM(o.delivered_at) || cairoYM(o.created_at) || cairoYM(o.date); }
-function finMonthOfExpense(e) { return cairoYM(e.date) || cairoYM(e.created_at); }
+// An expense counts in its `belongs_month` override (YYYY-MM) when set —
+// e.g. an ad top-up paid Oct 31 you want counted in November — otherwise
+// in the month of its actual date, falling back to created_at.
+function cairoYMOfExpense(e) {
+  if (e && e.belongs_month) {
+    const m = String(e.belongs_month).match(/^(\d{4})-(\d{1,2})$/);
+    if (m) return { y: +m[1], m: +m[2] };
+  }
+  return cairoYM(e && e.date) || cairoYM(e && e.created_at);
+}
+function finMonthOfExpense(e) { return cairoYMOfExpense(e); }
 function finSameMonth(my, y, m) { return !!my && my.y === y && my.m === m; }
 
 // The earliest Cairo month that has any real activity (a delivered/returned
@@ -4742,14 +4752,24 @@ function renderFinancials() {
   // Expenses table (kept inside the Expenses action-card drawer).
   const generalExpenses = (cache.expenses || []).filter(e => e.category !== 'Elashry');
   const tbody = document.getElementById('exp-tbody');
-  if (tbody) tbody.innerHTML = generalExpenses.length ? generalExpenses.map(e => `
+  if (tbody) tbody.innerHTML = generalExpenses.length ? generalExpenses.map(e => {
+    const bm = e.belongs_month ? cairoYMOfExpense(e) : null;
+    const belongsNote = bm ? `<div style="font-size:11px;color:var(--accent,#F26A21);font-weight:600">→ ${FIN_MO_EN[bm.m - 1]} ${bm.y}</div>` : '';
+    const ref = e.txn_ref ? `<div style="font-size:12px"><span style="color:var(--muted)">#</span> ${esc(e.txn_ref)}</div>` : '';
+    const receipt = e.receipt_url ? `<a href="${esc(e.receipt_url)}" target="_blank" rel="noopener" title="View receipt"><img src="${esc(e.receipt_url)}" style="width:34px;height:34px;object-fit:cover;border-radius:6px;border:1px solid var(--line);vertical-align:middle"></a>` : '';
+    const refCell = (ref || receipt) ? `${ref}${receipt}` : '<span style="color:var(--muted)">—</span>';
+    return `
     <tr>
       <td><span class="badge b-orange">${esc(e.category)}</span></td>
       <td>${esc(e.description) || '—'}</td>
       <td>EGP ${fmt(e.amount)}</td>
-      <td>${esc(e.date)}</td>
-      <td><button class="btn btn-danger btn-xs" onclick="delExpense('${e.id}')">✕</button></td>
-    </tr>`).join('') : '<tr><td colspan="5"><div class="empty">No expenses recorded</div></td></tr>';
+      <td>${esc(e.date)}${belongsNote}</td>
+      <td>${refCell}</td>
+      <td><div class="actions">
+        <button class="btn btn-ghost btn-xs" onclick="editExpense('${e.id}')">Edit</button>
+        <button class="btn btn-danger btn-xs" onclick="delExpense('${e.id}')">✕</button>
+      </div></td>
+    </tr>`; }).join('') : '<tr><td colspan="6"><div class="empty">No expenses recorded</div></td></tr>';
 
   // New P&L dashboard (top of the screen).
   try {
@@ -5179,8 +5199,8 @@ function renderMediaBuyer() {
   const curY = _nowCairo.y;
   const curM = _nowCairo.m;                      // 1..12
   const _parseMonthYear = cairoYM;               // all month logic → Cairo
-  const monthOfExpense = (e) =>
-    _parseMonthYear(e.date) || _parseMonthYear(e.created_at);
+  // Honours the per-expense belongs_month override (see cairoYMOfExpense).
+  const monthOfExpense = (e) => cairoYMOfExpense(e);
   // For delivered-orders bucketing we prefer the ACTUAL delivery date
   // (the day Bosta finished the delivery, stamped into orders.delivered_at
   // by the sync). Falls back to created_at for historical rows that
@@ -5482,24 +5502,126 @@ function renderDeliveredMargin() {
 }
 
 // ── EXPENSES ──
-function openExpense(presetCategory) {
+// State for the expense modal: the id being edited (null = adding) and the
+// receipt the user picked this session (a File to upload, or kept URL).
+let _expenseEdit = null;
+let _expenseReceiptFile = null;
+let _expenseReceiptUrl = '';
+
+const _isoToday = () => new Date().toISOString().slice(0, 10);
+// Normalise any stored date (YYYY-MM-DD or DD/MM/YYYY) to the YYYY-MM-DD a
+// <input type=date> expects; blank for anything unparseable.
+function _toDateInput(v) {
+  const ym = cairoYM(v);
+  if (!ym) return '';
+  const s = String(v).trim();
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) return `${m[1]}-${String(+m[2]).padStart(2,'0')}-${String(+m[3]).padStart(2,'0')}`;
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[3]}-${String(+m[2]).padStart(2,'0')}-${String(+m[1]).padStart(2,'0')}`;
+  return '';
+}
+
+// open for a NEW expense (optional preset category), or to EDIT an existing one.
+function openExpense(presetCategory, existing) {
   showModal('tpl-expense');
-  document.getElementById('e-desc').value = '';
-  document.getElementById('e-amt').value = '';
-  if (presetCategory) { const el = document.getElementById('e-cat'); if (el) el.value = presetCategory; }
+  _expenseEdit = existing && existing.id ? existing.id : null;
+  _expenseReceiptFile = null;
+  _expenseReceiptUrl = (existing && existing.receipt_url) || '';
+  const $ = (id) => document.getElementById(id);
+  $('e-cat').value = (existing && existing.category) || presetCategory || 'Other';
+  $('e-desc').value = (existing && existing.description) || '';
+  $('e-amt').value = existing ? (existing.amount ?? '') : '';
+  $('e-date').value = existing ? _toDateInput(existing.date) : _isoToday();
+  $('e-belongs').value = (existing && existing.belongs_month) || '';
+  $('e-txn').value = (existing && existing.txn_ref) || '';
+  const fileEl = $('e-receipt-file'); if (fileEl) fileEl.value = '';
+  renderExpenseReceiptPreview();
+  const title = document.querySelector('#tpl-expense .modal-title');
+  if (title) title.textContent = _expenseEdit ? 'Edit Expense' : 'Add Expense';
+  const btn = $('e-save-btn'); if (btn) btn.textContent = _expenseEdit ? 'Save Changes' : 'Save Expense';
+}
+
+function editExpense(id) {
+  const e = (cache.expenses || []).find(x => x.id === id);
+  if (!e) { showToast('Expense not found'); return; }
+  openExpense(null, e);
+}
+
+function onExpenseReceiptChosen(ev) {
+  const f = ev.target.files && ev.target.files[0];
+  if (!f) return;
+  _expenseReceiptFile = f;
+  renderExpenseReceiptPreview(URL.createObjectURL(f));
+}
+
+function renderExpenseReceiptPreview(localUrl) {
+  const host = document.getElementById('e-receipt-preview');
+  if (!host) return;
+  const url = localUrl || _expenseReceiptUrl;
+  if (!url) { host.innerHTML = ''; return; }
+  host.innerHTML = `<div style="position:relative;display:inline-block">
+      <a href="${esc(url)}" target="_blank" rel="noopener"><img src="${esc(url)}" style="max-width:140px;max-height:140px;border-radius:8px;border:1px solid var(--line);object-fit:cover"></a>
+      <button type="button" onclick="clearExpenseReceipt()" style="position:absolute;top:2px;right:2px;width:22px;height:22px;background:rgba(200,0,0,.85);color:#fff;border:0;border-radius:50%;font-size:12px;cursor:pointer">✕</button>
+    </div>`;
+}
+
+function clearExpenseReceipt() {
+  _expenseReceiptFile = null;
+  _expenseReceiptUrl = '';
+  const fileEl = document.getElementById('e-receipt-file'); if (fileEl) fileEl.value = '';
+  renderExpenseReceiptPreview();
+}
+
+// Upload a receipt to the shared protech-media bucket under receipts/<id>/.
+// The returned URL is stored only on the admin-only expenses row, and the
+// path is unguessable (timestamp + random).
+async function uploadReceiptImage(file, expenseId) {
+  const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
+  const path = `receipts/${expenseId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+  const res = await fetch(`${SB_URL_IMG}/storage/v1/object/protech-media/${path}`, {
+    method: 'POST',
+    headers: { apikey: SB_KEY_IMG, Authorization: 'Bearer ' + (accessToken || SB_KEY_IMG), 'Content-Type': file.type || 'image/jpeg', 'x-upsert': 'true' },
+    body: file
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return `${SB_URL_IMG}/storage/v1/object/public/protech-media/${path}`;
 }
 
 async function saveExpense() {
   const category = document.getElementById('e-cat').value;
   const description = document.getElementById('e-desc').value.trim();
   const amount = parseFloat(document.getElementById('e-amt').value || 0);
+  const dateVal = document.getElementById('e-date').value || _isoToday();
+  const belongs = (document.getElementById('e-belongs').value || '').trim() || null;
+  const txn = (document.getElementById('e-txn').value || '').trim() || null;
   if (!amount) { showToast('Please enter an amount'); return; }
+  const btn = document.getElementById('e-save-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
   try {
-    const data = { id: genId(), category, description, amount, date: today(), created_at: new Date().toISOString() };
-    await dbInsert('expenses', data);
-    cache.expenses.unshift(data);
-    showToast('Expense saved ✓'); closeModal(); renderAll();
-  } catch (e) { showToast('Error: ' + e.message); }
+    const id = _expenseEdit || genId();
+    // Upload a freshly-picked receipt; otherwise keep whatever URL is set.
+    let receipt_url = _expenseReceiptUrl || null;
+    if (_expenseReceiptFile) receipt_url = await uploadReceiptImage(_expenseReceiptFile, id);
+    const fields = { category, description, amount, date: dateVal, belongs_month: belongs, txn_ref: txn, receipt_url };
+    if (_expenseEdit) {
+      await dbUpdate('expenses', id, fields);
+      const i = cache.expenses.findIndex(x => x.id === id);
+      if (i >= 0) cache.expenses[i] = { ...cache.expenses[i], ...fields };
+      showToast('Expense updated ✓');
+    } else {
+      const data = { id, created_at: new Date().toISOString(), ...fields };
+      await dbInsert('expenses', data);
+      cache.expenses.unshift(data);
+      showToast('Expense saved ✓');
+    }
+    _expenseEdit = null; _expenseReceiptFile = null; _expenseReceiptUrl = '';
+    closeModal(); renderAll();
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = _expenseEdit ? 'Save Changes' : 'Save Expense'; }
+  }
 }
 
 // Record a media-buyer payment as an expense; this resets "Owed now" back to ~0
@@ -6235,8 +6357,12 @@ function _finAoa(section, d) {
   ];
   if (section === 'expenses') return [
     ['Expenses'], [],
-    ['Category', 'Description', 'Amount (EGP)', 'Date'],
-    ...d.generalExpenses.map(e => [e.category || '', e.description || '', r2(e.amount), e.date || '']),
+    ['Category', 'Description', 'Amount (EGP)', 'Date', 'Counts in', 'Transaction #', 'Receipt'],
+    ...d.generalExpenses.map(e => {
+      const bm = e.belongs_month ? cairoYMOfExpense(e) : null;
+      return [e.category || '', e.description || '', r2(e.amount), e.date || '',
+        bm ? `${FIN_MO_EN[bm.m - 1]} ${bm.y}` : '', e.txn_ref || '', e.receipt_url || ''];
+    }),
   ];
   return [];
 }
