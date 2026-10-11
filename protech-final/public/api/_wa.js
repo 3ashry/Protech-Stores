@@ -26,6 +26,9 @@ const WA_CART_TEMPLATE = process.env.WA_CART_TEMPLATE || 'cart_recovery';
 //                   + 1 "I have a problem" quick-reply.
 const WA_PREPARED_TEMPLATE = process.env.WA_PREPARED_TEMPLATE || 'order_prepared';
 const WA_SHIPPED_TEMPLATE = process.env.WA_SHIPPED_TEMPLATE || 'order_shipped';
+// Confirmation REMINDER template — same confirm/cancel buttons as order_confirm,
+// sent when the customer hasn't answered. Body vars: {{1}} name {{2}} code {{3}} total.
+const WA_REMINDER_TEMPLATE = process.env.WA_REMINDER_TEMPLATE || 'order_reminder';
 
 export function waConfigured() {
   return !!(WA_TOKEN && WA_PHONE_NUMBER_ID);
@@ -131,6 +134,41 @@ export async function sendConfirmTemplate(order = {}) {
       type: 'template',
       template: {
         name: WA_TEMPLATE_NAME,
+        language: { code: WA_TEMPLATE_LANG },
+        components: [
+          { type: 'body', parameters: params.map(text => ({ type: 'text', text })) },
+          { type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: 'CONFIRM' }] },
+          { type: 'button', sub_type: 'quick_reply', index: '1', parameters: [{ type: 'payload', payload: 'CANCEL' }] },
+        ],
+      },
+    }),
+  });
+  const data = await r.json().catch(() => null);
+  if (!r.ok) return { ok: false, error: data };
+  return { ok: true, msgId: data?.messages?.[0]?.id || null };
+}
+
+// Confirmation reminder — fired when the customer never answered the first
+// confirmation. Uses the dedicated `order_reminder` template:
+//   {{1}} customer name   {{2}} order code   {{3}} grand total
+// Same buttons as order_confirm: index 0 -> CONFIRM, index 1 -> CANCEL (the
+// template's 3rd "call us" button is static and needs no parameter).
+// Returns { ok, msgId, error }.
+export async function sendReminderTemplate(order = {}) {
+  const params = [
+    String(order.customer_name || 'عميلنا العزيز'),
+    String(order.code || ''),
+    fmtNum(order.total || 0),
+  ];
+  const r = await fetch(`https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to: waPhone(order.phone),
+      type: 'template',
+      template: {
+        name: WA_REMINDER_TEMPLATE,
         language: { code: WA_TEMPLATE_LANG },
         components: [
           { type: 'body', parameters: params.map(text => ({ type: 'text', text })) },

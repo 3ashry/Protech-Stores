@@ -14,7 +14,7 @@
 //
 // Env: WA_* (see _wa.js), SUPABASE_URL, SUPABASE_KEY (service_role), CRON_SECRET,
 //      optional WA_CONFIRM_DELAY_HOURS (default 6).
-import { sendConfirmTemplate, sendFeedbackTemplate, sendCartRecoveryTemplate, sendPreparedTemplate, sendShippedTemplate, waConfigured } from './_wa.js';
+import { sendConfirmTemplate, sendReminderTemplate, sendFeedbackTemplate, sendCartRecoveryTemplate, sendPreparedTemplate, sendShippedTemplate, waConfigured } from './_wa.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
@@ -22,7 +22,7 @@ const CRON_SECRET = (process.env.CRON_SECRET || '').trim();
 // Phase-12 escalation timing. After the confirmation goes out with no reply,
 // send ONE reminder after WA_REMINDER_HOURS, then flag the order for a phone
 // call WA_CALL_AFTER_REMINDER_HOURS after that reminder.
-const REMINDER_HOURS = Math.max(1, parseFloat(process.env.WA_REMINDER_HOURS || '6') || 6);
+const REMINDER_HOURS = Math.max(1, parseFloat(process.env.WA_REMINDER_HOURS || '3') || 3);
 const CALL_AFTER_REMINDER_HOURS = Math.max(1, parseFloat(process.env.WA_CALL_AFTER_REMINDER_HOURS || '6') || 6);
 // Hours to wait after an order before sending the confirmation. Production is 6h.
 // A leftover sub-1-hour value (used while testing the flow) is IGNORED and falls
@@ -237,8 +237,10 @@ export default async function handler(req, res) {
     const remOrders = await sbGet(`orders?${remParts.join('&')}`);
     const remSent = [], remFailed = [];
     for (const o of remOrders) {
-      const r = await sendConfirmTemplate(o);
-      if (r.ok) { await sbPatch(o.id, { wa_confirm_reminder_at: new Date().toISOString() }); remSent.push({ code: o.code, msgId: r.msgId }); }
+      // Dedicated reminder template ("طلبك لسه مستني تأكيدك") with the same
+      // confirm/cancel buttons. Store its id so a tap on it maps to this order.
+      const r = await sendReminderTemplate(o);
+      if (r.ok) { await sbPatch(o.id, { wa_confirm_reminder_at: new Date().toISOString(), wa_confirm_reminder_msg_id: r.msgId }); remSent.push({ code: o.code, msgId: r.msgId }); }
       else remFailed.push({ code: o.code, error: r.error });
     }
     const callCutoff = new Date(now - (test ? 0 : CALL_AFTER_REMINDER_HOURS * 3600 * 1000)).toISOString();

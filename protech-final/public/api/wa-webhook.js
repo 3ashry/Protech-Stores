@@ -210,6 +210,8 @@ export default async function handler(req, res) {
       const repliedToId = msg.context?.id;
       if (repliedToId) {
         updated = await sbPatchRep(`orders?wa_msg_id=eq.${encodeURIComponent(repliedToId)}`, update);
+        // The tap may be on the 3h REMINDER rather than the first confirmation.
+        if (!updated.length) updated = await sbPatchRep(`orders?wa_confirm_reminder_msg_id=eq.${encodeURIComponent(repliedToId)}`, update);
         if (updated.length) matchedId = updated[0].id;
       }
 
