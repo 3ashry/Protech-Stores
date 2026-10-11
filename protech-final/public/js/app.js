@@ -6755,23 +6755,237 @@ function _sheet(aoa) {
 }
 const _today = () => new Date().toISOString().slice(0, 10);
 
-function downloadBostaExcel() { const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, _sheet(_finAoa('bosta', financeData())), 'Bosta'); _dlWb(wb, `Protech_Bosta_${_today()}.xlsx`); }
-function downloadElashryExcel() { const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, _sheet(_finAoa('elashry', financeData())), 'Elashry'); _dlWb(wb, `Protech_Elashry_${_today()}.xlsx`); }
-function downloadMediaBuyerExcel() { const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, _sheet(_finAoa('mediabuyer', financeData())), 'Media Buyer'); _dlWb(wb, `Protech_MediaBuyer_${_today()}.xlsx`); }
-function downloadExpensesExcel() { const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, _sheet(_finAoa('expenses', financeData())), 'Expenses'); _dlWb(wb, `Protech_Expenses_${_today()}.xlsx`); }
+// Per-tab buttons now produce the full single-source report so their numbers
+// can never disagree with the dashboard (old _finAoa/financeData kept unused).
+function downloadBostaExcel() { return downloadFinanceReportXlsx(); }
+function downloadElashryExcel() { return downloadFinanceReportXlsx(); }
+function downloadMediaBuyerExcel() { return downloadFinanceReportXlsx(); }
+function downloadExpensesExcel() { return downloadFinanceReportXlsx(); }
 
-// One workbook with every section on its own sheet.
-function downloadAllFinancesExcel() {
-  const d = financeData();
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, _sheet(_finAoa('bosta', d)), 'Bosta');
-  XLSX.utils.book_append_sheet(wb, _sheet(_finAoa('elashry', d)), 'Elashry');
-  XLSX.utils.book_append_sheet(wb, _sheet(_finAoa('mediabuyer', d)), 'Media Buyer');
-  XLSX.utils.book_append_sheet(wb, _sheet(_finAoa('expenses', d)), 'Expenses');
-  _dlWb(wb, `Protech_Finances_ALL_${_today()}.xlsx`);
-}
+// One workbook with every section on its own sheet — now the single-source
+// report (tables + embedded charts). Old per-section helpers above are kept
+// but every finance button points here so no export can drift.
+function downloadAllFinancesExcel() { return downloadFinanceReportXlsx(); }
 // Keep the old name (page-header button) pointing at the full export.
-function downloadFinancialsExcel() { downloadAllFinancesExcel(); }
+function downloadFinancialsExcel() { downloadFinanceReportXlsx(); }
+
+// ═══════════════════════════════════════════════════════════════════
+//  📊 SINGLE-SOURCE FINANCIAL REPORT  (tables + graphs)
+//  Everything below is built from the SAME model functions the
+//  dashboard uses (finComputeModel / finBostaSettlement /
+//  finElashryOwed / computeMediaBuyerMonth), so the exported numbers
+//  are always identical to what's on screen. Excel embeds the live
+//  charts as images; the PDF button prints the screen (charts + all).
+// ═══════════════════════════════════════════════════════════════════
+function finReportRows() {
+  const model = (typeof finComputeModel === 'function') ? finComputeModel() : { months: [] };
+  const bs = finBostaSettlement();
+  const eo = finElashryOwed();
+  const months = model.months || [];
+  const r2 = n => Math.round((parseFloat(n) || 0) * 100) / 100;
+  const moName = (mo) => `${FIN_MO_EN[mo.m - 1]} ${mo.y}`;
+
+  // Totals across all months (one source).
+  const T = months.reduce((a, mo) => ({
+    collected: a.collected + mo.collected,
+    shipping:  a.shipping  + mo.shippingTotal,
+    buying:    a.buying    + mo.totalBought,
+    returnsCr: a.returnsCr + mo.returnsCost,
+    paidAds:   a.paidAds   + mo.paidAds,
+    mediaBuyer:a.mediaBuyer+ mo.mediaBuyer,
+    prep:      a.prep      + (mo.prepSalary || 0),
+    other:     a.other     + (-mo.otherTotal),
+    result:    a.result    + mo.result,
+  }), { collected:0, shipping:0, buying:0, returnsCr:0, paidAds:0, mediaBuyer:0, prep:0, other:0, result:0 });
+
+  const sheets = [];
+
+  // ── Summary ──
+  sheets.push({ name: 'Summary', aoa: [
+    ['Protech — Financial Summary', _today()], [],
+    ['Bosta — total collected (delivered)', r2(bs.collected)],
+    ['Bosta — total shipping (del + ret)', r2(bs.shipping)],
+    ['Bosta — should receive', r2(bs.shouldReceive)],
+    ['Bosta — received so far', r2(bs.received)],
+    ['Bosta — still to receive', r2(bs.stillToReceive)], [],
+    ['Elashry — total taken', r2(eo.taken)],
+    ['Elashry — returned credit', r2(eo.returned)],
+    ['Elashry — invoice credits', r2(eo.credits)],
+    ['Elashry — paid', r2(eo.paid)],
+    ['Elashry — still owed', r2(eo.owed)], [],
+    ['All-time collected', r2(T.collected)],
+    ['All-time shipping', r2(T.shipping)],
+    ['All-time buying (gross)', r2(T.buying)],
+    ['All-time returns credit', r2(T.returnsCr)],
+    ['All-time paid ads', r2(T.paidAds)],
+    ['All-time media buyer', r2(T.mediaBuyer)],
+    ['All-time order-prep salary', r2(T.prep)],
+    ['All-time other expenses', r2(T.other)],
+    ['All-time profit (Σ months)', r2(T.result)],
+  ]});
+
+  // ── Months P&L ──
+  const moHead = ['Month', 'Completed', 'Returns', 'Collected', 'Shipping (del+ret)', 'Buying (gross)',
+    'Returns credit', 'Paid ads', 'Media buyer', 'Order-prep salary', 'Other exp', 'Profit'];
+  sheets.push({ name: 'Months', aoa: [
+    ['Monthly P&L — delivered + returned orders bucketed by the date the order was MADE'], [],
+    moHead,
+    ...months.map(mo => [moName(mo), mo.completedOrders, mo.refusedReturned,
+      r2(mo.collected), r2(mo.shippingTotal), r2(mo.totalBought), r2(mo.returnsCost),
+      r2(mo.paidAds), r2(mo.mediaBuyer), r2(mo.prepSalary || 0), r2(-mo.otherTotal), r2(mo.result)]),
+    ['TOTAL', '', '', r2(T.collected), r2(T.shipping), r2(T.buying), r2(T.returnsCr),
+      r2(T.paidAds), r2(T.mediaBuyer), r2(T.prep), r2(T.other), r2(T.result)],
+  ]});
+
+  // ── Bosta ──
+  const receipts = (typeof bostaCashCache !== 'undefined' && bostaCashCache.receipts) ? bostaCashCache.receipts : [];
+  sheets.push({ name: 'Bosta', aoa: [
+    ['Bosta — money to receive'], [],
+    ['Total collected (delivered)', r2(bs.collected)],
+    ['− Total shipping (del + ret)', -r2(bs.shipping)],
+    ['= Should receive from Bosta', r2(bs.shouldReceive)],
+    ['Received so far', r2(bs.received)],
+    ['Still to receive', r2(bs.stillToReceive)], [],
+    ['Bank transfers received'], ['Date', 'Amount (EGP)', 'Note'],
+    ...receipts.map(x => [x.date || '', r2(x.amount), x.note || '']),
+  ]});
+
+  // ── Elashry ──
+  const payments = (typeof supplierCache !== 'undefined' && supplierCache.payments) ? supplierCache.payments : [];
+  sheets.push({ name: 'Elashry', aoa: [
+    ['Elashry — supplier account'], [],
+    ['Total taken (Σ monthly buying)', r2(eo.taken)],
+    ['− Returned credit (Σ monthly returns)', -r2(eo.returned)],
+    ...(eo.credits ? [['− Return invoices credited', -r2(eo.credits)]] : []),
+    ['− Paid to Elashry', -r2(eo.paid)],
+    ['= Still owed', r2(eo.owed)], [],
+    ['Payments to Elashry'], ['Date', 'Amount (EGP)', 'Note'],
+    ...payments.map(x => [x.date || '', r2(x.amount), x.note || '']),
+  ]});
+
+  // ── Media buyer (per month, single source) ──
+  const mbRows = months.map(mo => {
+    const S = (typeof computeMediaBuyerMonth === 'function') ? computeMediaBuyerMonth(mo.y, mo.m) : null;
+    return S ? [moName(mo), r2(S.adsTopups), r2(S.adsShare), r2(S.salesNet), r2(S.salesShare),
+      r2(S.gross), r2(S.paid), r2(S.owed), S.staticMonth ? 'pinned' : 'computed'] : [moName(mo)];
+  });
+  sheets.push({ name: 'Media Buyer', aoa: [
+    ['Media-buyer salary — 20% of ad spend + 1% of (collected − delivered shipping)'], [],
+    ['Month', 'Ad spend', '20% ads', 'Net sales', '1% sales', 'Gross salary', 'Paid', 'Owed', 'Basis'],
+    ...mbRows,
+  ]});
+
+  // ── Expenses ──
+  sheets.push({ name: 'Expenses', aoa: [
+    ['Expenses — every logged entry'], [],
+    ['Category', 'Description', 'Amount (EGP)', 'Date', 'Counts in', 'Transaction #', 'Receipt'],
+    ...(cache.expenses || []).map(e => {
+      const bm = e.belongs_month ? cairoYMOfExpense(e) : null;
+      return [e.category || '', e.description || '', r2(e.amount), e.date || '',
+        bm ? `${FIN_MO_EN[bm.m - 1]} ${bm.y}` : '', e.txn_ref || '', e.receipt_url || ''];
+    }),
+  ]});
+
+  return sheets;
+}
+
+// Snapshot a live Chart.js canvas onto a white background → PNG data URL.
+function _finCanvasShot(id) {
+  const c = document.getElementById(id);
+  if (!c || !c.width || !c.height) return null;
+  try {
+    const tmp = document.createElement('canvas');
+    tmp.width = c.width; tmp.height = c.height;
+    const ctx = tmp.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, tmp.width, tmp.height);
+    ctx.drawImage(c, 0, 0);
+    return { dataURL: tmp.toDataURL('image/png'), w: c.width, h: c.height };
+  } catch (_) { return null; }
+}
+function _finChartShots() {
+  const defs = [
+    ['fin-balance-chart', 'Monthly profit / running balance'],
+    ['tr-buy', 'Buying cost trend'],
+    ['tr-ship', 'Bosta shipping trend'],
+    ['tr-ads', 'Ad spend trend'],
+    ['tr-mb', 'Media buyer trend'],
+    ['tr-other', 'Other expenses trend'],
+    ['mb-trend-chart', 'Media-buyer salary taken'],
+    ['weekly-sales-chart', 'Weekly sales'],
+  ];
+  const shots = [];
+  for (const [id, title] of defs) {
+    const s = _finCanvasShot(id);
+    if (s) shots.push({ title, ...s });
+  }
+  return shots;
+}
+
+// Full Excel report: one sheet per table (single-source numbers) + a Charts
+// sheet with the live graphs embedded as images (needs ExcelJS).
+async function downloadFinanceReportXlsx() {
+  // Make sure the on-screen charts are rendered so we can snapshot them.
+  if (typeof renderFinancials === 'function') { try { renderFinancials(); } catch (_) {} }
+  await new Promise(r => setTimeout(r, 350));
+
+  if (typeof ExcelJS === 'undefined') {
+    // Fallback: SheetJS workbook with the tables only (no embedded images).
+    const wb = XLSX.utils.book_new();
+    for (const s of finReportRows()) {
+      const ws = XLSX.utils.aoa_to_sheet(s.aoa);
+      ws['!cols'] = new Array(12).fill({ wch: 16 });
+      XLSX.utils.book_append_sheet(wb, ws, s.name.slice(0, 31));
+    }
+    _dlWb(wb, `Protech_Financial_Report_${_today()}.xlsx`);
+    return;
+  }
+
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Protech';
+  for (const s of finReportRows()) {
+    const ws = wb.addWorksheet(s.name.slice(0, 31));
+    s.aoa.forEach(row => ws.addRow(row));
+    ws.columns.forEach(col => { col.width = 18; });
+    if (ws.getRow(3)) ws.getRow(3).font = { bold: true };
+    if (ws.getRow(1)) ws.getRow(1).font = { bold: true, size: 13 };
+  }
+
+  // Charts sheet — embed each live graph as an image.
+  const shots = _finChartShots();
+  const cs = wb.addWorksheet('Charts');
+  cs.getColumn(1).width = 110;
+  let row = 1;
+  if (!shots.length) {
+    cs.getCell('A1').value = 'Open the Financials screen (and the Media-Buyer tab) before exporting so the charts can be captured.';
+  }
+  for (const shot of shots) {
+    cs.getCell(`A${row}`).value = shot.title;
+    cs.getCell(`A${row}`).font = { bold: true, size: 12 };
+    row += 1;
+    const b64 = (shot.dataURL.split(',')[1]) || shot.dataURL;  // ExcelJS wants raw base64
+    const imgId = wb.addImage({ base64: b64, extension: 'png' });
+    // Scale to a sensible width; keep aspect ratio.
+    const maxW = 760;
+    const scale = Math.min(1, maxW / shot.w);
+    const w = Math.round(shot.w * scale), h = Math.round(shot.h * scale);
+    cs.addImage(imgId, { tl: { col: 0, row: row - 1 }, ext: { width: w, height: h } });
+    row += Math.ceil(h / 18) + 2; // leave vertical room below the image
+  }
+
+  try {
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `Protech_Financial_Report_${_today()}.xlsx`;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    showToast('Financial report (Excel + charts) downloaded ✓');
+  } catch (e) {
+    showToast('Excel export failed: ' + e.message);
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════════
 //  📄 DOWNLOAD FINANCIALS PDF
