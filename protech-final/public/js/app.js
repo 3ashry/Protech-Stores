@@ -679,7 +679,7 @@ function renderBatchesBoard() {
     if (d) (savedByDate[d] = savedByDate[d] || []).push(r);
   }
   const products = cache.products || [];
-  const buyOf = (o) => (o.products || []).reduce((s, p) => s + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0);
+  const buyOf = finBuyCostOf;  // single source of truth
   let pending = 0;
   const rows = dates.map(d => {
     const list = _im.ordersByDate[d] || [];
@@ -5010,8 +5010,7 @@ function renderFinalisedBuyCost() {
   const products = cache.products || [];
   const FINAL_STATUSES = new Set(['Delivered', 'Returned']);
   const finalised = orders.filter(o => FINAL_STATUSES.has(o.status));
-  const buyCostOf = (o) => (o.products || []).reduce((b, p) =>
-    b + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0);
+  const buyCostOf = finBuyCostOf;  // single source of truth
 
   const delivered = finalised.filter(o => o.status === 'Delivered');
   const returned  = finalised.filter(o => o.status === 'Returned');
@@ -5073,8 +5072,7 @@ function renderInflightBuyCost() {
   const products = cache.products || [];
   const EXCLUDED = new Set(['Delivered', 'Returned', 'Processing', 'Cancelled']);
   const inflight = orders.filter(o => !EXCLUDED.has(o.status));
-  const buyCostOf = (o) => (o.products || []).reduce((b, p) =>
-    b + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0);
+  const buyCostOf = finBuyCostOf;  // single source of truth
   const totalBuy = inflight.reduce((a, o) => a + buyCostOf(o), 0);
 
   // Group by status for a compact breakdown row.
@@ -5153,8 +5151,7 @@ function renderNetProfitBlock() {
   const products = cache.products || [];
   const expenses = cache.expenses || [];
 
-  const buyCostOf = (o) => (o.products || []).reduce((b, p) =>
-    b + lineBuyPrice(p, products) * parseInt(p.qty || 1), 0);
+  const buyCostOf = finBuyCostOf;  // single source of truth
 
   // 1. Bosta settlement — matches the Bosta card exactly.
   //    Total collected on Delivered orders
@@ -5163,11 +5160,10 @@ function renderNetProfitBlock() {
   //    = what Bosta will actually pay out.
   const deliveredAll = orders.filter(o => o.status === 'Delivered');
   const returnedAll  = orders.filter(o => o.status === 'Returned');
-  const actualShip   = (o) => parseFloat(o.actual_shipping || 0);
   const cycleClosed  = (o) => o.cash_cycle_closed === true;
   const totalCollectedD = deliveredAll.reduce((a, o) => a + parseFloat(o.total || 0), 0);
-  const delivShipCC     = deliveredAll.filter(cycleClosed).reduce((a, o) => a + actualShip(o), 0);
-  const retShipCC       = returnedAll .filter(cycleClosed).reduce((a, o) => a + actualShip(o), 0);
+  const delivShipCC     = deliveredAll.filter(cycleClosed).reduce((a, o) => a + finShipOf(o), 0);
+  const retShipCC       = returnedAll .filter(cycleClosed).reduce((a, o) => a + finShipOf(o), 0);
   const bostaSettlement = totalCollectedD - delivShipCC - retShipCC;
 
   // 2. Elashry owed — matches the Elashry card exactly. Computed from your
@@ -7352,8 +7348,7 @@ function renderSupplierAccount() {
   const ELASHRY_TOTAL_TAKEN    = _et.taken;
   const ELASHRY_TOTAL_RETURNED = _et.returned;
   const orders = cache.orders || [];
-  const buyCostOf = (o) => (o.products || []).reduce((b, p) =>
-    b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0);
+  const buyCostOf = finBuyCostOf;  // single source of truth
 
   // Our-side view is now informational only — every Returned order
   // was physically sent back to Elashry, so the gap between our
@@ -7589,14 +7584,13 @@ function renderBostaCash() {
   const deliveredAll = orders.filter(o => o.status === 'Delivered');
   const returnedAll  = orders.filter(o => o.status === 'Returned');
 
-  const actualShip = (o) => parseFloat(o.actual_shipping || 0);
   const cycleClosed = (o) => o.cash_cycle_closed === true;
 
   const totalCollected = deliveredAll.reduce((a, o) => a + parseFloat(o.total || 0), 0);
   const deliveredClosed = deliveredAll.filter(cycleClosed);
   const returnedClosed  = returnedAll.filter(cycleClosed);
-  const deliveredShipCC = deliveredClosed.reduce((a, o) => a + actualShip(o), 0);
-  const returnedShipCC  = returnedClosed .reduce((a, o) => a + actualShip(o), 0);
+  const deliveredShipCC = deliveredClosed.reduce((a, o) => a + finShipOf(o), 0);
+  const returnedShipCC  = returnedClosed .reduce((a, o) => a + finShipOf(o), 0);
 
   const shouldReceive = totalCollected - deliveredShipCC - returnedShipCC;
 
