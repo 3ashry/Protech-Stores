@@ -5424,7 +5424,11 @@ function computeMediaBuyerMonth(y, m) {
   const expenses = cache.expenses || [];
   const delivered = (cache.orders || []).filter(o => o.status === 'Delivered');
   const inM = (my) => !!my && my.y === y && my.m === m;
-  const monthDelivered = delivered.filter(o => inM(finMonthOfOrder(o)));
+  // Bucket delivered sales by the ORDER-MADE date (same basis as the
+  // financials) — a month's 1% is on the orders MADE that month, not orders
+  // that merely delivered that month. So a month with no new orders earns no
+  // sales commission even if earlier orders delivered in it.
+  const monthDelivered = delivered.filter(o => inM(finMonthOfOrderFinancial(o)));
   let adsTopups, salesNet, adsShare, salesShare;
   if (rec && rec.locked && rec.snapshot) {
     adsTopups  = parseFloat(rec.snapshot.ads_topups) || 0;
