@@ -4447,17 +4447,27 @@ function renderFinOverrides() {
     <div style="font-size:11px;color:var(--muted);margin-top:8px">The grey <b>≈</b> placeholder is what the system currently computes. Type a number to override; leave blank to keep computing that one field.</div>`;
 }
 
-// Elashry supplier totals, computed from the financial model — no static
-// numbers. "Taken" = Σ each month's buying cost (delivered + returned);
-// "returned" = Σ each month's returns buying cost. Pinned months use your
-// locked totals; every other month computes from the orders.
-function finElashryTotals() {
-  let taken = 0, returned = 0;
+// Canonical all-time financial totals, summed from the ONE monthly model
+// (pinned previous months + auto-computed new months). Single source for
+// collected / buying (taken) / returns / shipping used across every tab —
+// so nothing re-sums raw orders and drifts from the pinned figures.
+function finModelTotals() {
+  let collected = 0, taken = 0, returned = 0, shipping = 0;
   try {
     const model = finComputeModel();
-    for (const mo of (model.months || [])) { taken += (mo.totalBought || 0); returned += (mo.returnsCost || 0); }
+    for (const mo of (model.months || [])) {
+      collected += (mo.collected || 0);
+      taken     += (mo.totalBought || 0);
+      returned  += (mo.returnsCost || 0);
+      shipping  += (mo.shippingTotal || 0);
+    }
   } catch (_) {}
-  return { taken: Math.round(taken), returned: Math.round(returned) };
+  return { collected: Math.round(collected), taken: Math.round(taken), returned: Math.round(returned), shipping: Math.round(shipping) };
+}
+// Elashry supplier totals (taken / returned) — same single source.
+function finElashryTotals() {
+  const t = finModelTotals();
+  return { taken: t.taken, returned: t.returned };
 }
 
 // ── ORDER COVERAGE CHECK ────────────────────────────────────────────
@@ -4517,7 +4527,7 @@ function finComputeKpis() {
   const returned  = orders.filter(o => o.status === 'Returned');
   const cc = (o) => o.cash_cycle_closed === true;
 
-  const collectedD   = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
+  const collectedD   = finModelTotals().collected;  // single source (pinned + computed)
   const delivShipCC  = delivered.filter(cc).reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
   const retShipCC    = returned.filter(cc).reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
   const shouldReceive = collectedD - delivShipCC - retShipCC;
@@ -5161,7 +5171,7 @@ function renderNetProfitBlock() {
   const deliveredAll = orders.filter(o => o.status === 'Delivered');
   const returnedAll  = orders.filter(o => o.status === 'Returned');
   const cycleClosed  = (o) => o.cash_cycle_closed === true;
-  const totalCollectedD = deliveredAll.reduce((a, o) => a + parseFloat(o.total || 0), 0);
+  const totalCollectedD = finModelTotals().collected;  // single source (pinned + computed)
   const delivShipCC     = deliveredAll.filter(cycleClosed).reduce((a, o) => a + finShipOf(o), 0);
   const retShipCC       = returnedAll .filter(cycleClosed).reduce((a, o) => a + finShipOf(o), 0);
   const bostaSettlement = totalCollectedD - delivShipCC - retShipCC;
@@ -7586,7 +7596,7 @@ function renderBostaCash() {
 
   const cycleClosed = (o) => o.cash_cycle_closed === true;
 
-  const totalCollected = deliveredAll.reduce((a, o) => a + parseFloat(o.total || 0), 0);
+  const totalCollected = finModelTotals().collected;  // single source (pinned + computed)
   const deliveredClosed = deliveredAll.filter(cycleClosed);
   const returnedClosed  = returnedAll.filter(cycleClosed);
   const deliveredShipCC = deliveredClosed.reduce((a, o) => a + finShipOf(o), 0);
