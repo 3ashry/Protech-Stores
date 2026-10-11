@@ -5631,7 +5631,7 @@ function renderMediaBuyer() {
       <button class="btn btn-primary btn-sm" ${S.owed > 0 ? '' : 'disabled'} onclick="payMediaBuyerForMonth()">✅ Mark as paid (EGP ${fmt(S.owed)})</button>
     </div>
 
-    <div style="margin:22px 0 4px;font-size:12px;color:var(--muted);font-weight:700">📈 Salary over months — ads (🟧) vs sales (🟩) + sales-driven %</div>
+    <div style="margin:22px 0 4px;font-size:12px;color:var(--muted);font-weight:700">📈 Salary taken over months — actual money paid (from expenses) + sales-driven %</div>
     <div style="height:210px"><canvas id="mb-trend-chart"></canvas></div>
 
     <details style="margin-top:12px;border:1px solid var(--line);padding:8px 12px">
@@ -5655,27 +5655,28 @@ function renderMediaBuyer() {
   renderMbTrendChart(seq);
 }
 
-// Multi-month salary graph: stacked bars (ads vs sales) + a sales-% line so
-// the owner can see at a glance whether the pay is shifting toward sales.
+// Multi-month salary graph: the ACTUAL money the media buyer took each month,
+// read straight from the expenses sheet (Σ 'Media Buyer' expenses that belong
+// to the month), plus a sales-% line so the owner can still see whether his
+// pay is tilting toward sales. The bar height is the real paid figure, not the
+// 20%/1% formula — so it matches the expenses and the P&L exactly.
 function renderMbTrendChart(seq) {
   const cv = document.getElementById('mb-trend-chart');
   if (!cv || typeof Chart === 'undefined') return;
   const last = seq.slice(-12);
   const labels = last.map(p => `${MB_MO_EN[p.m - 1]} ${String(p.y).slice(2)}`);
-  const ads = [], sales = [], salesPct = [];
+  const paid = [], salesPct = [];
   for (const p of last) {
     const c = computeMediaBuyerMonth(p.y, p.m);
-    ads.push(Math.round(c.adsShare));
-    sales.push(Math.round(c.salesShare));
-    salesPct.push(Math.round(c.salesPct));
+    paid.push(Math.round(c.paid));          // real money taken, from the expenses sheet
+    salesPct.push(Math.round(c.salesPct));  // of his formula pay, the sales-driven share
   }
   if (_mbChart) { try { _mbChart.destroy(); } catch (_) {} _mbChart = null; }
   _mbChart = new Chart(cv.getContext('2d'), {
     data: {
       labels,
       datasets: [
-        { type: 'bar', label: 'From ads (20%)', data: ads, backgroundColor: '#F26A21', stack: 's', order: 2 },
-        { type: 'bar', label: 'From sales (1%)', data: sales, backgroundColor: '#10b981', stack: 's', order: 2 },
+        { type: 'bar', label: 'Salary taken (from expenses)', data: paid, backgroundColor: '#F26A21', order: 2 },
         { type: 'line', label: 'Sales-driven %', data: salesPct, yAxisID: 'y1', borderColor: '#2563eb', backgroundColor: '#2563eb', tension: 0.3, pointRadius: 3, order: 1 },
       ],
     },
@@ -5683,8 +5684,8 @@ function renderMbTrendChart(seq) {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { labels: { boxWidth: 12, font: { size: 11 } } } },
       scales: {
-        x: { stacked: true },
-        y: { stacked: true, beginAtZero: true, title: { display: true, text: 'EGP' } },
+        x: {},
+        y: { beginAtZero: true, title: { display: true, text: 'EGP' } },
         y1: { position: 'right', min: 0, max: 100, grid: { drawOnChartArea: false }, title: { display: true, text: 'Sales %' } },
       },
     },
