@@ -57,6 +57,34 @@ export async function sendText(to, body) {
   return { ok: r.ok, data };
 }
 
+// Send an interactive reply-buttons message (max 3 buttons). Only valid inside
+// the 24h customer-service window — which is exactly when we use it, right after
+// the customer taps a template button. buttons = [{ id, title }] (title ≤ 20 ch).
+// Returns { ok, data }.
+export async function sendButtons(to, bodyText, buttons = []) {
+  const r = await fetch(`https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to: waPhone(to),
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: String(bodyText || '') },
+        action: {
+          buttons: buttons.slice(0, 3).map(b => ({
+            type: 'reply',
+            reply: { id: String(b.id), title: String(b.title).slice(0, 20) },
+          })),
+        },
+      },
+    }),
+  });
+  const data = await r.json().catch(() => null);
+  return { ok: r.ok, data };
+}
+
 // Number with thousands separators, Latin digits (safe inside a template var).
 function fmtNum(n) {
   const v = Number(n) || 0;

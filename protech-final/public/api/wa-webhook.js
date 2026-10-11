@@ -13,11 +13,23 @@
 //   WA_VERIFY_TOKEN  - the random string you also paste into Meta's webhook config
 //   SUPABASE_URL     - https://wljxplbcfoorqpoflcdz.supabase.co
 //   SUPABASE_KEY     - Supabase SECRET (service_role) key
-import { waPhone, sendText } from './_wa.js';
+import { waPhone, sendText, sendButtons } from './_wa.js';
 
 // Auto-replies sent back to the customer after they confirm / cancel.
-const CONFIRM_REPLY = 'شكراً لطلبك من بروتيك 😊\nمدة الشحن المتوقعة 3 أيام عمل.\nللاستفسار ابعتلنا على واتساب على الرقم ده: 01034482071';
-const CANCEL_REPLY = 'تم إلغاء طلبك.';
+const CONFIRM_REPLY = 'شكراً لتأكيد طلبك ✅\nهنجهّز طلبك ونشحنه لك في أسرع وقت، وهنبلّغك أول ما يتسلّم لشركة الشحن 🚚';
+// After a cancel we ask WHY, with quick-reply reasons (buttons below).
+const CANCEL_REPLY = 'تم إلغاء الطلب 🙏 ممكن تقولنا السبب عشان نحسّن خدمتنا؟';
+const CANCEL_REASON_BUTTONS = [
+  { id: 'CANCEL_REASON_PRICE',   title: 'السعر مرتفع' },
+  { id: 'CANCEL_REASON_MIND',    title: 'غيّرت رأيي' },
+  { id: 'CANCEL_REASON_MISTAKE', title: 'طلبت بالغلط' },
+];
+const CANCEL_REASONS = {
+  CANCEL_REASON_PRICE:   'السعر مرتفع',
+  CANCEL_REASON_MIND:    'غيّرت رأيي',
+  CANCEL_REASON_MISTAKE: 'طلبت بالغلط',
+};
+const CANCEL_REASON_THANKS = 'شكراً لوقتك وصراحتك 🙏 هناخد ملاحظتك في الاعتبار عشان نحسّن خدمتنا.';
 // Phase 12 — reply after the customer taps "I have a problem with my order".
 const PROBLEM_REPLY = 'تمام، سجّلنا إن عندك مشكلة في الطلب ✅ هنتواصل معاك في أقرب وقت على نفس الرقم.';
 // Auto-reply after a rating tap on the feedback template.
@@ -96,6 +108,7 @@ export default async function handler(req, res) {
     // Intent is one of: 'confirm' | 'cancel' | 'rating' (with .rating = 5/3/1).
     let intent = null;
     let rating = null;
+    let cancelReasonId = null;
     const readRatingPayload = (p) => {
       if (p === 'RATING_5') return 5;
       if (p === 'RATING_3') return 3;
@@ -114,7 +127,10 @@ export default async function handler(req, res) {
       const br = msg.interactive?.button_reply || {};
       const id = br.id || '', title = br.title || '';
       const r = readRatingPayload(id);
-      if (r != null) { intent = 'rating'; rating = r; }
+      // Cancel-reason taps are checked FIRST — "طلبت بالغلط" contains "غلط",
+      // which would otherwise be misread as a "problem" by the regex below.
+      if (id.startsWith('CANCEL_REASON_')) { intent = 'cancel_reason'; cancelReasonId = id; }
+      else if (r != null) { intent = 'rating'; rating = r; }
       else if (id === 'PROBLEM' || PROBLEM_RE.test(title)) intent = 'problem';
       else if (id === 'CONFIRM' || CONFIRM_RE.test(title)) intent = 'confirm';
       else if (id === 'CANCEL' || CANCEL_RE.test(title)) intent = 'cancel';
@@ -146,6 +162,22 @@ export default async function handler(req, res) {
         const reply = rating >= 5 ? FEEDBACK_THANKS_HIGH : (rating >= 3 ? FEEDBACK_THANKS_MID : FEEDBACK_THANKS_LOW);
         await sendText(msg.from, reply);
       }
+      return res.status(200).json({ received: true });
+    }
+
+    // ── Cancel-reason tap (follow-up buttons after a cancellation) ──────
+    if (intent === 'cancel_reason') {
+      const reasonText = CANCEL_REASONS[cancelReasonId] || cancelReasonId;
+      const patch = { cancel_reason: reasonText, cancel_reason_at: new Date().toISOString() };
+      // Match the most recent cancelled order from this phone that has no
+      // reason yet (the customer just cancelled it moments ago).
+      const from = String(msg.from || '').replace(/\D/g, '');
+      if (from) {
+        const rows = await sbGet('orders?select=id,phone&status=eq.Cancelled&cancel_reason=is.null&order=created_at.desc&limit=50');
+        const match = rows.find(o => waPhone(o.phone) === from);
+        if (match) await sbPatchRep(`orders?id=eq.${encodeURIComponent(match.id)}`, patch);
+      }
+      if (msg.from) await sendText(msg.from, CANCEL_REASON_THANKS);
       return res.status(200).json({ received: true });
     }
 
@@ -199,8 +231,17 @@ export default async function handler(req, res) {
           { post_prep_cancel_at: new Date().toISOString(), post_prep_cancel_ack_at: null });
       }
 
-      // 3) Auto-reply to the customer (the 24h window is open since they just messaged us).
-      if (msg.from) await sendText(msg.from, intent === 'confirm' ? CONFIRM_REPLY : CANCEL_REPLY);
+      // 3) Auto-reply to the customer (the 24h window is open since they just
+      //    messaged us). Confirm → a simple thank-you; Cancel → ask why, with
+      //    three quick-reply reasons the next webhook hit records.
+      if (msg.from) {
+        if (intent === 'confirm') {
+          await sendText(msg.from, CONFIRM_REPLY);
+        } else {
+          const sent = await sendButtons(msg.from, CANCEL_REPLY, CANCEL_REASON_BUTTONS);
+          if (!sent.ok) await sendText(msg.from, CANCEL_REPLY); // fallback to plain text
+        }
+      }
     }
   } catch (e) {
     console.error('wa-webhook error:', e.message);
