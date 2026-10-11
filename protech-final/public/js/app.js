@@ -4269,6 +4269,61 @@ function finMonthSeq() {
   return seq;
 }
 
+// ── OLD-vs-NEW MONTH BOUNDARY & SINGLE-SOURCE SALARY/ADS HELPERS ──────
+// Months up to and including this one keep the owner's pinned STATIC figures
+// (the collected/buying/returns/shipping pins + the confirmed Paid-Ads and
+// Media-Buyer expenses). Every month AFTER it is computed 100% live — orders
+// for sales/shipping/buying, the Meta Ads API for paid ads, and the salary
+// formulas for the media buyer and the order-prep worker.
+const FIN_LAST_STATIC_MONTH = { y: 2026, m: 9 };
+function finIsStaticMonth(y, m) {
+  return (y < FIN_LAST_STATIC_MONTH.y) ||
+         (y === FIN_LAST_STATIC_MONTH.y && m <= FIN_LAST_STATIC_MONTH.m);
+}
+const PREP_SALARY_PER_ORDER = 10;  // EGP paid to the order-prep worker per shipped order
+
+// Paid ads for a month — the ONE source:
+//   static month  → the confirmed 'Paid Ads' expenses you logged
+//   computed month → live Meta Ads API spend, grossed up for the 14% VAT
+function finPaidAdsForMonth(y, m) {
+  if (finIsStaticMonth(y, m)) {
+    return (cache.expenses || [])
+      .filter(e => e.category === 'Paid Ads' && finSameMonth(finMonthOfExpense(e), y, m))
+      .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  }
+  const raw = (cache.metaAdSpend || [])
+    .filter(r => finSameMonth(cairoYM(r.spend_date), y, m))
+    .reduce((a, r) => a + (parseFloat(r.spend) || 0), 0);
+  return finRealAdSpend(raw);
+}
+
+// Sum of the manual media-buyer adjustments stored for a month (Phase 9 editor).
+function finMbAdjust(y, m) {
+  const rec = (typeof mbMonthRecord === 'function') ? mbMonthRecord(mbKey(y, m)) : null;
+  const list = Array.isArray(rec && rec.adjustments) ? rec.adjustments : [];
+  return list.reduce((a, x) => a + (parseFloat(x.amount) || 0), 0);
+}
+
+// The ONE Bosta settlement figure, used by the KPI cards, the net-profit block
+// and the Bosta tab so they can never disagree.
+function finBostaSettlement() {
+  const t = finModelTotals();
+  const received = ((typeof bostaCashCache !== 'undefined' && bostaCashCache.receipts) || [])
+    .reduce((a, r) => a + parseFloat(r.amount || 0), 0);
+  const shouldReceive = t.collected - t.shipping;
+  return { collected: t.collected, shipping: t.shipping, shouldReceive, received, stillToReceive: shouldReceive - received };
+}
+
+// The ONE "owed to Elashry" figure, used by the KPI cards, the net-profit block
+// and the Elashry tab so they can never disagree.
+function finElashryOwed() {
+  const t = finModelTotals();
+  const paid = ((typeof supplierCache !== 'undefined' && supplierCache.payments) || [])
+    .reduce((a, p) => a + parseFloat(p.amount || 0), 0);
+  const credits = (cache.supplierReturns || []).reduce((a, r) => a + parseFloat(r.credit_total || 0), 0);
+  return { taken: t.taken, returned: t.returned, credits, paid, owed: t.taken - t.returned - credits - paid };
+}
+
 // Full P&L for one Cairo month, in the mockup's four-column shape.
 function finComputeMonth(y, m) {
   const orders = cache.orders || [];
@@ -4318,13 +4373,39 @@ function finComputeMonth(y, m) {
   const returnsTotal = -(bostaFeesReturns + returnedAfterDelivery);
 
   const expInM = expenses.filter(e => finSameMonth(finMonthOfExpense(e), y, m));
-  const paidAds    = expInM.filter(e => e.category === 'Paid Ads').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-  const mediaBuyer = expInM.filter(e => e.category === 'Media Buyer').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  const staticMonth = finIsStaticMonth(y, m);
+  // Paid ads — ONE source: confirmed expenses for static months, live Meta Ads
+  // API (grossed for VAT) for computed months.
+  const paidAds = finPaidAdsForMonth(y, m);
+  // Media-buyer salary — ONE source (summary == statement == P&L):
+  //   static month  → the confirmed 'Media Buyer' expense you logged
+  //   computed month → 1% of (collected − delivered shipping) + 20% of paid ads
+  //                    (+ stored adjustments), or a frozen lock snapshot.
+  let mediaBuyer;
+  if (staticMonth) {
+    mediaBuyer = expInM.filter(e => e.category === 'Media Buyer').reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  } else {
+    const mbRec = (typeof mbMonthRecord === 'function') ? mbMonthRecord(mbKey(y, m)) : null;
+    if (mbRec && mbRec.locked && mbRec.snapshot && mbRec.snapshot.gross != null) {
+      mediaBuyer = parseFloat(mbRec.snapshot.gross) || 0;
+    } else {
+      const mbSalesNet = collected - actualShipping;   // delivered-side net sales
+      mediaBuyer = (mbSalesNet * 0.01) + (paidAds * 0.20) + finMbAdjust(y, m);
+    }
+  }
   const marketingTotal = -(paidAds + mediaBuyer);
-  // 'Elashry' (goods/costs that belong to the supplier account) and 'Bosta Fees'
-  // (already inside actual shipping) are recorded but NEVER counted in the P&L —
-  // counting them would double-count buying cost / shipping.
-  const PNL_EXCLUDED_CATS = ['Paid Ads', 'Media Buyer', 'Elashry', 'Bosta Fees'];
+  // Order-prep worker — 10 EGP per shipped (delivered or returned) order MADE this
+  // month. Computed months only; static months keep their pinned figures and their
+  // manually-logged 'Salaries' entries.
+  const prepSalary = staticMonth ? 0 : (delivered.length + returned.length) * PREP_SALARY_PER_ORDER;
+  const salariesTotal = -prepSalary;
+  // 'Elashry' (goods that belong to the supplier account) and 'Bosta Fees'
+  // (already inside actual shipping) are recorded but NEVER counted here. For a
+  // computed month 'Salaries' is excluded too — the order-prep salary is
+  // auto-computed above, so also counting logged Salaries would double it.
+  const PNL_EXCLUDED_CATS = staticMonth
+    ? ['Paid Ads', 'Media Buyer', 'Elashry', 'Bosta Fees']
+    : ['Paid Ads', 'Media Buyer', 'Elashry', 'Bosta Fees', 'Salaries'];
   const otherCats = {};
   expInM.filter(e => !PNL_EXCLUDED_CATS.includes(e.category)).forEach(e => {
     const c = e.category || 'Other';
@@ -4333,14 +4414,14 @@ function finComputeMonth(y, m) {
   const otherSum = Object.values(otherCats).reduce((a, v) => a + v, 0);
   const otherTotal = -otherSum;
 
-  const result = profitFromOrders + returnsTotal + marketingTotal + otherTotal;
+  const result = profitFromOrders + returnsTotal + marketingTotal + otherTotal + salariesTotal;
   const denom = delivered.length + returned.length;
   return {
     y, m, delivered, returned, completedOrders: delivered.length,
     collected, actualShipping, shippingTotal, buyingCost, profitFromOrders,
     totalBought, returnsCost, deliveredBuy, returnedBuy, overridden: !!ov,
     refusedReturned: returned.length, bostaFeesReturns, returnedAfterDelivery, returnsTotal,
-    paidAds, mediaBuyer, marketingTotal, otherCats, otherTotal, result,
+    paidAds, mediaBuyer, prepSalary, salariesTotal, staticMonth, marketingTotal, otherCats, otherTotal, result,
     returnRate: denom ? returned.length / denom : 0,
     profitPerOrder: delivered.length ? profitFromOrders / delivered.length : 0,
     marketingPerOrder: delivered.length ? (paidAds + mediaBuyer) / delivered.length : 0,
@@ -4527,12 +4608,10 @@ function finComputeKpis() {
   const returned  = orders.filter(o => o.status === 'Returned');
   const cc = (o) => o.cash_cycle_closed === true;
 
-  const collectedD   = finModelTotals().collected;  // single source (pinned + computed)
-  const shippingD    = finModelTotals().shipping;    // single source (pinned + computed)
-  const shouldReceive = collectedD - shippingD;
-  const received = ((typeof bostaCashCache !== 'undefined' && bostaCashCache.receipts) || [])
-    .reduce((a, r) => a + parseFloat(r.amount || 0), 0);
-  const bostaOwes = shouldReceive - received;
+  const _bs = finBostaSettlement();                 // ONE source
+  const shouldReceive = _bs.shouldReceive;
+  const received = _bs.received;
+  const bostaOwes = _bs.stillToReceive;
 
   const paidBy = new Set();
   ((typeof bostaCashCache !== 'undefined' && bostaCashCache.receipts) || []).forEach(r =>
@@ -4541,12 +4620,9 @@ function finComputeKpis() {
     .filter(o => cc(o) && !paidBy.has(String(o.code || '').toUpperCase()))
     .reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0)), 0);
 
-  const _etK = finElashryTotals();
-  const ELASHRY_TOTAL_TAKEN = _etK.taken, ELASHRY_TOTAL_RETURNED = _etK.returned;
-  const elashryPaid = ((typeof supplierCache !== 'undefined' && supplierCache.payments) || [])
-    .reduce((a, p) => a + parseFloat(p.amount || 0), 0);
-  const elashryReturnCredits = (cache.supplierReturns || []).reduce((a, r) => a + parseFloat(r.credit_total || 0), 0);
-  const elashryOwed = ELASHRY_TOTAL_TAKEN - ELASHRY_TOTAL_RETURNED - elashryReturnCredits - elashryPaid;
+  const _eo = finElashryOwed();                     // ONE source
+  const elashryPaid = _eo.paid;
+  const elashryOwed = _eo.owed;
 
   // Goods back in my warehouse but not yet credited on an Elashry return invoice.
   const creditsReturns = returned.filter(o => o.warehouse_confirmed && !o.supplier_return_invoice_id);
@@ -4697,8 +4773,9 @@ function finRenderMonths(model) {
       ['Actual shipping (delivered + returned)', finNeg(mo.shippingTotal), 'color:#dc2626'],
       ['Buying cost (delivered + returned)', finNeg(mo.totalBought), 'color:#dc2626'],
       ['Returns credit (Elashry refund)', '+ EGP ' + finFm(mo.returnsCost), 'color:#15803d'],
-      ['Paid ads (Meta)', finNeg(mo.paidAds), 'color:#dc2626'],
+      [mo.staticMonth ? 'Paid ads (confirmed)' : 'Paid ads (Meta API)', finNeg(mo.paidAds), 'color:#dc2626'],
       ['Media buyer salary', finNeg(mo.mediaBuyer), 'color:#dc2626'],
+      ...(mo.prepSalary ? [['Order-prep salary (10 × shipped)', finNeg(mo.prepSalary), 'color:#dc2626']] : []),
       ...other,
     ];
     return `
@@ -4752,12 +4829,11 @@ function finRenderMonths(model) {
 function finRenderActionCards(kpis, nc, model) {
   const host = document.getElementById('fin-action-cards'); if (!host) return;
   const curOwed = (() => {
-    // media-buyer: is this month's owed still unpaid?
+    // media-buyer: is this month's salary still unpaid? Single source.
     const mo = model.current;
     if (!mo) return 0;
-    const owed = mo.collected * 0.01 + mo.paidAds * 0.20; // 1% sales + 20% top-ups
-    const paidThisMonth = mo.mediaBuyer;
-    return Math.max(0, owed - paidThisMonth);
+    const S = (typeof computeMediaBuyerMonth === 'function') ? computeMediaBuyerMonth(mo.y, mo.m) : null;
+    return S ? S.owed : 0;
   })();
   const openItems = nc.waiting + (curOwed > 1 ? 1 : 0) + kpis.creditsCount;
   const bostaSettled = kpis.bostaOwes <= 1;
@@ -5169,19 +5245,18 @@ function renderNetProfitBlock() {
   //    = what Bosta will actually pay out.
   const deliveredAll = orders.filter(o => o.status === 'Delivered');
   const returnedAll  = orders.filter(o => o.status === 'Returned');
-  const totalCollectedD = finModelTotals().collected;  // single source (pinned + computed)
-  const totalShippingD  = finModelTotals().shipping;   // single source (pinned + computed)
-  const bostaSettlement = totalCollectedD - totalShippingD;
+  const _bs = finBostaSettlement();                     // ONE source
+  const totalCollectedD = _bs.collected;
+  const totalShippingD  = _bs.shipping;
+  const bostaSettlement = _bs.shouldReceive;
 
-  // 2. Elashry owed — matches the Elashry card exactly. Computed from your
-  //    monthly buying costs (pinned months use your locked totals).
-  const _etN = finElashryTotals();
-  const ELASHRY_TOTAL_TAKEN    = _etN.taken;
-  const ELASHRY_TOTAL_RETURNED = _etN.returned;
-  const returnedBuyCost = ELASHRY_TOTAL_RETURNED;
-  const elashryPaid = (typeof supplierCache !== 'undefined' && supplierCache.payments || [])
-    .reduce((a, p) => a + parseFloat(p.amount || 0), 0);
-  const elashryOwed = ELASHRY_TOTAL_TAKEN - returnedBuyCost - elashryPaid;
+  // 2. Elashry owed — the ONE source, identical to the Elashry tab & KPIs.
+  const _eo = finElashryOwed();
+  const ELASHRY_TOTAL_TAKEN    = _eo.taken;
+  const returnedBuyCost        = _eo.returned;
+  const elashryCredits         = _eo.credits;
+  const elashryPaid            = _eo.paid;
+  const elashryOwed            = _eo.owed;
 
   // 3. All expenses — every category. Elashry supplier payments are
   //    NOT in cache.expenses (they live in supplierCache.payments and
@@ -5197,7 +5272,7 @@ function renderNetProfitBlock() {
       <span>Bosta settlement − Elashry owed − expenses</span>
     </div>
     <div class="fin-row"><span>💰 Bosta settlement (collected ${fmt(totalCollectedD)} − shipping ${fmt(totalShippingD)})</span><span class="fin-val">EGP ${fmt(bostaSettlement)}</span></div>
-    <div class="fin-row"><span>🏭 Elashry owed (${fmt(ELASHRY_TOTAL_TAKEN)} taken − ${fmt(returnedBuyCost)} returned − ${fmt(elashryPaid)} paid)</span><span class="fin-val deduct">− EGP ${fmt(elashryOwed)}</span></div>
+    <div class="fin-row"><span>🏭 Elashry owed (${fmt(ELASHRY_TOTAL_TAKEN)} taken − ${fmt(returnedBuyCost)} returned${elashryCredits ? ' − ' + fmt(elashryCredits) + ' credits' : ''} − ${fmt(elashryPaid)} paid)</span><span class="fin-val deduct">− EGP ${fmt(elashryOwed)}</span></div>
     <div class="fin-row"><span>🧾 All expenses (every category)</span><span class="fin-val deduct">− EGP ${fmt(totalExpenses)}</span></div>
     <div class="fin-row ${winning ? 'profit' : 'loss'}" style="border-top:2px solid var(--line);padding-top:14px;margin-top:8px;font-size:1.2rem">
       <span>${winning ? '🟢 Net Profit' : '🔴 Net Loss'}</span>
@@ -5432,6 +5507,12 @@ function computeMediaBuyerMonth(y, m) {
   // that merely delivered that month. So a month with no new orders earns no
   // sales commission even if earlier orders delivered in it.
   const monthDelivered = delivered.filter(o => inM(finMonthOfOrderFinancial(o)));
+  // The salary itself is the SINGLE SOURCE from finComputeMonth, so the statement
+  // headline always equals the month summary and the P&L. For static months that
+  // is your confirmed figure; for computed months it is the live 1%+20% formula.
+  const fc = finComputeMonth(y, m);
+  const gross = fc.mediaBuyer;
+  // Informational ads-vs-sales breakdown (same sources finComputeMonth uses).
   let adsTopups, salesNet, adsShare, salesShare;
   if (rec && rec.locked && rec.snapshot) {
     adsTopups  = parseFloat(rec.snapshot.ads_topups) || 0;
@@ -5439,15 +5520,14 @@ function computeMediaBuyerMonth(y, m) {
     adsShare   = parseFloat(rec.snapshot.ads_share) || 0;
     salesShare = parseFloat(rec.snapshot.sales_share) || 0;
   } else {
-    adsTopups  = expenses.filter(e => e.category === 'Paid Ads' && inM(cairoYMOfExpense(e))).reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-    salesNet   = monthDelivered.reduce((a, o) => a + (parseFloat(o.total || 0) - mbShipOf(o)), 0);
+    adsTopups  = fc.paidAds;
+    salesNet   = fc.collected - fc.actualShipping;
     adsShare   = adsTopups * 0.20;
     salesShare = salesNet * 0.01;
   }
   const adjustments = Array.isArray(rec && rec.adjustments) ? rec.adjustments : [];
   const adjTotal = adjustments.reduce((a, x) => a + (parseFloat(x.amount) || 0), 0);
   const base = adsShare + salesShare;              // formula pay, ex-adjustments
-  const gross = base + adjTotal;
   const adsPct = base > 0 ? adsShare / base * 100 : 0;
   const salesPct = base > 0 ? salesShare / base * 100 : 0;
   const paid = expenses.filter(e => e.category === 'Media Buyer' && mbPaymentMonthKey(e) === key)
@@ -5458,7 +5538,7 @@ function computeMediaBuyerMonth(y, m) {
     .reduce((a, r) => a + (parseFloat(r.spend) || 0), 0));
   return { key, y, m, rec, locked: !!(rec && rec.locked), lockedAt: rec ? rec.locked_at : null,
     adsTopups, salesNet, adsShare, salesShare, adjustments, adjTotal, base, gross,
-    adsPct, salesPct, paid, owed, metaSpend, monthDelivered };
+    adsPct, salesPct, paid, owed, metaSpend, monthDelivered, staticMonth: fc.staticMonth };
 }
 
 // Upsert a media_buyer_months row by its `month` key (PK), merging fields.
@@ -5624,6 +5704,7 @@ function renderMediaBuyer() {
     ${S.adjTotal ? `<div class="fin-row" style="margin-top:6px"><span>Adjustments total</span><span class="fin-val" style="color:${S.adjTotal >= 0 ? '#10b981' : '#dc2626'}">${S.adjTotal >= 0 ? '+' : '−'} EGP ${fmt(Math.abs(S.adjTotal))}</span></div>` : ''}
 
     <div class="fin-row subtotal" style="margin-top:10px"><span>Gross salary (${MB_MO_EN[sel.m - 1]} ${sel.y})</span><span class="fin-val">EGP ${fmt(S.gross)}</span></div>
+    ${S.staticMonth ? `<div style="font-size:11px;color:var(--muted);margin:2px 0 0">● Pinned month — this is your confirmed salary figure; the 20%/1% split above is shown for reference only.</div>` : ''}
     ${S.paid > 0 ? `<div class="fin-row"><span>Already paid for this month</span><span class="fin-val deduct">− EGP ${fmt(S.paid)}</span></div>` : ''}
     <div class="fin-row subtotal"><span>Owed now</span><span class="fin-val" style="color:var(--orange)">EGP ${fmt(S.owed)}</span></div>
 
@@ -7352,9 +7433,9 @@ function renderSupplierAccount() {
   //   filter here.
   // Computed from the financial model (pinned months use your locked totals,
   // others compute) — no static supplier numbers.
-  const _et = finElashryTotals();
-  const ELASHRY_TOTAL_TAKEN    = _et.taken;
-  const ELASHRY_TOTAL_RETURNED = _et.returned;
+  const _eo = finElashryOwed();              // ONE source (KPIs & net-profit use the same)
+  const ELASHRY_TOTAL_TAKEN    = _eo.taken;
+  const ELASHRY_TOTAL_RETURNED = _eo.returned;
   const orders = cache.orders || [];
   const buyCostOf = finBuyCostOf;  // single source of truth
 
@@ -7368,12 +7449,10 @@ function renderSupplierAccount() {
   const returnedBuyCost = ELASHRY_TOTAL_RETURNED;
   const returnedDiff = returnedBuyCostOurs - ELASHRY_TOTAL_RETURNED;
 
-  const paid = (supplierCache.payments || [])
-    .reduce((a, p) => a + parseFloat(p.amount || 0), 0);
+  const paid = _eo.paid;
   // Phase 4: credits from saved Elashry return invoices reduce what we owe.
-  const returnCredits = (cache.supplierReturns || [])
-    .reduce((a, r) => a + parseFloat(r.credit_total || 0), 0);
-  const remaining = ELASHRY_TOTAL_TAKEN - returnedBuyCost - returnCredits - paid;
+  const returnCredits = _eo.credits;
+  const remaining = _eo.owed;
   const settled = remaining <= 0;
 
   const payRows = (supplierCache.payments || []).length
@@ -7592,10 +7671,10 @@ function renderBostaCash() {
   const deliveredAll = orders.filter(o => o.status === 'Delivered');
   const returnedAll  = orders.filter(o => o.status === 'Returned');
 
-  const totalCollected = finModelTotals().collected;  // single source (pinned + computed)
-  const totalShipping  = finModelTotals().shipping;   // single source (pinned + computed)
-
-  const shouldReceive = totalCollected - totalShipping;
+  const _bs = finBostaSettlement();          // ONE source (KPIs & net-profit use the same)
+  const totalCollected = _bs.collected;
+  const totalShipping  = _bs.shipping;
+  const shouldReceive  = _bs.shouldReceive;
 
   // Legacy names kept for the per-order breakdown + paid-orders check
   // below (unchanged behaviour). "receivableAll" is the pool the
