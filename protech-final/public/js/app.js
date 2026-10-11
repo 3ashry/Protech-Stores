@@ -4447,6 +4447,19 @@ function renderFinOverrides() {
     <div style="font-size:11px;color:var(--muted);margin-top:8px">The grey <b>≈</b> placeholder is what the system currently computes. Type a number to override; leave blank to keep computing that one field.</div>`;
 }
 
+// Elashry supplier totals, computed from the financial model — no static
+// numbers. "Taken" = Σ each month's buying cost (delivered + returned);
+// "returned" = Σ each month's returns buying cost. Pinned months use your
+// locked totals; every other month computes from the orders.
+function finElashryTotals() {
+  let taken = 0, returned = 0;
+  try {
+    const model = finComputeModel();
+    for (const mo of (model.months || [])) { taken += (mo.totalBought || 0); returned += (mo.returnsCost || 0); }
+  } catch (_) {}
+  return { taken: Math.round(taken), returned: Math.round(returned) };
+}
+
 // ── ORDER COVERAGE CHECK ────────────────────────────────────────────
 // Proves every finalised order is counted in exactly one month (by its
 // order-made date) — no order double-counted or missed. Also shows, per
@@ -4519,7 +4532,8 @@ function finComputeKpis() {
     .filter(o => cc(o) && !paidBy.has(String(o.code || '').toUpperCase()))
     .reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.actual_shipping || 0)), 0);
 
-  const ELASHRY_TOTAL_TAKEN = 742720, ELASHRY_TOTAL_RETURNED = 146657;
+  const _etK = finElashryTotals();
+  const ELASHRY_TOTAL_TAKEN = _etK.taken, ELASHRY_TOTAL_RETURNED = _etK.returned;
   const elashryPaid = ((typeof supplierCache !== 'undefined' && supplierCache.payments) || [])
     .reduce((a, p) => a + parseFloat(p.amount || 0), 0);
   const elashryReturnCredits = (cache.supplierReturns || []).reduce((a, r) => a + parseFloat(r.credit_total || 0), 0);
@@ -5156,11 +5170,11 @@ function renderNetProfitBlock() {
   const retShipCC       = returnedAll .filter(cycleClosed).reduce((a, o) => a + actualShip(o), 0);
   const bostaSettlement = totalCollectedD - delivShipCC - retShipCC;
 
-  // 2. Elashry owed — matches the Elashry card exactly.
-  //    Fixed totals confirmed by the supplier; do NOT recompute from
-  //    our stored buy prices, which drift from theirs.
-  const ELASHRY_TOTAL_TAKEN    = 742720; // keep in sync with renderSupplierAccount
-  const ELASHRY_TOTAL_RETURNED = 146657; // keep in sync with renderSupplierAccount
+  // 2. Elashry owed — matches the Elashry card exactly. Computed from your
+  //    monthly buying costs (pinned months use your locked totals).
+  const _etN = finElashryTotals();
+  const ELASHRY_TOTAL_TAKEN    = _etN.taken;
+  const ELASHRY_TOTAL_RETURNED = _etN.returned;
   const returnedBuyCost = ELASHRY_TOTAL_RETURNED;
   const elashryPaid = (typeof supplierCache !== 'undefined' && supplierCache.payments || [])
     .reduce((a, p) => a + parseFloat(p.amount || 0), 0);
@@ -7328,8 +7342,11 @@ function renderSupplierAccount() {
   //
   //   Cash-cycle-closed is a Bosta invoicing detail and does not
   //   filter here.
-  const ELASHRY_TOTAL_TAKEN    = 742720; // confirmed by Elashry
-  const ELASHRY_TOTAL_RETURNED = 146657; // confirmed by Elashry (goods physically returned to their warehouse)
+  // Computed from the financial model (pinned months use your locked totals,
+  // others compute) — no static supplier numbers.
+  const _et = finElashryTotals();
+  const ELASHRY_TOTAL_TAKEN    = _et.taken;
+  const ELASHRY_TOTAL_RETURNED = _et.returned;
   const orders = cache.orders || [];
   const buyCostOf = (o) => (o.products || []).reduce((b, p) =>
     b + lineBuyPrice(p, cache.products) * parseInt(p.qty || 1), 0);
@@ -7395,14 +7412,11 @@ function renderSupplierAccount() {
       </div>
 
       <div class="fin-row" style="opacity:.75;font-size:12px">
-        <span>Elashry's own bookkeeping · fixed total from supplier</span>
+        <span>Computed from your monthly buying costs (pinned months use your locked totals)</span>
         <span>${(supplierCache.payments || []).length} payments · ${returnedOrders.length} returned orders</span>
       </div>
-      <div class="fin-row"><span>📦 Total taken from Elashry (supplier's confirmed total)</span><span class="fin-val">EGP ${fmt(ELASHRY_TOTAL_TAKEN)}</span></div>
-      <div style="opacity:.7;font-size:11px;padding:0 4px 6px;margin-top:-4px">
-        Our-side returned buy cost: EGP ${fmt(returnedBuyCostOurs)} &nbsp;•&nbsp; Elashry-confirmed: EGP ${fmt(ELASHRY_TOTAL_RETURNED)}${returnedDiff !== 0 ? ` &nbsp;•&nbsp; diff: ${returnedDiff > 0 ? '+' : ''}EGP ${fmt(returnedDiff)} (buy-price inflation on returned mix — fix the affected product prices to close the gap)` : ''}
-      </div>
-      <div class="fin-row"><span>↩️ Returned (goods back to their warehouse)</span><span class="fin-val deduct">− EGP ${fmt(returnedBuyCost)}</span></div>
+      <div class="fin-row"><span>📦 Total taken from Elashry (Σ monthly buying cost)</span><span class="fin-val">EGP ${fmt(ELASHRY_TOTAL_TAKEN)}</span></div>
+      <div class="fin-row"><span>↩️ Returned to Elashry (Σ monthly returns buying cost)</span><span class="fin-val deduct">− EGP ${fmt(returnedBuyCost)}</span></div>
       ${returnCredits > 0 ? `<div class="fin-row"><span>📄 Return invoices credited (${(cache.supplierReturns || []).length})</span><span class="fin-val deduct">− EGP ${fmt(returnCredits)}</span></div>` : ''}
       <div class="fin-row"><span>💵 Already paid to Elashry</span><span class="fin-val deduct">− EGP ${fmt(paid)}</span></div>
       <div class="fin-row ${settled ? 'profit' : 'loss'}" style="border-top:2px solid var(--line);padding-top:14px;margin-top:8px;font-size:1.15rem">
