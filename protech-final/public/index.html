@@ -317,6 +317,16 @@
       </div>
     </details>
 
+    <details id="det-fin-audit" style="margin:10px 0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff" ontoggle="if(this.open && typeof renderFinAudit==='function') renderFinAudit()">
+      <summary style="cursor:pointer;padding:14px 16px;font-weight:700;font-size:14px;list-style:none">🔎 Order coverage check — every order counted once</summary>
+      <div style="padding:0 12px 12px">
+        <div style="font-size:12px;color:var(--muted);line-height:1.5;margin:4px 0 10px">
+          Confirms each finalised order is counted in exactly one month (the month it was made) — nothing double-counted, nothing missed.
+        </div>
+        <div class="card"><div class="card-body" id="fin-audit-body"></div></div>
+      </div>
+    </details>
+
     <details id="det-buycost" style="margin:10px 0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff">
       <summary style="cursor:pointer;padding:14px 16px;font-weight:700;font-size:14px;list-style:none">📦 Buy cost — in-flight &amp; finalised orders</summary>
       <div style="padding:0 12px 12px">
