@@ -4528,9 +4528,8 @@ function finComputeKpis() {
   const cc = (o) => o.cash_cycle_closed === true;
 
   const collectedD   = finModelTotals().collected;  // single source (pinned + computed)
-  const delivShipCC  = delivered.filter(cc).reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
-  const retShipCC    = returned.filter(cc).reduce((a, o) => a + parseFloat(o.actual_shipping || 0), 0);
-  const shouldReceive = collectedD - delivShipCC - retShipCC;
+  const shippingD    = finModelTotals().shipping;    // single source (pinned + computed)
+  const shouldReceive = collectedD - shippingD;
   const received = ((typeof bostaCashCache !== 'undefined' && bostaCashCache.receipts) || [])
     .reduce((a, r) => a + parseFloat(r.amount || 0), 0);
   const bostaOwes = shouldReceive - received;
@@ -5165,16 +5164,14 @@ function renderNetProfitBlock() {
 
   // 1. Bosta settlement — matches the Bosta card exactly.
   //    Total collected on Delivered orders
-  //    − actual_shipping of Delivered-CC-closed
-  //    − actual_shipping of Returned-CC-closed
+  //    − total shipping (pinned monthly Bosta totals for past months,
+  //      auto-computed for new months — the ONE canonical shipping figure)
   //    = what Bosta will actually pay out.
   const deliveredAll = orders.filter(o => o.status === 'Delivered');
   const returnedAll  = orders.filter(o => o.status === 'Returned');
-  const cycleClosed  = (o) => o.cash_cycle_closed === true;
   const totalCollectedD = finModelTotals().collected;  // single source (pinned + computed)
-  const delivShipCC     = deliveredAll.filter(cycleClosed).reduce((a, o) => a + finShipOf(o), 0);
-  const retShipCC       = returnedAll .filter(cycleClosed).reduce((a, o) => a + finShipOf(o), 0);
-  const bostaSettlement = totalCollectedD - delivShipCC - retShipCC;
+  const totalShippingD  = finModelTotals().shipping;   // single source (pinned + computed)
+  const bostaSettlement = totalCollectedD - totalShippingD;
 
   // 2. Elashry owed — matches the Elashry card exactly. Computed from your
   //    monthly buying costs (pinned months use your locked totals).
@@ -5199,7 +5196,7 @@ function renderNetProfitBlock() {
       <span>${deliveredAll.length} delivered · ${returnedAll.length} returned · ${expenses.length} expenses</span>
       <span>Bosta settlement − Elashry owed − expenses</span>
     </div>
-    <div class="fin-row"><span>💰 Bosta settlement (delivered − CC-closed shipping − CC-closed returns shipping)</span><span class="fin-val">EGP ${fmt(bostaSettlement)}</span></div>
+    <div class="fin-row"><span>💰 Bosta settlement (collected ${fmt(totalCollectedD)} − shipping ${fmt(totalShippingD)})</span><span class="fin-val">EGP ${fmt(bostaSettlement)}</span></div>
     <div class="fin-row"><span>🏭 Elashry owed (${fmt(ELASHRY_TOTAL_TAKEN)} taken − ${fmt(returnedBuyCost)} returned − ${fmt(elashryPaid)} paid)</span><span class="fin-val deduct">− EGP ${fmt(elashryOwed)}</span></div>
     <div class="fin-row"><span>🧾 All expenses (every category)</span><span class="fin-val deduct">− EGP ${fmt(totalExpenses)}</span></div>
     <div class="fin-row ${winning ? 'profit' : 'loss'}" style="border-top:2px solid var(--line);padding-top:14px;margin-top:8px;font-size:1.2rem">
@@ -7580,13 +7577,13 @@ function renderBostaCash() {
   // ── Money I SHOULD receive from Bosta ──────────────────────────────
   //
   // Rule (business logic, matching how Bosta actually settles):
-  //   1. Total collected = Σ order.total for all Delivered orders.
-  //   2. Subtract Σ actual_shipping of Delivered orders where the
-  //      cash cycle is closed (real invoiced fee).
-  //   3. Subtract Σ actual_shipping of Returned orders where the
-  //      cash cycle is closed (Bosta charges the return leg fee too).
-  //   4. Result = total amount Bosta should send.
-  //   5. Subtract cash Bosta has already transferred to our bank.
+  //   1. Total collected = Σ order.total for all Delivered orders
+  //      (the canonical pinned+computed figure).
+  //   2. Subtract total shipping — the ONE canonical shipping number:
+  //      pinned monthly Bosta totals for past months, auto-computed for
+  //      new months (delivered + returned legs combined).
+  //   3. Result = total amount Bosta should send.
+  //   4. Subtract cash Bosta has already transferred to our bank.
   //   Result = still owed.
   //
   //   In-flight orders (In Transit / Heading / etc.) live in their
@@ -7594,15 +7591,10 @@ function renderBostaCash() {
   const deliveredAll = orders.filter(o => o.status === 'Delivered');
   const returnedAll  = orders.filter(o => o.status === 'Returned');
 
-  const cycleClosed = (o) => o.cash_cycle_closed === true;
-
   const totalCollected = finModelTotals().collected;  // single source (pinned + computed)
-  const deliveredClosed = deliveredAll.filter(cycleClosed);
-  const returnedClosed  = returnedAll.filter(cycleClosed);
-  const deliveredShipCC = deliveredClosed.reduce((a, o) => a + finShipOf(o), 0);
-  const returnedShipCC  = returnedClosed .reduce((a, o) => a + finShipOf(o), 0);
+  const totalShipping  = finModelTotals().shipping;   // single source (pinned + computed)
 
-  const shouldReceive = totalCollected - deliveredShipCC - returnedShipCC;
+  const shouldReceive = totalCollected - totalShipping;
 
   // Legacy names kept for the per-order breakdown + paid-orders check
   // below (unchanged behaviour). "receivableAll" is the pool the
@@ -7700,12 +7692,11 @@ function renderBostaCash() {
       </div>
 
       <div class="fin-row" style="opacity:.75;font-size:12px">
-        <span>Matches how Bosta actually settles · cash-cycle-closed shipping only</span>
+        <span>Matches how Bosta actually settles · canonical monthly shipping totals</span>
         <span>${deliveredAll.length} delivered · ${returnedAll.length} returned · ${receipts.length} transfers</span>
       </div>
       <div class="fin-row"><span>💰 Total collected (delivered orders)</span><span class="fin-val">EGP ${fmt(totalCollected)}</span></div>
-      <div class="fin-row"><span>🔒 Shipping deducted — delivered, CC closed (${deliveredClosed.length} orders)</span><span class="fin-val deduct">− EGP ${fmt(deliveredShipCC)}</span></div>
-      <div class="fin-row"><span>🔒 Shipping deducted — returned, CC closed (${returnedClosed.length} orders)</span><span class="fin-val deduct">− EGP ${fmt(returnedShipCC)}</span></div>
+      <div class="fin-row"><span>🔒 Shipping deducted — Bosta (delivered + returned, monthly totals)</span><span class="fin-val deduct">− EGP ${fmt(totalShipping)}</span></div>
       <div class="fin-row"><span>🏦 Already received (bank transfers)</span><span class="fin-val deduct">− EGP ${fmt(received)}</span></div>
       <div class="fin-row ${stillToReceive > 0 ? 'loss' : 'profit'}" style="border-top:2px solid var(--line);padding-top:14px;margin-top:8px;font-size:1.15rem">
         <span>${stillToReceive > 0 ? '🔴 Still to receive' : '🟢 All settled ✓'}</span>
