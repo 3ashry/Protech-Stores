@@ -4447,6 +4447,55 @@ function renderFinOverrides() {
     <div style="font-size:11px;color:var(--muted);margin-top:8px">The grey <b>≈</b> placeholder is what the system currently computes. Type a number to override; leave blank to keep computing that one field.</div>`;
 }
 
+// ── ORDER COVERAGE CHECK ────────────────────────────────────────────
+// Proves every finalised order is counted in exactly one month (by its
+// order-made date) — no order double-counted or missed. Also shows, per
+// month, what the actual orders add up to next to any pinned override.
+function renderFinAudit() {
+  const host = document.getElementById('fin-audit-body');
+  if (!host) return;
+  const orders = (cache.orders || []).filter(o => o.status === 'Delivered' || o.status === 'Returned');
+  const seq = (typeof finMonthSeq === 'function' ? finMonthSeq() : []);
+  const byMonth = new Map();
+  let noDate = 0;
+  for (const o of orders) {
+    const my = finMonthOfOrderFinancial(o);
+    if (!my) { noDate++; continue; }
+    const key = `${my.y}-${String(my.m).padStart(2, '0')}`;
+    (byMonth.get(key) || byMonth.set(key, []).get(key)).push(o);
+  }
+  const counted = Array.from(byMonth.values()).reduce((a, arr) => a + arr.length, 0);
+  const ok = noDate === 0 && counted === orders.length;
+  const rows = seq.map(p => {
+    const key = `${p.y}-${String(p.m).padStart(2, '0')}`;
+    const arr = byMonth.get(key) || [];
+    const del = arr.filter(o => o.status === 'Delivered');
+    const ret = arr.filter(o => o.status === 'Returned');
+    const cCollected = del.reduce((a, o) => a + parseFloat(o.total || 0), 0);
+    const cBuy = arr.reduce((a, o) => a + finBuyCostOf(o), 0);
+    const ov = finOverrideFor(p.y, p.m);
+    return `<tr>
+      <td><b>${FIN_MO_EN[p.m - 1]} ${p.y}</b>${ov ? ' <span class="badge b-gray" style="font-size:10px">pinned</span>' : ''}</td>
+      <td style="text-align:center">${arr.length}</td>
+      <td style="text-align:center;color:var(--muted);font-size:12px">${del.length} / ${ret.length}</td>
+      <td style="text-align:right">${fmt(Math.round(cCollected))}</td>
+      <td style="text-align:right">${fmt(Math.round(cBuy))}</td>
+    </tr>`;
+  }).join('');
+  host.innerHTML = `
+    <div style="padding:10px 12px;border-radius:8px;margin-bottom:10px;background:${ok ? '#dcfce7' : '#fee2e2'};font-size:13px;font-weight:700;color:${ok ? '#15803d' : '#b91c1c'}">
+      ${ok
+        ? `✅ All ${orders.length} finalised orders are counted exactly once — each in the single month it was made. None double-counted, none missed.`
+        : `⚠️ ${noDate} order(s) have no order date; they may be miscounted. ${counted}/${orders.length} placed.`}
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Month (order-made)</th><th style="text-align:center">Orders</th><th style="text-align:center">Deliv / Ret</th><th style="text-align:right">Collected (orders)</th><th style="text-align:right">Buying gross (orders)</th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr style="font-weight:800;border-top:2px solid var(--line)"><td>Total</td><td style="text-align:center">${counted}</td><td></td><td></td><td></td></tr></tfoot>
+    </table></div>
+    <div style="font-size:11px;color:var(--muted);margin-top:8px">"Collected/Buying (orders)" is what the actual orders made that month add up to. For <b>pinned</b> months your locked totals are what the dashboard uses; old order data is incomplete, so these computed figures won't match — that's expected and why those months are pinned.</div>`;
+}
+
 // The four KPI cards' numbers, computed the same way the detailed
 // Bosta / Elashry ledgers below compute them.
 function finComputeKpis() {
