@@ -34,8 +34,12 @@ const CANCEL_REASON_THANKS = 'شكراً لوقتك وصراحتك 🙏 هناخ
 const PROBLEM_REPLY = 'تمام، سجّلنا إن عندك مشكلة في الطلب ✅ هنتواصل معاك في أقرب وقت على نفس الرقم.';
 // Auto-reply after a rating tap on the feedback template.
 const FEEDBACK_THANKS_HIGH = 'شكراً جداً لتقييمك 🌟\nيسعدنا خدمتك دائماً، ولو محتاج أي حاجة إحنا معاك.';
-const FEEDBACK_THANKS_MID  = 'شكراً على تقييمك 🙏\nلو عندك أي ملاحظة تحب تشاركنا بيها، اكتبها هنا أو كلمنا على 01034482071.';
-const FEEDBACK_THANKS_LOW  = 'شكراً على وقتك وصراحتك 🙏\nحابين نفهم إيه اللي مضايقك عشان نصلحه — اكتب لنا هنا أو كلمنا على 01034482071.';
+const FEEDBACK_THANKS_MID  = 'شكراً على تقييمك 🙏\nلو عندك أي ملاحظة تحب تشاركنا بيها، اكتبها هنا في أي وقت.';
+// Low rating → ask the customer to WRITE what went wrong. The next text they
+// send is captured as the complaint (awaiting_feedback_note flag).
+const FEEDBACK_THANKS_LOW  = 'نأسف إن التجربة ماكانتش زي ما تتمنى 🙏\nممكن تكتبلنا هنا إيه اللي محتاج يتحسّن؟ رأيك هيساعدنا نبقى أحسن.';
+// Sent after the customer types their complaint following a low rating.
+const FEEDBACK_NOTE_THANKS = 'شكراً جداً على ملاحظتك 🙏 وصلتنا وهنشتغل عليها عشان نحسّن تجربتك المرة الجاية.';
 
 const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN;
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -104,6 +108,26 @@ export default async function handler(req, res) {
     const msg = change?.messages?.[0];
     if (!msg || !SUPABASE_URL || !SUPABASE_KEY) return res.status(200).json({ received: true });
 
+    // ── Complaint capture ──────────────────────────────────────────────
+    // If this customer just gave a low rating and we asked them to describe
+    // the problem, their NEXT free-text message IS that description. Capture
+    // it before any other intent parsing so its wording can't be mistaken
+    // for a confirm/cancel/problem command.
+    if (msg.type === 'text') {
+      const from = String(msg.from || '').replace(/\D/g, '');
+      const body = (msg.text?.body || '').trim();
+      if (from && body) {
+        const waiting = await sbGet('orders?select=id,phone&awaiting_feedback_note=is.true&order=feedback_at.desc&limit=50');
+        const match = waiting.find(o => waPhone(o.phone) === from);
+        if (match) {
+          await sbPatchRep(`orders?id=eq.${encodeURIComponent(match.id)}`,
+            { feedback_note: body, feedback_note_at: new Date().toISOString(), awaiting_feedback_note: false });
+          await sendText(msg.from, FEEDBACK_NOTE_THANKS);
+          return res.status(200).json({ received: true });
+        }
+      }
+    }
+
     // Work out the customer's intent from a button tap OR a typed message.
     // Intent is one of: 'confirm' | 'cancel' | 'rating' (with .rating = 5/3/1).
     let intent = null;
@@ -144,6 +168,9 @@ export default async function handler(req, res) {
     // ── Feedback rating branch ─────────────────────────────────────────
     if (intent === 'rating') {
       const patch = { feedback_rating: rating, feedback_at: new Date().toISOString() };
+      // Low rating → flag the order so the customer's next text is saved as the
+      // written complaint (handled by the complaint-capture block above).
+      if (rating === 1) patch.awaiting_feedback_note = true;
       let updated = [];
       // 1) Match by the id of the feedback template message we sent.
       const repliedToId = msg.context?.id;
