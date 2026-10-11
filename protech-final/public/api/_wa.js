@@ -37,6 +37,13 @@ export function waConfigured() {
   return !!(WA_TOKEN && WA_PHONE_NUMBER_ID);
 }
 
+// The number an order's WhatsApp messages go to: the number we've confirmed is
+// on WhatsApp (wa_phone, set after a fallback), else the main phone the customer
+// gave. The webhook switches wa_phone to the second number if the first fails.
+function orderWaTo(o = {}) {
+  return waPhone(o.wa_phone || o.phone);
+}
+
 // Egypt: turn a local 01XXXXXXXXX into international 201XXXXXXXXX (no +).
 export function waPhone(p) {
   let s = String(p || '').replace(/\D/g, '');
@@ -133,7 +140,7 @@ export async function sendConfirmTemplate(order = {}) {
     headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       messaging_product: 'whatsapp',
-      to: waPhone(order.phone),
+      to: orderWaTo(order),
       type: 'template',
       template: {
         name: WA_TEMPLATE_NAME,
@@ -168,7 +175,7 @@ export async function sendReminderTemplate(order = {}) {
     headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       messaging_product: 'whatsapp',
-      to: waPhone(order.phone),
+      to: orderWaTo(order),
       type: 'template',
       template: {
         name: WA_REMINDER_TEMPLATE,
@@ -200,7 +207,7 @@ export async function sendPreparedTemplate(order = {}) {
     headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       messaging_product: 'whatsapp',
-      to: waPhone(order.phone),
+      to: orderWaTo(order),
       type: 'template',
       template: {
         name: WA_PREPARED_TEMPLATE,
@@ -233,7 +240,7 @@ export async function sendShippedTemplate(order = {}) {
     headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       messaging_product: 'whatsapp',
-      to: waPhone(order.phone),
+      to: orderWaTo(order),
       type: 'template',
       template: {
         name: WA_SHIPPED_TEMPLATE,
@@ -264,7 +271,7 @@ export async function sendOutForDeliveryTemplate(order = {}) {
     headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       messaging_product: 'whatsapp',
-      to: waPhone(order.phone),
+      to: orderWaTo(order),
       type: 'template',
       template: {
         name: WA_OUTDELIVERY_TEMPLATE,
@@ -331,7 +338,7 @@ export async function sendFeedbackTemplate(order = {}) {
     headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       messaging_product: 'whatsapp',
-      to: waPhone(order.phone),
+      to: orderWaTo(order),
       type: 'template',
       template: {
         name: WA_FEEDBACK_TEMPLATE,

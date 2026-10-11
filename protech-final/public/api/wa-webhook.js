@@ -13,7 +13,7 @@
 //   WA_VERIFY_TOKEN  - the random string you also paste into Meta's webhook config
 //   SUPABASE_URL     - https://wljxplbcfoorqpoflcdz.supabase.co
 //   SUPABASE_KEY     - Supabase SECRET (service_role) key
-import { waPhone, sendText, sendButtons } from './_wa.js';
+import { waPhone, sendText, sendButtons, sendConfirmTemplate, waConfigured } from './_wa.js';
 
 // Auto-replies sent back to the customer after they confirm / cancel.
 const CONFIRM_REPLY = 'شكراً لتأكيد طلبك ✅\nهنجهّز طلبك ونشحنه لك في أسرع وقت، وهنبلّغك أول ما يتسلّم لشركة الشحن 🚚';
@@ -88,18 +88,42 @@ export default async function handler(req, res) {
     const entry = req.body?.entry?.[0];
     const change = entry?.changes?.[0]?.value;
 
-    // ── Delivery-status events (Phase 12) ──────────────────────────────
-    // A message that FAILED to deliver (bad number, blocked, etc.) flags
-    // the order for a phone call so it never silently falls through.
+    // ── Delivery-status events ─────────────────────────────────────────
+    // A message that FAILED to deliver usually means that number isn't on
+    // WhatsApp (or blocked us). The customer gave two numbers, so: if the
+    // FIRST confirmation fails, resend it to the SECOND number and remember
+    // that one (wa_phone) for every later message. If the second also fails
+    // — or a later message fails — flag the order for a phone call.
     const statusEvt = change?.statuses?.[0];
     if (statusEvt && (statusEvt.status === 'failed' || statusEvt.status === 'undelivered') && SUPABASE_URL && SUPABASE_KEY) {
       const failedId = statusEvt.id;
       const reason = statusEvt.errors?.[0]?.title || statusEvt.errors?.[0]?.message || statusEvt.status;
       if (failedId) {
-        const patch = { wa_delivery_failed: true, needs_call: true, needs_call_reason: 'فشل توصيل رسالة واتساب: ' + reason };
-        for (const col of ['wa_msg_id', 'wa_prepared_msg_id', 'wa_shipped_msg_id']) {
-          const rows = await sbPatchRep(`orders?${col}=eq.${encodeURIComponent(failedId)}`, patch);
-          if (rows.length) break;
+        const cols = ['wa_msg_id', 'wa_confirm_reminder_msg_id', 'wa_shipped_msg_id', 'wa_outdelivery_msg_id', 'wa_feedback_msg_id'];
+        let order = null, matchedCol = null;
+        for (const col of cols) {
+          const rows = await sbGet(`orders?${col}=eq.${encodeURIComponent(failedId)}&select=id,code,phone,second_phone,wa_phone,customer_name,products,total,address,allow_open,ship_code&limit=1`);
+          if (rows.length) { order = rows[0]; matchedCol = col; break; }
+        }
+        if (order) {
+          const main = String(order.phone || '').replace(/\s+/g, '');
+          const second = String(order.second_phone || '').replace(/\s+/g, '');
+          // Only retry on the FIRST confirmation, only if a distinct second
+          // number exists, and only if we haven't already switched numbers.
+          const canFallback = matchedCol === 'wa_msg_id' && second && second !== main && !order.wa_phone && waConfigured();
+          if (canFallback) {
+            const sent = await sendConfirmTemplate({ ...order, wa_phone: order.second_phone });
+            if (sent?.ok) {
+              await sbPatchRep(`orders?id=eq.${encodeURIComponent(order.id)}`,
+                { wa_phone: order.second_phone, wa_msg_id: sent.msgId, wa_sent_at: new Date().toISOString(), wa_delivery_failed: false });
+            } else {
+              await sbPatchRep(`orders?id=eq.${encodeURIComponent(order.id)}`,
+                { wa_delivery_failed: true, needs_call: true, needs_call_reason: 'الرقمين مش على واتساب — محتاج اتصال' });
+            }
+          } else {
+            await sbPatchRep(`orders?id=eq.${encodeURIComponent(order.id)}`,
+              { wa_delivery_failed: true, needs_call: true, needs_call_reason: 'فشل توصيل رسالة واتساب: ' + reason });
+          }
         }
       }
       return res.status(200).json({ received: true });
