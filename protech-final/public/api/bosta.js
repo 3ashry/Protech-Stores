@@ -318,6 +318,69 @@ export default async function handler(req, res) {
     allowToOpenPackage: !!allowOpen,  // Customer chose "open package before receiving"
   };
 
+  // ─────────────────────────────────────────────────────────────────────
+  // STEP 1 — WhatsApp confirmation goes out FIRST, independently of Bosta.
+  // The customer gets their "you ordered X — confirm/cancel" message even
+  // if Bosta rejects the shipment (bad address, missing images under new
+  // Bosta rules, API outage, etc). The shipment can be fixed from the
+  // admin after the fact, but the customer must never be left in the dark.
+  // Persist the second phone first so the WhatsApp fallback has it.
+  // ─────────────────────────────────────────────────────────────────────
+  const sbPatch = (body) => fetch(
+    `${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify(body),
+    }
+  );
+  if (secondPhone) {
+    try { await sbPatch({ second_phone: secondPhone }); }
+    catch (e) { console.warn('second_phone patch failed:', e.message); }
+  }
+  let waResult = { skipped: true, reason: 'wa not configured' };
+  if (waConfigured()) {
+    try {
+      const rr = await sbFetch(`orders?id=eq.${encodeURIComponent(orderId)}&select=code,products`);
+      const [row] = (await rr.json().catch(() => [])) || [];
+      const orderForWa = {
+        customer_name: customerName,
+        products: row?.products || [],
+        est_shipping: shippingCost,
+        total,
+        allow_open: !!allowOpen,
+        ship_code: '',           // Filled in by the shipped template later
+        phone,
+        code: row?.code || orderId,
+      };
+      const sent = await sendConfirmTemplate(orderForWa);
+      if (sent?.ok) {
+        waResult = { sent: true, msgId: sent.msgId };
+        await sbPatch({ wa_msg_id: sent.msgId, wa_sent_at: new Date().toISOString() })
+          .catch(() => {});
+      } else {
+        console.error('bosta.js WA confirm failed:', JSON.stringify(sent?.error || sent));
+        waResult = { sent: false, error: sent?.error || sent };
+      }
+    } catch (e) {
+      console.error('bosta.js WA confirm exception:', e && e.message);
+      waResult = { sent: false, exception: String(e && e.message || e) };
+    }
+  } else {
+    console.warn('bosta.js: WA_TOKEN or WA_PHONE_NUMBER_ID not set — skipping WhatsApp send');
+  }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // STEP 2 — Create the Bosta shipment. If this fails, the WhatsApp message
+  // has already gone out and the order sits in Processing with no ship_code
+  // — the admin can retry Bosta from the dashboard. We still return a 200
+  // because the customer-facing part (confirmation) succeeded.
+  // ─────────────────────────────────────────────────────────────────────
   try {
     console.log('Bosta payload:', JSON.stringify(bostaPayload));
 
@@ -337,7 +400,10 @@ export default async function handler(req, res) {
 
     if (!bostaRes.ok) {
       console.error('Bosta error:', JSON.stringify(bostaData));
-      return res.status(502).json({ error: 'Bosta API error', details: bostaData });
+      // Non-fatal: WhatsApp confirmation already went out (STEP 1 above).
+      // The admin fixes the Bosta payload (e.g. missing product images for
+      // allowToOpenPackage, bad city) and retries from the dashboard.
+      return res.status(200).json({ success: false, bostaError: bostaData, whatsapp: waResult });
     }
 
     const trackingNumber =
@@ -346,7 +412,6 @@ export default async function handler(req, res) {
       bostaData?.message?.trackingNumber ||
       null;
 
-    // Bosta's internal delivery id — needed later to fetch status/fees from Bosta.
     const bostaId =
       bostaData?._id ||
       bostaData?.data?._id ||
@@ -355,94 +420,21 @@ export default async function handler(req, res) {
 
     if (!trackingNumber) {
       console.error('No tracking number:', JSON.stringify(bostaData));
-      return res.status(502).json({ error: 'No tracking number returned', details: bostaData });
+      return res.status(200).json({ success: false, bostaError: 'no tracking number', whatsapp: waResult });
     }
 
-    const patchOrder = (body) => fetch(
-      `${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`,
-      {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'apikey': SUPABASE_KEY,
-          'Authorization': `Bearer ${SUPABASE_KEY}`,
-          'Prefer': 'return=minimal',
-        },
-        body: JSON.stringify(body),
-      }
-    );
-
-    // 1) Always-present columns first, so the ship code is saved no matter what.
-    const updateRes = await patchOrder({ ship_code: trackingNumber, bosta_id: bostaId, actual_shipping: 0 });
-    if (!updateRes.ok) {
-      const err = await updateRes.text();
-      console.error('Supabase update error:', err);
-      return res.status(502).json({ error: 'Supabase update failed', details: err });
-    }
-    // 2) Store the calculated Bosta cost for the delivery-time actual_shipping. Best-effort:
-    //    if the calc_shipping column doesn't exist yet, this fails silently and the sync
-    //    falls back to (est_shipping + 40 − open-package fee).
-    try {
-      const r2 = await patchOrder({ calc_shipping: shippingCost });
-      if (!r2.ok) console.warn('calc_shipping not saved (column missing?):', await r2.text());
-    } catch (e) { console.warn('calc_shipping patch failed:', e.message); }
-
-    // Persist the SECOND phone on the order so the WhatsApp flow can fall back
-    // to it if the first number isn't on WhatsApp. Best-effort; Bosta already
-    // received both numbers above regardless.
-    if (secondPhone) {
-      try { await patchOrder({ second_phone: secondPhone }); }
-      catch (e) { console.warn('second_phone patch failed:', e.message); }
-    }
-
-    // 3) Fire the WhatsApp confirmation RIGHT NOW (awaited so Vercel
-    //    doesn't terminate the serverless function before Meta's API
-    //    responds). The storefront doesn't block on this /api/bosta
-    //    call so the extra second it adds is invisible to the customer.
-    //    Previously the message waited 6 hours via wa-cron; the shop
-    //    owner wants customers to get the "you ordered X — Confirm /
-    //    Cancel" template immediately on checkout. Mark wa_sent_at on
-    //    success so wa-cron's eventual sweep doesn't send a duplicate.
-    let waResult = { skipped: true, reason: 'wa not configured' };
-    if (waConfigured()) {
-      try {
-        const rr = await sbFetch(`orders?id=eq.${encodeURIComponent(orderId)}&select=code,products`);
-        const [row] = (await rr.json().catch(() => [])) || [];
-        const orderForWa = {
-          customer_name: customerName,
-          products: row?.products || [],
-          est_shipping: shippingCost,
-          total,
-          allow_open: !!allowOpen,
-          ship_code: trackingNumber,
-          phone,
-          code: row?.code || orderId,
-        };
-        const sent = await sendConfirmTemplate(orderForWa);
-        if (sent?.ok) {
-          waResult = { sent: true, msgId: sent.msgId };
-          await patchOrder({ wa_msg_id: sent.msgId, wa_sent_at: new Date().toISOString() })
-            .catch(() => {});
-        } else {
-          // Surface the Meta error in BOTH the Vercel function log and the
-          // JSON response so a quick DevTools Network peek tells the admin
-          // exactly what Meta rejected (missing template approval, parameter
-          // mismatch, recipient not on allow-list in dev mode, etc).
-          console.error('bosta.js WA confirm failed:', JSON.stringify(sent?.error || sent));
-          waResult = { sent: false, error: sent?.error || sent };
-        }
-      } catch (e) {
-        console.error('bosta.js WA confirm exception:', e && e.message);
-        waResult = { sent: false, exception: String(e && e.message || e) };
-      }
-    } else {
-      console.warn('bosta.js: WA_TOKEN or WA_PHONE_NUMBER_ID not set — skipping WhatsApp send');
-    }
+    // Save the Bosta ship code / id and the calculated shipping cost. All
+    // best-effort: Bosta already accepted the shipment, so a Supabase hiccup
+    // here just needs a retry later.
+    try { await sbPatch({ ship_code: trackingNumber, bosta_id: bostaId, actual_shipping: 0 }); }
+    catch (e) { console.warn('ship_code patch failed:', e.message); }
+    try { await sbPatch({ calc_shipping: shippingCost }); }
+    catch (e) { console.warn('calc_shipping patch failed:', e.message); }
 
     return res.status(200).json({ success: true, trackingNumber, shippingCost, whatsapp: waResult });
 
   } catch (e) {
     console.error('bosta.js exception:', e.message);
-    return res.status(500).json({ error: e.message });
+    return res.status(200).json({ success: false, error: e.message, whatsapp: waResult });
   }
 }
