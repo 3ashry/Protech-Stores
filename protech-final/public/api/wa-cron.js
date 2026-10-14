@@ -14,7 +14,7 @@
 //
 // Env: WA_* (see _wa.js), SUPABASE_URL, SUPABASE_KEY (service_role), CRON_SECRET,
 //      optional WA_CONFIRM_DELAY_HOURS (default 6).
-import { sendConfirmTemplate, sendFeedbackTemplate, sendCartRecoveryTemplate, sendPreparedTemplate, sendShippedTemplate, waConfigured } from './_wa.js';
+import { sendConfirmTemplate, sendReminderTemplate, sendFeedbackTemplate, sendCartRecoveryTemplate, sendShippedTemplate, sendOutForDeliveryTemplate, waConfigured } from './_wa.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
@@ -22,7 +22,7 @@ const CRON_SECRET = (process.env.CRON_SECRET || '').trim();
 // Phase-12 escalation timing. After the confirmation goes out with no reply,
 // send ONE reminder after WA_REMINDER_HOURS, then flag the order for a phone
 // call WA_CALL_AFTER_REMINDER_HOURS after that reminder.
-const REMINDER_HOURS = Math.max(1, parseFloat(process.env.WA_REMINDER_HOURS || '6') || 6);
+const REMINDER_HOURS = Math.max(1, parseFloat(process.env.WA_REMINDER_HOURS || '3') || 3);
 const CALL_AFTER_REMINDER_HOURS = Math.max(1, parseFloat(process.env.WA_CALL_AFTER_REMINDER_HOURS || '6') || 6);
 // Hours to wait after an order before sending the confirmation. Production is 6h.
 // A leftover sub-1-hour value (used while testing the flow) is IGNORED and falls
@@ -169,38 +169,21 @@ export default async function handler(req, res) {
       } catch (e) { cartFailed.push({ id: c.id, name: c.name, error: e.message }); }
     }
 
-    // ─────────────────────────────────────────────────────────────────
-    //  PREPARED PASS (Phase 12) — order packed (picker_prepared_at set):
-    //  "ready, ships soon" + a Cancel button. Recent orders only so we
-    //  never backfill-message the whole history on first run.
-    // ─────────────────────────────────────────────────────────────────
-    const prepParts = [
-      'select=id,code,phone,customer_name',
-      'picker_prepared_at=not.is.null',
-      'wa_prepared_sent_at=is.null',
-      'status=eq.Processing',
-      'phone=not.is.null',
-      `created_at=gte.${encodeURIComponent(floor)}`,
-    ];
-    if (ONLY_PHONE) prepParts.push(`phone=eq.${encodeURIComponent(ONLY_PHONE)}`);
-    prepParts.push('order=picker_prepared_at.desc', `limit=${test ? 1 : 50}`);
-    const prepOrders = await sbGet(`orders?${prepParts.join('&')}`);
-    const prepSent = [], prepFailed = [];
-    for (const o of prepOrders) {
-      const r = await sendPreparedTemplate(o);
-      if (r.ok) { await sbPatch(o.id, { wa_prepared_sent_at: new Date().toISOString(), wa_prepared_msg_id: r.msgId }); prepSent.push({ code: o.code, msgId: r.msgId }); }
-      else prepFailed.push({ code: o.code, error: r.error });
-    }
+    // PREPARED PASS removed — the new flow goes confirm → handed-to-Bosta →
+    // out-for-delivery → delivered, with no separate "order packed" message.
+    const prepOrders = [], prepSent = [], prepFailed = [];
 
     // ─────────────────────────────────────────────────────────────────
-    //  SHIPPED PASS (Phase 12) — handed to Bosta (ship_code assigned):
-    //  tracking code + amount, NO cancel, an "I have a problem" button.
+    //  SHIPPED PASS — handed to Bosta (ship_code assigned): order_shipped
+    //  (name, order code, tracking, amount) + a static call button only.
+    //  Not gated to Processing — the status may already have flipped to
+    //  In Transit by the time the cron runs; wa_shipped_sent_at dedupes.
     // ─────────────────────────────────────────────────────────────────
     const shipParts = [
       'select=id,code,phone,customer_name,ship_code,total',
       'ship_code=not.is.null',
       'wa_shipped_sent_at=is.null',
-      'status=eq.Processing',
+      'status=not.in.(Delivered,Returned,Cancelled)',
       'phone=not.is.null',
       `created_at=gte.${encodeURIComponent(floor)}`,
     ];
@@ -213,6 +196,28 @@ export default async function handler(req, res) {
       const r = await sendShippedTemplate(o);
       if (r.ok) { await sbPatch(o.id, { wa_shipped_sent_at: new Date().toISOString(), wa_shipped_msg_id: r.msgId }); shipSent.push({ code: o.code, msgId: r.msgId }); }
       else shipFailed.push({ code: o.code, error: r.error });
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    //  OUT-FOR-DELIVERY PASS — Bosta marked the parcel heading to the
+    //  customer (status → "Heading to Customer"): order_out_for_delivery
+    //  (name, tracking, amount) + a static call button. Sent once.
+    // ─────────────────────────────────────────────────────────────────
+    const odParts = [
+      'select=id,code,phone,customer_name,ship_code,total',
+      `status=eq.${encodeURIComponent('Heading to Customer')}`,
+      'wa_outdelivery_sent_at=is.null',
+      'phone=not.is.null',
+      `created_at=gte.${encodeURIComponent(floor)}`,
+    ];
+    if (ONLY_PHONE) odParts.push(`phone=eq.${encodeURIComponent(ONLY_PHONE)}`);
+    odParts.push('order=created_at.desc', `limit=${test ? 1 : 50}`);
+    const odOrders = await sbGet(`orders?${odParts.join('&')}`);
+    const odSent = [], odFailed = [];
+    for (const o of odOrders) {
+      const r = await sendOutForDeliveryTemplate(o);
+      if (r.ok) { await sbPatch(o.id, { wa_outdelivery_sent_at: new Date().toISOString(), wa_outdelivery_msg_id: r.msgId }); odSent.push({ code: o.code, msgId: r.msgId }); }
+      else odFailed.push({ code: o.code, error: r.error });
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -237,8 +242,10 @@ export default async function handler(req, res) {
     const remOrders = await sbGet(`orders?${remParts.join('&')}`);
     const remSent = [], remFailed = [];
     for (const o of remOrders) {
-      const r = await sendConfirmTemplate(o);
-      if (r.ok) { await sbPatch(o.id, { wa_confirm_reminder_at: new Date().toISOString() }); remSent.push({ code: o.code, msgId: r.msgId }); }
+      // Dedicated reminder template ("طلبك لسه مستني تأكيدك") with the same
+      // confirm/cancel buttons. Store its id so a tap on it maps to this order.
+      const r = await sendReminderTemplate(o);
+      if (r.ok) { await sbPatch(o.id, { wa_confirm_reminder_at: new Date().toISOString(), wa_confirm_reminder_msg_id: r.msgId }); remSent.push({ code: o.code, msgId: r.msgId }); }
       else remFailed.push({ code: o.code, error: r.error });
     }
     const callCutoff = new Date(now - (test ? 0 : CALL_AFTER_REMINDER_HOURS * 3600 * 1000)).toISOString();
@@ -266,6 +273,8 @@ export default async function handler(req, res) {
         details: { sent: prepSent.slice(0, 10), failed: prepFailed.slice(0, 5) } },
       shipped: { candidates: shipOrders.length, sent: shipSent.length, failed: shipFailed.length,
         details: { sent: shipSent.slice(0, 10), failed: shipFailed.slice(0, 5) } },
+      outForDelivery: { candidates: odOrders.length, sent: odSent.length, failed: odFailed.length,
+        details: { sent: odSent.slice(0, 10), failed: odFailed.slice(0, 5) } },
       escalation: { reminders: remSent.length, remindersFailed: remFailed.length, flaggedForCall: flaggedForCall.length,
         details: { flagged: flaggedForCall.slice(0, 10), failed: remFailed.slice(0, 5) } },
       feedback: { candidates: fbOrders.length, sent: fbSent.length, failed: fbFailed.length,

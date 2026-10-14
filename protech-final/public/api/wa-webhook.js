@@ -13,17 +13,33 @@
 //   WA_VERIFY_TOKEN  - the random string you also paste into Meta's webhook config
 //   SUPABASE_URL     - https://wljxplbcfoorqpoflcdz.supabase.co
 //   SUPABASE_KEY     - Supabase SECRET (service_role) key
-import { waPhone, sendText } from './_wa.js';
+import { waPhone, sendText, sendButtons, sendConfirmTemplate, waConfigured } from './_wa.js';
 
 // Auto-replies sent back to the customer after they confirm / cancel.
-const CONFIRM_REPLY = 'شكراً لطلبك من بروتيك 😊\nمدة الشحن المتوقعة 3 أيام عمل.\nللاستفسار ابعتلنا على واتساب على الرقم ده: 01034482071';
-const CANCEL_REPLY = 'تم إلغاء طلبك.';
+const CONFIRM_REPLY = 'شكراً لتأكيد طلبك ✅\nهنجهّز طلبك ونشحنه لك في أسرع وقت، وهنبلّغك أول ما يتسلّم لشركة الشحن 🚚';
+// After a cancel we ask WHY, with quick-reply reasons (buttons below).
+const CANCEL_REPLY = 'تم إلغاء الطلب 🙏 ممكن تقولنا السبب عشان نحسّن خدمتنا؟';
+const CANCEL_REASON_BUTTONS = [
+  { id: 'CANCEL_REASON_PRICE',   title: 'السعر مرتفع' },
+  { id: 'CANCEL_REASON_MIND',    title: 'غيّرت رأيي' },
+  { id: 'CANCEL_REASON_MISTAKE', title: 'طلبت بالغلط' },
+];
+const CANCEL_REASONS = {
+  CANCEL_REASON_PRICE:   'السعر مرتفع',
+  CANCEL_REASON_MIND:    'غيّرت رأيي',
+  CANCEL_REASON_MISTAKE: 'طلبت بالغلط',
+};
+const CANCEL_REASON_THANKS = 'شكراً لوقتك وصراحتك 🙏 هناخد ملاحظتك في الاعتبار عشان نحسّن خدمتنا.';
 // Phase 12 — reply after the customer taps "I have a problem with my order".
 const PROBLEM_REPLY = 'تمام، سجّلنا إن عندك مشكلة في الطلب ✅ هنتواصل معاك في أقرب وقت على نفس الرقم.';
 // Auto-reply after a rating tap on the feedback template.
 const FEEDBACK_THANKS_HIGH = 'شكراً جداً لتقييمك 🌟\nيسعدنا خدمتك دائماً، ولو محتاج أي حاجة إحنا معاك.';
-const FEEDBACK_THANKS_MID  = 'شكراً على تقييمك 🙏\nلو عندك أي ملاحظة تحب تشاركنا بيها، اكتبها هنا أو كلمنا على 01034482071.';
-const FEEDBACK_THANKS_LOW  = 'شكراً على وقتك وصراحتك 🙏\nحابين نفهم إيه اللي مضايقك عشان نصلحه — اكتب لنا هنا أو كلمنا على 01034482071.';
+const FEEDBACK_THANKS_MID  = 'شكراً على تقييمك 🙏\nلو عندك أي ملاحظة تحب تشاركنا بيها، اكتبها هنا في أي وقت.';
+// Low rating → ask the customer to WRITE what went wrong. The next text they
+// send is captured as the complaint (awaiting_feedback_note flag).
+const FEEDBACK_THANKS_LOW  = 'نأسف إن التجربة ماكانتش زي ما تتمنى 🙏\nممكن تكتبلنا هنا إيه اللي محتاج يتحسّن؟ رأيك هيساعدنا نبقى أحسن.';
+// Sent after the customer types their complaint following a low rating.
+const FEEDBACK_NOTE_THANKS = 'شكراً جداً على ملاحظتك 🙏 وصلتنا وهنشتغل عليها عشان نحسّن تجربتك المرة الجاية.';
 
 const WA_VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN;
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -72,18 +88,42 @@ export default async function handler(req, res) {
     const entry = req.body?.entry?.[0];
     const change = entry?.changes?.[0]?.value;
 
-    // ── Delivery-status events (Phase 12) ──────────────────────────────
-    // A message that FAILED to deliver (bad number, blocked, etc.) flags
-    // the order for a phone call so it never silently falls through.
+    // ── Delivery-status events ─────────────────────────────────────────
+    // A message that FAILED to deliver usually means that number isn't on
+    // WhatsApp (or blocked us). The customer gave two numbers, so: if the
+    // FIRST confirmation fails, resend it to the SECOND number and remember
+    // that one (wa_phone) for every later message. If the second also fails
+    // — or a later message fails — flag the order for a phone call.
     const statusEvt = change?.statuses?.[0];
     if (statusEvt && (statusEvt.status === 'failed' || statusEvt.status === 'undelivered') && SUPABASE_URL && SUPABASE_KEY) {
       const failedId = statusEvt.id;
       const reason = statusEvt.errors?.[0]?.title || statusEvt.errors?.[0]?.message || statusEvt.status;
       if (failedId) {
-        const patch = { wa_delivery_failed: true, needs_call: true, needs_call_reason: 'فشل توصيل رسالة واتساب: ' + reason };
-        for (const col of ['wa_msg_id', 'wa_prepared_msg_id', 'wa_shipped_msg_id']) {
-          const rows = await sbPatchRep(`orders?${col}=eq.${encodeURIComponent(failedId)}`, patch);
-          if (rows.length) break;
+        const cols = ['wa_msg_id', 'wa_confirm_reminder_msg_id', 'wa_shipped_msg_id', 'wa_outdelivery_msg_id', 'wa_feedback_msg_id'];
+        let order = null, matchedCol = null;
+        for (const col of cols) {
+          const rows = await sbGet(`orders?${col}=eq.${encodeURIComponent(failedId)}&select=id,code,phone,second_phone,wa_phone,customer_name,products,total,address,allow_open,ship_code&limit=1`);
+          if (rows.length) { order = rows[0]; matchedCol = col; break; }
+        }
+        if (order) {
+          const main = String(order.phone || '').replace(/\s+/g, '');
+          const second = String(order.second_phone || '').replace(/\s+/g, '');
+          // Only retry on the FIRST confirmation, only if a distinct second
+          // number exists, and only if we haven't already switched numbers.
+          const canFallback = matchedCol === 'wa_msg_id' && second && second !== main && !order.wa_phone && waConfigured();
+          if (canFallback) {
+            const sent = await sendConfirmTemplate({ ...order, wa_phone: order.second_phone });
+            if (sent?.ok) {
+              await sbPatchRep(`orders?id=eq.${encodeURIComponent(order.id)}`,
+                { wa_phone: order.second_phone, wa_msg_id: sent.msgId, wa_sent_at: new Date().toISOString(), wa_delivery_failed: false });
+            } else {
+              await sbPatchRep(`orders?id=eq.${encodeURIComponent(order.id)}`,
+                { wa_delivery_failed: true, needs_call: true, needs_call_reason: 'الرقمين مش على واتساب — محتاج اتصال' });
+            }
+          } else {
+            await sbPatchRep(`orders?id=eq.${encodeURIComponent(order.id)}`,
+              { wa_delivery_failed: true, needs_call: true, needs_call_reason: 'فشل توصيل رسالة واتساب: ' + reason });
+          }
         }
       }
       return res.status(200).json({ received: true });
@@ -92,10 +132,31 @@ export default async function handler(req, res) {
     const msg = change?.messages?.[0];
     if (!msg || !SUPABASE_URL || !SUPABASE_KEY) return res.status(200).json({ received: true });
 
+    // ── Complaint capture ──────────────────────────────────────────────
+    // If this customer just gave a low rating and we asked them to describe
+    // the problem, their NEXT free-text message IS that description. Capture
+    // it before any other intent parsing so its wording can't be mistaken
+    // for a confirm/cancel/problem command.
+    if (msg.type === 'text') {
+      const from = String(msg.from || '').replace(/\D/g, '');
+      const body = (msg.text?.body || '').trim();
+      if (from && body) {
+        const waiting = await sbGet('orders?select=id,phone&awaiting_feedback_note=is.true&order=feedback_at.desc&limit=50');
+        const match = waiting.find(o => waPhone(o.phone) === from);
+        if (match) {
+          await sbPatchRep(`orders?id=eq.${encodeURIComponent(match.id)}`,
+            { feedback_note: body, feedback_note_at: new Date().toISOString(), awaiting_feedback_note: false });
+          await sendText(msg.from, FEEDBACK_NOTE_THANKS);
+          return res.status(200).json({ received: true });
+        }
+      }
+    }
+
     // Work out the customer's intent from a button tap OR a typed message.
     // Intent is one of: 'confirm' | 'cancel' | 'rating' (with .rating = 5/3/1).
     let intent = null;
     let rating = null;
+    let cancelReasonId = null;
     const readRatingPayload = (p) => {
       if (p === 'RATING_5') return 5;
       if (p === 'RATING_3') return 3;
@@ -114,7 +175,10 @@ export default async function handler(req, res) {
       const br = msg.interactive?.button_reply || {};
       const id = br.id || '', title = br.title || '';
       const r = readRatingPayload(id);
-      if (r != null) { intent = 'rating'; rating = r; }
+      // Cancel-reason taps are checked FIRST — "طلبت بالغلط" contains "غلط",
+      // which would otherwise be misread as a "problem" by the regex below.
+      if (id.startsWith('CANCEL_REASON_')) { intent = 'cancel_reason'; cancelReasonId = id; }
+      else if (r != null) { intent = 'rating'; rating = r; }
       else if (id === 'PROBLEM' || PROBLEM_RE.test(title)) intent = 'problem';
       else if (id === 'CONFIRM' || CONFIRM_RE.test(title)) intent = 'confirm';
       else if (id === 'CANCEL' || CANCEL_RE.test(title)) intent = 'cancel';
@@ -128,6 +192,9 @@ export default async function handler(req, res) {
     // ── Feedback rating branch ─────────────────────────────────────────
     if (intent === 'rating') {
       const patch = { feedback_rating: rating, feedback_at: new Date().toISOString() };
+      // Low rating → flag the order so the customer's next text is saved as the
+      // written complaint (handled by the complaint-capture block above).
+      if (rating === 1) patch.awaiting_feedback_note = true;
       let updated = [];
       // 1) Match by the id of the feedback template message we sent.
       const repliedToId = msg.context?.id;
@@ -146,6 +213,22 @@ export default async function handler(req, res) {
         const reply = rating >= 5 ? FEEDBACK_THANKS_HIGH : (rating >= 3 ? FEEDBACK_THANKS_MID : FEEDBACK_THANKS_LOW);
         await sendText(msg.from, reply);
       }
+      return res.status(200).json({ received: true });
+    }
+
+    // ── Cancel-reason tap (follow-up buttons after a cancellation) ──────
+    if (intent === 'cancel_reason') {
+      const reasonText = CANCEL_REASONS[cancelReasonId] || cancelReasonId;
+      const patch = { cancel_reason: reasonText, cancel_reason_at: new Date().toISOString() };
+      // Match the most recent cancelled order from this phone that has no
+      // reason yet (the customer just cancelled it moments ago).
+      const from = String(msg.from || '').replace(/\D/g, '');
+      if (from) {
+        const rows = await sbGet('orders?select=id,phone&status=eq.Cancelled&cancel_reason=is.null&order=created_at.desc&limit=50');
+        const match = rows.find(o => waPhone(o.phone) === from);
+        if (match) await sbPatchRep(`orders?id=eq.${encodeURIComponent(match.id)}`, patch);
+      }
+      if (msg.from) await sendText(msg.from, CANCEL_REASON_THANKS);
       return res.status(200).json({ received: true });
     }
 
@@ -178,6 +261,8 @@ export default async function handler(req, res) {
       const repliedToId = msg.context?.id;
       if (repliedToId) {
         updated = await sbPatchRep(`orders?wa_msg_id=eq.${encodeURIComponent(repliedToId)}`, update);
+        // The tap may be on the 3h REMINDER rather than the first confirmation.
+        if (!updated.length) updated = await sbPatchRep(`orders?wa_confirm_reminder_msg_id=eq.${encodeURIComponent(repliedToId)}`, update);
         if (updated.length) matchedId = updated[0].id;
       }
 
@@ -199,8 +284,17 @@ export default async function handler(req, res) {
           { post_prep_cancel_at: new Date().toISOString(), post_prep_cancel_ack_at: null });
       }
 
-      // 3) Auto-reply to the customer (the 24h window is open since they just messaged us).
-      if (msg.from) await sendText(msg.from, intent === 'confirm' ? CONFIRM_REPLY : CANCEL_REPLY);
+      // 3) Auto-reply to the customer (the 24h window is open since they just
+      //    messaged us). Confirm → a simple thank-you; Cancel → ask why, with
+      //    three quick-reply reasons the next webhook hit records.
+      if (msg.from) {
+        if (intent === 'confirm') {
+          await sendText(msg.from, CONFIRM_REPLY);
+        } else {
+          const sent = await sendButtons(msg.from, CANCEL_REPLY, CANCEL_REASON_BUTTONS);
+          if (!sent.ok) await sendText(msg.from, CANCEL_REPLY); // fallback to plain text
+        }
+      }
     }
   } catch (e) {
     console.error('wa-webhook error:', e.message);

@@ -387,6 +387,14 @@ export default async function handler(req, res) {
       if (!r2.ok) console.warn('calc_shipping not saved (column missing?):', await r2.text());
     } catch (e) { console.warn('calc_shipping patch failed:', e.message); }
 
+    // Persist the SECOND phone on the order so the WhatsApp flow can fall back
+    // to it if the first number isn't on WhatsApp. Best-effort; Bosta already
+    // received both numbers above regardless.
+    if (secondPhone) {
+      try { await patchOrder({ second_phone: secondPhone }); }
+      catch (e) { console.warn('second_phone patch failed:', e.message); }
+    }
+
     // 3) Fire the WhatsApp confirmation RIGHT NOW (awaited so Vercel
     //    doesn't terminate the serverless function before Meta's API
     //    responds). The storefront doesn't block on this /api/bosta

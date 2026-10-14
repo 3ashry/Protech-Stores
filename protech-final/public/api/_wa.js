@@ -26,9 +26,22 @@ const WA_CART_TEMPLATE = process.env.WA_CART_TEMPLATE || 'cart_recovery';
 //                   + 1 "I have a problem" quick-reply.
 const WA_PREPARED_TEMPLATE = process.env.WA_PREPARED_TEMPLATE || 'order_prepared';
 const WA_SHIPPED_TEMPLATE = process.env.WA_SHIPPED_TEMPLATE || 'order_shipped';
+// "Out for delivery" template — fired when Bosta marks the parcel heading to
+// the customer. Body: {{1}} name {{2}} tracking code {{3}} amount. Call button only.
+const WA_OUTDELIVERY_TEMPLATE = process.env.WA_OUTDELIVERY_TEMPLATE || 'order_out_for_delivery';
+// Confirmation REMINDER template — same confirm/cancel buttons as order_confirm,
+// sent when the customer hasn't answered. Body vars: {{1}} name {{2}} code {{3}} total.
+const WA_REMINDER_TEMPLATE = process.env.WA_REMINDER_TEMPLATE || 'order_reminder';
 
 export function waConfigured() {
   return !!(WA_TOKEN && WA_PHONE_NUMBER_ID);
+}
+
+// The number an order's WhatsApp messages go to: the number we've confirmed is
+// on WhatsApp (wa_phone, set after a fallback), else the main phone the customer
+// gave. The webhook switches wa_phone to the second number if the first fails.
+function orderWaTo(o = {}) {
+  return waPhone(o.wa_phone || o.phone);
 }
 
 // Egypt: turn a local 01XXXXXXXXX into international 201XXXXXXXXX (no +).
@@ -51,6 +64,34 @@ export async function sendText(to, body) {
       to: waPhone(to),
       type: 'text',
       text: { body: String(body || '') },
+    }),
+  });
+  const data = await r.json().catch(() => null);
+  return { ok: r.ok, data };
+}
+
+// Send an interactive reply-buttons message (max 3 buttons). Only valid inside
+// the 24h customer-service window — which is exactly when we use it, right after
+// the customer taps a template button. buttons = [{ id, title }] (title ≤ 20 ch).
+// Returns { ok, data }.
+export async function sendButtons(to, bodyText, buttons = []) {
+  const r = await fetch(`https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to: waPhone(to),
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: String(bodyText || '') },
+        action: {
+          buttons: buttons.slice(0, 3).map(b => ({
+            type: 'reply',
+            reply: { id: String(b.id), title: String(b.title).slice(0, 20) },
+          })),
+        },
+      },
     }),
   });
   const data = await r.json().catch(() => null);
@@ -99,10 +140,45 @@ export async function sendConfirmTemplate(order = {}) {
     headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       messaging_product: 'whatsapp',
-      to: waPhone(order.phone),
+      to: orderWaTo(order),
       type: 'template',
       template: {
         name: WA_TEMPLATE_NAME,
+        language: { code: WA_TEMPLATE_LANG },
+        components: [
+          { type: 'body', parameters: params.map(text => ({ type: 'text', text })) },
+          { type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: 'CONFIRM' }] },
+          { type: 'button', sub_type: 'quick_reply', index: '1', parameters: [{ type: 'payload', payload: 'CANCEL' }] },
+        ],
+      },
+    }),
+  });
+  const data = await r.json().catch(() => null);
+  if (!r.ok) return { ok: false, error: data };
+  return { ok: true, msgId: data?.messages?.[0]?.id || null };
+}
+
+// Confirmation reminder — fired when the customer never answered the first
+// confirmation. Uses the dedicated `order_reminder` template:
+//   {{1}} customer name   {{2}} order code   {{3}} grand total
+// Same buttons as order_confirm: index 0 -> CONFIRM, index 1 -> CANCEL (the
+// template's 3rd "call us" button is static and needs no parameter).
+// Returns { ok, msgId, error }.
+export async function sendReminderTemplate(order = {}) {
+  const params = [
+    String(order.customer_name || 'عميلنا العزيز'),
+    String(order.code || ''),
+    fmtNum(order.total || 0),
+  ];
+  const r = await fetch(`https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to: orderWaTo(order),
+      type: 'template',
+      template: {
+        name: WA_REMINDER_TEMPLATE,
         language: { code: WA_TEMPLATE_LANG },
         components: [
           { type: 'body', parameters: params.map(text => ({ type: 'text', text })) },
@@ -131,7 +207,7 @@ export async function sendPreparedTemplate(order = {}) {
     headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       messaging_product: 'whatsapp',
-      to: waPhone(order.phone),
+      to: orderWaTo(order),
       type: 'template',
       template: {
         name: WA_PREPARED_TEMPLATE,
@@ -148,11 +224,43 @@ export async function sendPreparedTemplate(order = {}) {
   return { ok: true, msgId: data?.messages?.[0]?.id || null };
 }
 
-// Phase 12 — "handed to the courier / on its way" with NO cancel; instead an
-// "I have a problem with my order" quick-reply that flags the order for a call.
-// Body params: {{1}} customer name  {{2}} tracking code  {{3}} amount to pay.
-// Button index 0 -> PROBLEM. Returns { ok, msgId, error }.
+// "Handed to Bosta / on its way" — four body vars and a static call button only
+// (no quick-reply). Body, in order:
+//   {{1}} customer name  {{2}} order code  {{3}} tracking code  {{4}} amount to pay
+// Returns { ok, msgId, error }.
 export async function sendShippedTemplate(order = {}) {
+  const params = [
+    String(order.customer_name || 'عميلنا العزيز'),
+    String(order.code || ''),
+    String(order.ship_code || order.code || ''),
+    fmtNum(order.total || 0),
+  ];
+  const r = await fetch(`https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to: orderWaTo(order),
+      type: 'template',
+      template: {
+        name: WA_SHIPPED_TEMPLATE,
+        language: { code: WA_TEMPLATE_LANG },
+        components: [
+          { type: 'body', parameters: params.map(text => ({ type: 'text', text })) },
+        ],
+      },
+    }),
+  });
+  const data = await r.json().catch(() => null);
+  if (!r.ok) return { ok: false, error: data };
+  return { ok: true, msgId: data?.messages?.[0]?.id || null };
+}
+
+// "Out for delivery" — the courier is heading to the customer today. Static call
+// button only. Body, in order:
+//   {{1}} customer name  {{2}} tracking code  {{3}} amount to pay
+// Returns { ok, msgId, error }.
+export async function sendOutForDeliveryTemplate(order = {}) {
   const params = [
     String(order.customer_name || 'عميلنا العزيز'),
     String(order.ship_code || order.code || ''),
@@ -163,14 +271,13 @@ export async function sendShippedTemplate(order = {}) {
     headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       messaging_product: 'whatsapp',
-      to: waPhone(order.phone),
+      to: orderWaTo(order),
       type: 'template',
       template: {
-        name: WA_SHIPPED_TEMPLATE,
+        name: WA_OUTDELIVERY_TEMPLATE,
         language: { code: WA_TEMPLATE_LANG },
         components: [
           { type: 'body', parameters: params.map(text => ({ type: 'text', text })) },
-          { type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: 'PROBLEM' }] },
         ],
       },
     }),
@@ -231,7 +338,7 @@ export async function sendFeedbackTemplate(order = {}) {
     headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       messaging_product: 'whatsapp',
-      to: waPhone(order.phone),
+      to: orderWaTo(order),
       type: 'template',
       template: {
         name: WA_FEEDBACK_TEMPLATE,
