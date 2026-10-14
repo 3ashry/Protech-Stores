@@ -290,6 +290,39 @@ export default async function handler(req, res) {
   const vat = (baseRate + codFee) * 0.14;
   const shippingCost = Math.ceil(baseRate + codFee + vat);
 
+  // When allowToOpenPackage is true, Bosta (errorCode 2150) requires product
+  // images so the courier can verify the item before letting the customer open
+  // the package. We fetch one image per cart line from the products table and
+  // attach them to specs.packageDetails.productsImages (cap at 5 — Bosta's limit).
+  // If the lookup fails or returns none, we drop allowToOpenPackage rather than
+  // let Bosta reject the whole shipment.
+  let productsImages = [];
+  if (allowOpen) {
+    try {
+      const orderRow = await sbFetch(`orders?id=eq.${encodeURIComponent(orderId)}&select=products`)
+        .then(r => r.json()).then(rows => (Array.isArray(rows) && rows[0]) || null);
+      const productIds = Array.isArray(orderRow?.products)
+        ? [...new Set(orderRow.products.map(p => p && p.id).filter(Boolean))]
+        : [];
+      if (productIds.length) {
+        const inList = productIds.map(id => `"${String(id).replace(/"/g, '')}"`).join(',');
+        const prodRows = await sbFetch(`products?id=in.(${encodeURIComponent(inList)})&select=id,images`)
+          .then(r => r.json()).catch(() => []);
+        const byId = new Map((Array.isArray(prodRows) ? prodRows : []).map(p => [p.id, p]));
+        const seen = new Set();
+        for (const line of (orderRow.products || [])) {
+          const p = byId.get(line && line.id);
+          const first = Array.isArray(p?.images) && p.images.find(u => typeof u === 'string' && u);
+          if (first && !seen.has(first)) { seen.add(first); productsImages.push(first); }
+          if (productsImages.length >= 5) break;
+        }
+      }
+    } catch (e) { console.warn('productsImages lookup failed:', e && e.message); }
+    if (!productsImages.length) {
+      console.warn(`bosta.js: allowToOpenPackage requested but no product images found for order ${orderId}; dropping flag so Bosta accepts the shipment.`);
+    }
+  }
+
   const bostaPayload = {
     type: 10,           // SEND with COD
     cod: total,         // Customer pays exactly this — same number shown at checkout
@@ -299,6 +332,7 @@ export default async function handler(req, res) {
       packageDetails: {
         itemsCount: 1,
         description: 'أدوات',
+        ...(productsImages.length ? { productsImages } : {}),
       },
     },
     dropOffAddress: {
@@ -315,7 +349,9 @@ export default async function handler(req, res) {
     },
     businessReference: orderId,  // Links Bosta shipment back to our order
     notes: notes || '',
-    allowToOpenPackage: !!allowOpen,  // Customer chose "open package before receiving"
+    // Only keep allowToOpenPackage on if we actually have images to back it up;
+    // otherwise Bosta rejects the whole shipment with errorCode 2150.
+    allowToOpenPackage: !!(allowOpen && productsImages.length),
   };
 
   // ─────────────────────────────────────────────────────────────────────
