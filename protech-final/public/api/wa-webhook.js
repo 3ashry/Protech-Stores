@@ -87,6 +87,14 @@ export default async function handler(req, res) {
   try {
     const entry = req.body?.entry?.[0];
     const change = entry?.changes?.[0]?.value;
+    // IDs only (no message content): entry.id is the WhatsApp Business Account
+    // the event came from — lets us identify which account owns the sender.
+    console.log('wa-webhook event', JSON.stringify({
+      waba: entry?.id || null,
+      phoneNumberId: change?.metadata?.phone_number_id || null,
+      field: entry?.changes?.[0]?.field || null,
+      kind: change?.messages ? 'message' : (change?.statuses ? 'status' : 'other'),
+    }));
 
     // ── Delivery-status events ─────────────────────────────────────────
     // A message that FAILED to deliver usually means that number isn't on
