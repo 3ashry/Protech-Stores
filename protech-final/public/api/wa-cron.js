@@ -63,6 +63,60 @@ function authorized(req) {
   return key === CRON_SECRET;
 }
 
+// The 5 order templates exactly as designed by the owner (Arabic, Utility).
+// sync_templates pushes these into the WhatsApp account that owns the sending
+// number, so the server's senders (5/3/4/3/2 body vars) always match.
+const CALL_BTN = { type: 'PHONE_NUMBER', text: 'للاستفسار كلمنا من هنا', phone_number: '+201091011380' };
+const CONFIRM_BTNS = [{ type: 'QUICK_REPLY', text: 'تأكيد الطلب' }, { type: 'QUICK_REPLY', text: 'الغاء الطلب' }, CALL_BTN];
+const TEMPLATE_DEFS = [
+  {
+    name: 'order_confirm', language: 'ar', category: 'UTILITY',
+    components: [
+      { type: 'BODY',
+        text: 'أهلاً يا {{1}} 😊\nشكراً لطلبك من Protech، طلبك وصلنا.\n\n*رقم الطلب:* {{2}}\n\n*المنتجات:* {{3}}\n\n*الإجمالي:* {{4}} جنيه شامل الشحن (الدفع عند الاستلام)\n\n*العنوان:* {{5}}\n\nمن فضلك أكّد الطلب عشان نبدأ نجهزهولك 👇',
+        example: { body_text: [['محمد علي', 'PRO-10234', 'تيشيرت قطن × 2 — 700 ج.م ، بنطلون جينز × 1 — 550 ج.م', '1,250', 'الدقي، شارع التحرير، عمارة 12، الدور 3، الجيزة']] } },
+      { type: 'FOOTER', text: 'تقدر تفتح الشحنة وتعاينها قبل الدفع' },
+      { type: 'BUTTONS', buttons: CONFIRM_BTNS },
+    ],
+  },
+  {
+    name: 'order_reminder', language: 'ar', category: 'UTILITY',
+    components: [
+      { type: 'BODY',
+        text: 'أهلاً يا {{1}} 😊\nطلبك رقم {{2}} لسه مستني تأكيدك.\nالإجمالي {{3}} جنيه والدفع عند الاستلام.\n\nاختار من الأزرار تحت وإحنا نكمّل طلبك على طول.',
+        example: { body_text: [['محمد علي', 'PRO-10234', '1,250']] } },
+      { type: 'BUTTONS', buttons: CONFIRM_BTNS },
+    ],
+  },
+  {
+    name: 'order_shipped', language: 'ar', category: 'UTILITY',
+    components: [
+      { type: 'BODY',
+        text: 'أهلاً يا {{1}}،\nطلبك رقم {{2}} اتسلّم لشركة الشحن بوسطة وبقى في الطريق ليك 🚚\n\nرقم الشحنة: {{3}}\nالمبلغ المطلوب عند الاستلام: {{4}} جنيه.\n\nهنبلّغك أول ما الطلب يخرج للتوصيل.',
+        example: { body_text: [['محمد علي', 'PRO-10234', '3012345', '1,250']] } },
+      { type: 'BUTTONS', buttons: [CALL_BTN] },
+    ],
+  },
+  {
+    name: 'order_out_for_delivery', language: 'ar', category: 'UTILITY',
+    components: [
+      { type: 'BODY',
+        text: 'أهلاً يا {{1}}،\nطلبك خرج مع المندوب وهيوصلك النهارده إن شاء الله 🛵\n\nرقم الشحنة: {{2}}\nالمبلغ المطلوب: {{3}} جنيه كاش.\n\nالمندوب هيتصل بيك قبل ما يوصل، من فضلك خلّي تليفونك متاح 📞\nوتقدر تفتح الشحنة وتعاينها قبل الدفع.',
+        example: { body_text: [['محمد علي', '3012345', '1,250']] } },
+      { type: 'BUTTONS', buttons: [CALL_BTN] },
+    ],
+  },
+  {
+    name: 'order_feedback', language: 'ar', category: 'UTILITY',
+    components: [
+      { type: 'BODY',
+        text: 'أهلاً يا {{1}}،\nطلبك رقم {{2}} وصلك بالسلامة، شكراً لاختيارك Protech 🙏\n\nيهمنا نعرف رأيك، كانت تجربتك معانا عاملة إزاي؟ 😊',
+        example: { body_text: [['محمد علي', 'PRO-10234']] } },
+      { type: 'BUTTONS', buttons: [{ type: 'QUICK_REPLY', text: 'ممتازة' }, { type: 'QUICK_REPLY', text: 'كويسة' }, { type: 'QUICK_REPLY', text: 'محتاجة تحسين' }] },
+    ],
+  },
+];
+
 // Helper for ?action=diag. Returns template metadata only (visible in Meta's
 // WhatsApp Manager anyway) so it's safe to leave unauthenticated.
 async function runDiag(res, WA_TOKEN, WA_PHONE_NUMBER_ID, wabaOverride) {
@@ -183,7 +237,9 @@ export default async function handler(req, res) {
   //   ?action=setpin&pin=123456     → set a known two-step verification PIN
   //   ?action=release               → deregister the number from the old account
   //   ?action=reregister&pin=123456 → undo release (re-register on old account)
-  const NUMBER_ACTIONS = ['owner', 'setpin', 'release', 'reregister'];
+  //   ?action=sync_templates        → put the 5 order templates into the sending
+  //                                    number's account (edit if present, else create)
+  const NUMBER_ACTIONS = ['owner', 'setpin', 'release', 'reregister', 'sync_templates'];
   if (req.query && NUMBER_ACTIONS.includes(String(req.query.action || ''))) {
     const MIGRATE_KEY = (process.env.MIGRATE_KEY || '').trim();
     const given = String(req.query.key || '').trim();
@@ -223,6 +279,27 @@ export default async function handler(req, res) {
         systemUser: await graph('me?fields=id,name'),
         phone: await graph(`${P}?fields=display_phone_number,verified_name,name_status,status,code_verification_status,platform_type`),
       });
+    }
+    if (action === 'sync_templates') {
+      // The account that owns 01091011380 (found from its webhook events).
+      const waba = String(req.query.waba || process.env.WA_WABA_ID || '1760722231589385');
+      const list = await graph(`${waba}/message_templates?fields=id,name,language,status,components&limit=100`);
+      if (list.httpStatus !== 200) return res.status(200).json({ waba, error: 'could not list templates', list });
+      const existing = Array.isArray(list.body?.data) ? list.body.data : [];
+      const results = [];
+      for (const t of TEMPLATE_DEFS) {
+        const found = existing.find(e => e.name === t.name && e.language === t.language);
+        const wantBody = t.components.find(c => c.type === 'BODY').text;
+        if (found) {
+          const haveBody = ((found.components || []).find(c => c.type === 'BODY') || {}).text;
+          if (haveBody === wantBody) { results.push({ name: t.name, action: 'unchanged', status: found.status }); continue; }
+          // Edit the existing template in place (keeps the name).
+          results.push({ name: t.name, action: 'edit', id: found.id, ...(await graph(found.id, 'POST', { components: t.components })) });
+        } else {
+          results.push({ name: t.name, action: 'create', ...(await graph(`${waba}/message_templates`, 'POST', t)) });
+        }
+      }
+      return res.status(200).json({ waba, results });
     }
     if (action === 'setpin') return res.status(200).json(await graph(P, 'POST', { pin }));
     if (action === 'release') return res.status(200).json(await graph(`${P}/deregister`, 'POST', {}));
