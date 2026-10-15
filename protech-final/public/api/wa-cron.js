@@ -65,7 +65,7 @@ function authorized(req) {
 
 // Helper for ?action=diag. Returns template metadata only (visible in Meta's
 // WhatsApp Manager anyway) so it's safe to leave unauthenticated.
-async function runDiag(res, WA_TOKEN, WA_PHONE_NUMBER_ID) {
+async function runDiag(res, WA_TOKEN, WA_PHONE_NUMBER_ID, wabaOverride) {
   const out = { ok: true, phoneNumberId: WA_PHONE_NUMBER_ID };
   try {
     const r = await fetch(
@@ -80,7 +80,7 @@ async function runDiag(res, WA_TOKEN, WA_PHONE_NUMBER_ID) {
   //   2. /{SYSTEM_USER_ID}/assigned_whatsapp_business_accounts (System User tokens)
   //   3. /me/businesses then /{BUSINESS_ID}/owned_whatsapp_business_accounts
   //   4. WA_WABA_ID env var hint (manual fallback)
-  let wabaId = (process.env.WA_WABA_ID || '').trim() || null;
+  let wabaId = (wabaOverride || process.env.WA_WABA_ID || '').trim() || null;
   let userId = null;
   try {
     const r = await fetch(
@@ -170,7 +170,8 @@ export default async function handler(req, res) {
     if (!WA_TOKEN || !WA_PHONE_NUMBER_ID) {
       return res.status(500).json({ error: 'WA_TOKEN or WA_PHONE_NUMBER_ID not set' });
     }
-    return runDiag(res, WA_TOKEN, WA_PHONE_NUMBER_ID);
+    const wabaOverride = req.query && (req.query.waba || req.query.waba_id);
+    return runDiag(res, WA_TOKEN, WA_PHONE_NUMBER_ID, wabaOverride ? String(wabaOverride) : null);
   }
 
   if (!authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
