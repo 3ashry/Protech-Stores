@@ -14,7 +14,7 @@
 //
 // Env: WA_* (see _wa.js), SUPABASE_URL, SUPABASE_KEY (service_role), CRON_SECRET,
 //      optional WA_CONFIRM_DELAY_HOURS (default 6).
-import { sendConfirmTemplate, sendReminderTemplate, sendFeedbackTemplate, sendCartRecoveryTemplate, sendShippedTemplate, sendOutForDeliveryTemplate, waConfigured } from './_wa.js';
+import { sendConfirmTemplate, sendReminderTemplate, sendFeedbackTemplate, sendCartRecoveryTemplate, sendShippedTemplate, sendOutForDeliveryTemplate, waConfigured, waPhone } from './_wa.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
@@ -199,6 +199,34 @@ export default async function handler(req, res) {
       } catch (e) {
         return res.status(500).json({ error: String(e && e.message || e) });
       }
+    }
+    // Probe — ?probe=6 sends the order_confirm template with placeholder values
+    // P1..PN to the phone of the most recent order (created in the last 2h, so
+    // it can only ever reach the owner's own test order). Whatever arrives on
+    // WhatsApp shows exactly which body Meta has stored and where each {{N}} sits.
+    if (req.query.probe) {
+      const n = Math.min(10, Math.max(1, parseInt(req.query.probe, 10) || 6));
+      const name = String(req.query.name || process.env.WA_TEMPLATE_NAME || 'order_confirm');
+      if (!/^order_[a-z0-9_]+$/.test(name)) return res.status(400).json({ error: 'name must be an order_* template' });
+      const since = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+      let rows = [];
+      try { rows = await sbGet(`orders?select=code,phone,created_at&created_at=gte.${encodeURIComponent(since)}&order=created_at.desc&limit=1`); } catch (_) {}
+      const o = rows[0];
+      if (!o || !o.phone) return res.status(400).json({ error: 'No order in the last 2 hours — place a test order first.' });
+      const lang = String(process.env.WA_TEMPLATE_LANG || 'ar');
+      const params = Array.from({ length: n }, (_, i) => ({ type: 'text', text: `P${i + 1}` }));
+      const r = await fetch(`https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}/messages`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          to: waPhone(o.phone),
+          type: 'template',
+          template: { name, language: { code: lang }, components: [{ type: 'body', parameters: params }] },
+        }),
+      });
+      const d = await r.json().catch(() => null);
+      return res.status(200).json({ sentTo: o.code, template: name, language: lang, paramsSent: n, httpStatus: r.status, meta: d });
     }
     const wabaOverride = req.query && (req.query.waba || req.query.waba_id);
     return runDiag(res, WA_TOKEN, WA_PHONE_NUMBER_ID, wabaOverride ? String(wabaOverride) : null);
