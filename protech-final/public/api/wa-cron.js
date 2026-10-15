@@ -170,6 +170,25 @@ export default async function handler(req, res) {
     if (!WA_TOKEN || !WA_PHONE_NUMBER_ID) {
       return res.status(500).json({ error: 'WA_TOKEN or WA_PHONE_NUMBER_ID not set' });
     }
+    // Direct template lookup — ?template=<id> returns the exact definition Meta
+    // serves at send time, bypassing WABA discovery entirely.
+    const tplId = req.query && (req.query.template || req.query.template_id);
+    if (tplId) {
+      try {
+        const r = await fetch(
+          `https://graph.facebook.com/v21.0/${encodeURIComponent(String(tplId))}?fields=name,language,status,category,components,quality_score,previous_category`,
+          { headers: { Authorization: `Bearer ${WA_TOKEN}` } }
+        );
+        const d = await r.json().catch(() => ({}));
+        const body = Array.isArray(d.components) ? d.components.find(c => c.type === 'BODY') : null;
+        const text = (body && body.text) || '';
+        const nums = (text.match(/\{\{(\d+)\}\}/g) || []).map(s => parseInt(s.replace(/[^0-9]/g, ''), 10) || 0);
+        const maxVar = nums.reduce((m, n) => n > m ? n : m, 0);
+        return res.status(200).json({ ok: r.ok, httpStatus: r.status, template: d, bodyParamCount: maxVar, bodyText: text });
+      } catch (e) {
+        return res.status(500).json({ error: String(e && e.message || e) });
+      }
+    }
     const wabaOverride = req.query && (req.query.waba || req.query.waba_id);
     return runDiag(res, WA_TOKEN, WA_PHONE_NUMBER_ID, wabaOverride ? String(wabaOverride) : null);
   }
