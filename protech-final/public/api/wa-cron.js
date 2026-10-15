@@ -75,11 +75,13 @@ async function runDiag(res, WA_TOKEN, WA_PHONE_NUMBER_ID) {
     out.phone = await r.json().catch(() => ({ error: 'parse failed' }));
     if (!r.ok && out.phone) out.phone._httpStatus = r.status;
   } catch (e) { out.phone = { error: String(e && e.message || e) }; }
-  // Meta's Phone Number node doesn't expose `whatsapp_business_account` as a
-  // field, so we discover the owning WABA via /debug_token's granular_scopes
-  // (lists every WABA the token can access) and fall back to a hint from the
-  // WA_WABA_ID env var if the token's debug info is restricted.
+  // Discover the WABA this token can see — try several Meta endpoints in order:
+  //   1. /debug_token's granular_scopes.target_ids (if restricted scopes)
+  //   2. /{SYSTEM_USER_ID}/assigned_whatsapp_business_accounts (System User tokens)
+  //   3. /me/businesses then /{BUSINESS_ID}/owned_whatsapp_business_accounts
+  //   4. WA_WABA_ID env var hint (manual fallback)
   let wabaId = (process.env.WA_WABA_ID || '').trim() || null;
+  let userId = null;
   try {
     const r = await fetch(
       `https://graph.facebook.com/v21.0/debug_token?input_token=${encodeURIComponent(WA_TOKEN)}&access_token=${encodeURIComponent(WA_TOKEN)}`
@@ -87,13 +89,53 @@ async function runDiag(res, WA_TOKEN, WA_PHONE_NUMBER_ID) {
     const d = await r.json().catch(() => ({}));
     out.token = d?.data || d;
     if (!r.ok && out.token) out.token._httpStatus = r.status;
-    // granular_scopes carries per-permission target_ids including WABA ids
+    userId = d?.data?.user_id || null;
     const scopes = Array.isArray(d?.data?.granular_scopes) ? d.data.granular_scopes : [];
     const waScope = scopes.find(s => String(s.scope || '').includes('whatsapp_business'));
     const ids = Array.isArray(waScope?.target_ids) ? waScope.target_ids : [];
     out.wabaCandidates = ids;
     if (!wabaId && ids.length) wabaId = ids[0];
   } catch (e) { out.token = { error: String(e && e.message || e) }; }
+  // System User → assigned WABAs.
+  if (!wabaId && userId) {
+    try {
+      const r = await fetch(
+        `https://graph.facebook.com/v21.0/${userId}/assigned_whatsapp_business_accounts?fields=id,name&limit=50`,
+        { headers: { Authorization: `Bearer ${WA_TOKEN}` } }
+      );
+      const d = await r.json().catch(() => ({}));
+      const arr = Array.isArray(d?.data) ? d.data : [];
+      out.assignedWabas = arr;
+      if (!r.ok) out.assignedWabas = { _httpStatus: r.status, data: d };
+      if (!wabaId && arr.length) wabaId = arr[0].id;
+    } catch (e) { out.assignedWabas = { error: String(e && e.message || e) }; }
+  }
+  // Me → businesses → owned WABAs.
+  if (!wabaId) {
+    try {
+      const r = await fetch(
+        `https://graph.facebook.com/v21.0/me/businesses?fields=id,name&limit=20`,
+        { headers: { Authorization: `Bearer ${WA_TOKEN}` } }
+      );
+      const d = await r.json().catch(() => ({}));
+      const biz = Array.isArray(d?.data) ? d.data : [];
+      out.businesses = biz;
+      if (!r.ok) out.businesses = { _httpStatus: r.status, data: d };
+      for (const b of biz) {
+        if (wabaId) break;
+        try {
+          const rr = await fetch(
+            `https://graph.facebook.com/v21.0/${b.id}/owned_whatsapp_business_accounts?fields=id,name&limit=20`,
+            { headers: { Authorization: `Bearer ${WA_TOKEN}` } }
+          );
+          const dd = await rr.json().catch(() => ({}));
+          const arr = Array.isArray(dd?.data) ? dd.data : [];
+          out.ownedWabas = (out.ownedWabas || []).concat(arr);
+          if (!wabaId && arr.length) wabaId = arr[0].id;
+        } catch (_) {}
+      }
+    } catch (e) { out.businesses = { error: String(e && e.message || e) }; }
+  }
   out.wabaIdUsed = wabaId;
   if (wabaId) {
     try {
