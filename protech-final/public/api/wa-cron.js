@@ -303,7 +303,9 @@ export default async function handler(req, res) {
       if (list.httpStatus !== 200) return res.status(200).json({ waba, error: 'could not list templates', list });
       const existing = Array.isArray(list.body?.data) ? list.body.data : [];
       const results = [];
-      for (const t of TEMPLATE_DEFS) {
+      // &only=order_confirm,order_reminder limits the sync to those templates.
+      const only = String(req.query.only || '').split(',').map(s => s.trim()).filter(Boolean);
+      for (const t of TEMPLATE_DEFS.filter(d => !only.length || only.includes(d.name))) {
         const found = existing.find(e => e.name === t.name && e.language === t.language);
         const wantBody = t.components.find(c => c.type === 'BODY').text;
         if (found) {
