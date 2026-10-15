@@ -6,7 +6,7 @@
 // Required Vercel env vars:
 //   WA_TOKEN              - permanent WhatsApp Business access token (System User token)
 //   WA_PHONE_NUMBER_ID    - the Phone Number ID from Meta (not the phone number itself)
-//   WA_TEMPLATE_NAME      - approved template name (e.g. "order_confirm")
+//   WA_TEMPLATE_NAME      - approved template name (e.g. "order_confirmation")
 //   WA_TEMPLATE_LANG      - template language code (e.g. "ar")
 //   SUPABASE_URL          - https://wljxplbcfoorqpoflcdz.supabase.co
 //   SUPABASE_KEY          - Supabase SECRET (service_role) key

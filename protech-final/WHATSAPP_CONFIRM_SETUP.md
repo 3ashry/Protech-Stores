@@ -24,7 +24,7 @@ It stays **off** until you finish the Meta setup below and add the env vars.
    user with admin on the WhatsApp asset → Generate token with `whatsapp_business_messaging`
    + `whatsapp_business_management`). Copy it.
 5. Create the **message template** (WhatsApp Manager → Templates → Create):
-   - **Name:** `order_confirm`  (lowercase, must match `WA_TEMPLATE_NAME`)
+   - **Name:** `order_confirmation`  (lowercase, must match `WA_TEMPLATE_NAME`)
    - **Category:** Utility
    - **Language:** Arabic — `ar`
    - **Body** (3 variables, in this order):
@@ -49,7 +49,7 @@ Vercel → Protech-Stores → Environments → Production → Environment Variab
 |------|-------|
 | `WA_TOKEN` | the permanent access token from step A4 |
 | `WA_PHONE_NUMBER_ID` | the Phone Number ID from step A3 |
-| `WA_TEMPLATE_NAME` | `order_confirm` |
+| `WA_TEMPLATE_NAME` | `order_confirmation` |
 | `WA_TEMPLATE_LANG` | `ar` |
 | `WA_VERIFY_TOKEN` | the random string you used in the webhook (step A6) |
 | `SUPABASE_KEY` | (already set) must be the **secret** key |
