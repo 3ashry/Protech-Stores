@@ -195,11 +195,27 @@ async function runDiag(res, WA_TOKEN, WA_PHONE_NUMBER_ID, wabaOverride) {
     // Probe the WABA itself first — tells us whether the token even has access.
     try {
       const r = await fetch(
-        `https://graph.facebook.com/v21.0/${wabaId}?fields=id,name,timezone_id,message_template_namespace,account_review_status,business_verification_status`,
+        `https://graph.facebook.com/v21.0/${wabaId}?fields=id,name,timezone_id,message_template_namespace,account_review_status,business_verification_status,owner_business_info,on_behalf_of_business_info`,
         { headers: { Authorization: `Bearer ${WA_TOKEN}` } }
       );
       const d = await r.json().catch(() => ({}));
       out.wabaProbe = { httpStatus: r.status, body: d };
+      // Which business portfolio owns this account, and which people/system
+      // users have access — tells the owner which login to use in Meta.
+      const ownerId = d && d.owner_business_info && d.owner_business_info.id;
+      if (ownerId) {
+        const ar = await fetch(
+          `https://graph.facebook.com/v21.0/${wabaId}/assigned_users?business=${ownerId}&fields=id,name,user_type,tasks&limit=50`,
+          { headers: { Authorization: `Bearer ${WA_TOKEN}` } }
+        );
+        const ad = await ar.json().catch(() => ({}));
+        out.access = {
+          ownerBusiness: d.owner_business_info,
+          settingsUrl: `https://business.facebook.com/settings/whatsapp-business-accounts/${wabaId}?business_id=${ownerId}`,
+          templatesUrl: `https://business.facebook.com/latest/whatsapp_manager/message_templates?business_id=${ownerId}&asset_id=${wabaId}`,
+          assignedUsers: { httpStatus: ar.status, body: ad },
+        };
+      }
     } catch (e) { out.wabaProbe = { error: String(e && e.message || e) }; }
     // Template listing — capture status + raw body so error payloads aren't swallowed.
     try {
