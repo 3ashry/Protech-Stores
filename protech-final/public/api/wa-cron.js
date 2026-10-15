@@ -68,6 +68,54 @@ export default async function handler(req, res) {
   if (!SUPABASE_URL || !SUPABASE_KEY) return res.status(500).json({ error: 'DB not configured' });
   if (!waConfigured()) return res.status(500).json({ error: 'WhatsApp not configured' });
 
+  // Diagnostic view — ?action=diag. Returns which WhatsApp phone & WABA the
+  // live WA_TOKEN sees, plus every order_* template with its approved param
+  // count. Lets us confirm Vercel's connection points at the WABA where the
+  // new 5-var templates were approved. Lives on wa-cron so Hobby's 12-function
+  // cap isn't blown by adding another endpoint.
+  if (req.query && String(req.query.action || '') === 'diag') {
+    const WA_TOKEN = process.env.WA_TOKEN;
+    const WA_PHONE_NUMBER_ID = process.env.WA_PHONE_NUMBER_ID;
+    const out = { ok: true, phoneNumberId: WA_PHONE_NUMBER_ID };
+    try {
+      const r = await fetch(
+        `https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}?fields=display_phone_number,verified_name,quality_rating,messaging_limit_tier,account_mode,id`,
+        { headers: { Authorization: `Bearer ${WA_TOKEN}` } }
+      );
+      out.phone = await r.json().catch(() => ({ error: 'parse failed' }));
+      if (!r.ok) out.phone._httpStatus = r.status;
+    } catch (e) { out.phone = { error: String(e && e.message || e) }; }
+    try {
+      const r = await fetch(
+        `https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}?fields=whatsapp_business_account{id,name,currency,timezone_id,message_template_namespace}`,
+        { headers: { Authorization: `Bearer ${WA_TOKEN}` } }
+      );
+      const d = await r.json().catch(() => ({}));
+      out.waba = d?.whatsapp_business_account || d;
+      if (!r.ok && out.waba) out.waba._httpStatus = r.status;
+    } catch (e) { out.waba = { error: String(e && e.message || e) }; }
+    const wabaId = out.waba && out.waba.id;
+    if (wabaId) {
+      try {
+        const r = await fetch(
+          `https://graph.facebook.com/v21.0/${wabaId}/message_templates?fields=name,language,status,category,components&limit=100`,
+          { headers: { Authorization: `Bearer ${WA_TOKEN}` } }
+        );
+        const d = await r.json().catch(() => ({}));
+        const all = Array.isArray(d.data) ? d.data : [];
+        out.templates = all.filter(t => String(t.name || '').startsWith('order_')).map(t => {
+          const body = (t.components || []).find(c => c.type === 'BODY');
+          const text = (body && body.text) || '';
+          const nums = (text.match(/\{\{(\d+)\}\}/g) || []).map(s => parseInt(s.replace(/[^0-9]/g, ''), 10) || 0);
+          const maxVar = nums.reduce((m, n) => n > m ? n : m, 0);
+          return { name: t.name, language: t.language, status: t.status, category: t.category, bodyParamCount: maxVar, bodyPreview: text.slice(0, 300) };
+        });
+        out.allTemplateNames = all.map(t => `${t.name} (${t.language}) [${t.status}]`).sort();
+      } catch (e) { out.templates = { error: String(e && e.message || e) }; }
+    }
+    return res.status(200).json(out);
+  }
+
   // ?test=1 fires immediately: ignores the 6h wait and only messages the single
   // newest eligible order, so you can confirm the whole chain right after ordering.
   const test = !!(req.query && (req.query.test || req.query.now));
