@@ -175,6 +175,52 @@ export default async function handler(req, res) {
   // no secrets, no customer data), so a secret isn't needed to see what WABA
   // the current connection points at and which templates are stored there.
   // Call: GET /api/wa-cron?action=diag
+  // ── Phone-number migration helpers (owner-only) ─────────────────────
+  // Used to move 01091011380 off the old WhatsApp account (owned by an
+  // unknown login) into the account that has the new templates. Gated by a
+  // MIGRATE_KEY env var the owner creates in Vercel (8+ chars).
+  //   ?action=owner      → who owns the old app/token (non-destructive)
+  //   ?action=setpin&pin=123456     → set a known two-step verification PIN
+  //   ?action=release               → deregister the number from the old account
+  //   ?action=reregister&pin=123456 → undo release (re-register on old account)
+  const NUMBER_ACTIONS = ['owner', 'setpin', 'release', 'reregister'];
+  if (req.query && NUMBER_ACTIONS.includes(String(req.query.action || ''))) {
+    const MIGRATE_KEY = (process.env.MIGRATE_KEY || '').trim();
+    const given = String(req.query.key || '').trim();
+    if (MIGRATE_KEY.length < 8 || given !== MIGRATE_KEY) {
+      return res.status(401).json({ error: 'Unauthorized — add MIGRATE_KEY (8+ characters) in Vercel, redeploy, and pass it as &key=' });
+    }
+    const T = process.env.WA_TOKEN, P = process.env.WA_PHONE_NUMBER_ID;
+    if (!T || !P) return res.status(500).json({ error: 'WA_TOKEN or WA_PHONE_NUMBER_ID not set' });
+    const graph = async (path, method = 'GET', body = null) => {
+      const r = await fetch(`https://graph.facebook.com/v21.0/${path}`, {
+        method,
+        headers: { Authorization: `Bearer ${T}`, 'Content-Type': 'application/json' },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+      return { httpStatus: r.status, body: await r.json().catch(() => null) };
+    };
+    const action = String(req.query.action);
+    const pin = String(req.query.pin || '');
+    if ((action === 'setpin' || action === 'reregister') && !/^\d{6}$/.test(pin)) {
+      return res.status(400).json({ error: 'pin must be exactly 6 digits' });
+    }
+    if (action === 'owner') {
+      const dbg = await fetch(`https://graph.facebook.com/v21.0/debug_token?input_token=${encodeURIComponent(T)}&access_token=${encodeURIComponent(T)}`)
+        .then(r => r.json()).catch(() => null);
+      const appId = dbg?.data?.app_id;
+      return res.status(200).json({
+        token: dbg?.data || dbg,
+        app: appId ? await graph(`${appId}?fields=name,link,contact_email,company,category,namespace`) : null,
+        systemUser: await graph('me?fields=id,name'),
+        phone: await graph(`${P}?fields=display_phone_number,verified_name,name_status,status,code_verification_status,platform_type`),
+      });
+    }
+    if (action === 'setpin') return res.status(200).json(await graph(P, 'POST', { pin }));
+    if (action === 'release') return res.status(200).json(await graph(`${P}/deregister`, 'POST', {}));
+    if (action === 'reregister') return res.status(200).json(await graph(`${P}/register`, 'POST', { messaging_product: 'whatsapp', pin }));
+  }
+
   if (req.query && String(req.query.action || '') === 'diag') {
     const WA_TOKEN = process.env.WA_TOKEN;
     const WA_PHONE_NUMBER_ID = process.env.WA_PHONE_NUMBER_ID;
