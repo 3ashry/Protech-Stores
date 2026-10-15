@@ -110,7 +110,7 @@ const TEMPLATE_DEFS = [
     name: 'order_feedback', language: 'ar', category: 'UTILITY',
     components: [
       { type: 'BODY',
-        text: 'أهلاً يا {{1}}،\nطلبك رقم {{2}} وصلك بالسلامة، شكراً لاختيارك Protech 🙏\n\nيهمنا نعرف رأيك، كانت تجربتك معانا عاملة إزاي؟ 😊',
+        text: 'أهلاً يا {{1}}،\nطلبك رقم {{2}} وصلك بالسلامة، شكراً لاختيارك Protech 🙏\n\nيهمنا نعرف رأيك، كانت تجربتك معانا عاملة إزاي؟😊',
         example: { body_text: [['محمد علي', 'PRO-10234']] } },
       { type: 'BUTTONS', buttons: [{ type: 'QUICK_REPLY', text: 'ممتازة' }, { type: 'QUICK_REPLY', text: 'كويسة' }, { type: 'QUICK_REPLY', text: 'محتاجة تحسين' }] },
     ],
