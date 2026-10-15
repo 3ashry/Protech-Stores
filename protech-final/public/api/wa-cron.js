@@ -188,7 +188,15 @@ export default async function handler(req, res) {
     const MIGRATE_KEY = (process.env.MIGRATE_KEY || '').trim();
     const given = String(req.query.key || '').trim();
     if (MIGRATE_KEY.length < 8 || given !== MIGRATE_KEY) {
-      return res.status(401).json({ error: 'Unauthorized — add MIGRATE_KEY (8+ characters) in Vercel, redeploy, and pass it as &key=' });
+      // Report lengths only (never the values) so a mismatch can be diagnosed.
+      return res.status(401).json({
+        error: 'Unauthorized — add MIGRATE_KEY (8+ characters) in Vercel, redeploy, and pass it as &key=',
+        serverHasMigrateKey: MIGRATE_KEY.length > 0,
+        serverKeyLength: MIGRATE_KEY.length,
+        linkKeyLength: given.length,
+        deployment: process.env.VERCEL_DEPLOYMENT_ID || process.env.VERCEL_URL || null,
+        environment: process.env.VERCEL_ENV || null,
+      });
     }
     const T = process.env.WA_TOKEN, P = process.env.WA_PHONE_NUMBER_ID;
     if (!T || !P) return res.status(500).json({ error: 'WA_TOKEN or WA_PHONE_NUMBER_ID not set' });
