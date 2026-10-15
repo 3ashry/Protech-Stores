@@ -138,12 +138,23 @@ async function runDiag(res, WA_TOKEN, WA_PHONE_NUMBER_ID, wabaOverride) {
   }
   out.wabaIdUsed = wabaId;
   if (wabaId) {
+    // Probe the WABA itself first — tells us whether the token even has access.
+    try {
+      const r = await fetch(
+        `https://graph.facebook.com/v21.0/${wabaId}?fields=id,name,timezone_id,message_template_namespace,account_review_status,business_verification_status`,
+        { headers: { Authorization: `Bearer ${WA_TOKEN}` } }
+      );
+      const d = await r.json().catch(() => ({}));
+      out.wabaProbe = { httpStatus: r.status, body: d };
+    } catch (e) { out.wabaProbe = { error: String(e && e.message || e) }; }
+    // Template listing — capture status + raw body so error payloads aren't swallowed.
     try {
       const r = await fetch(
         `https://graph.facebook.com/v21.0/${wabaId}/message_templates?fields=name,language,status,category,components&limit=100`,
         { headers: { Authorization: `Bearer ${WA_TOKEN}` } }
       );
       const d = await r.json().catch(() => ({}));
+      out.templatesRaw = { httpStatus: r.status, body: d };
       const all = Array.isArray(d.data) ? d.data : [];
       out.templates = all.filter(t => String(t.name || '').startsWith('order_')).map(t => {
         const body = (t.components || []).find(c => c.type === 'BODY');
