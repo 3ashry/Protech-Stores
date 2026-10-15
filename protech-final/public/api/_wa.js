@@ -8,11 +8,15 @@
 // Env vars (set in Vercel):
 //   WA_TOKEN            permanent WhatsApp access token (System User token)
 //   WA_PHONE_NUMBER_ID  the Phone Number ID from Meta (not the phone number)
-//   WA_TEMPLATE_NAME    approved template name (default "order_confirm")
+//   WA_TEMPLATE_NAME    approved template name (default "order_confirmation")
 //   WA_TEMPLATE_LANG    template language code (default "ar")
 const WA_TOKEN = process.env.WA_TOKEN;
 const WA_PHONE_NUMBER_ID = process.env.WA_PHONE_NUMBER_ID;
-const WA_TEMPLATE_NAME = process.env.WA_TEMPLATE_NAME || 'order_confirm';
+// "order_confirm" was deleted in Meta and its name is locked for 4 weeks, so
+// the confirmation lives under "order_confirmation"; a leftover env value of
+// the old name is ignored.
+const WA_TEMPLATE_NAME = (process.env.WA_TEMPLATE_NAME && process.env.WA_TEMPLATE_NAME !== 'order_confirm')
+  ? process.env.WA_TEMPLATE_NAME : 'order_confirmation';
 const WA_TEMPLATE_LANG = process.env.WA_TEMPLATE_LANG || 'ar';
 // Post-delivery feedback template. Approved separately in Meta Business Manager.
 const WA_FEEDBACK_TEMPLATE = process.env.WA_FEEDBACK_TEMPLATE || 'order_feedback';
@@ -29,7 +33,7 @@ const WA_SHIPPED_TEMPLATE = process.env.WA_SHIPPED_TEMPLATE || 'order_shipped';
 // "Out for delivery" template — fired when Bosta marks the parcel heading to
 // the customer. Body: {{1}} name {{2}} tracking code {{3}} amount. Call button only.
 const WA_OUTDELIVERY_TEMPLATE = process.env.WA_OUTDELIVERY_TEMPLATE || 'order_out_for_delivery';
-// Confirmation REMINDER template — same confirm/cancel buttons as order_confirm,
+// Confirmation REMINDER template — same confirm/cancel buttons as order_confirmation,
 // sent when the customer hasn't answered. Body vars: {{1}} name {{2}} code {{3}} total.
 const WA_REMINDER_TEMPLATE = process.env.WA_REMINDER_TEMPLATE || 'order_reminder';
 
@@ -119,7 +123,7 @@ function itemsSummary(products) {
 }
 
 // Send the approved order-confirmation template. Pass an order row (DB shape).
-// Matches the live `order_confirm` template body (5 params, in order):
+// Matches the live `order_confirmation` template body (5 params, in order):
 //   {{1}} customer name  {{2}} order code  {{3}} items summary
 //   {{4}} grand total    {{5}} delivery address
 // Buttons: index 0 -> CONFIRM, index 1 -> CANCEL quick-replies.
@@ -158,7 +162,7 @@ export async function sendConfirmTemplate(order = {}) {
 // Confirmation reminder — fired when the customer never answered the first
 // confirmation. Uses the dedicated `order_reminder` template:
 //   {{1}} customer name   {{2}} order code   {{3}} grand total
-// Same buttons as order_confirm: index 0 -> CONFIRM, index 1 -> CANCEL (the
+// Same buttons as order_confirmation: index 0 -> CONFIRM, index 1 -> CANCEL (the
 // template's 3rd "call us" button is static and needs no parameter).
 // Returns { ok, msgId, error }.
 export async function sendReminderTemplate(order = {}) {

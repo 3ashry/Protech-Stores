@@ -70,7 +70,7 @@ const CALL_BTN = { type: 'PHONE_NUMBER', text: 'للاستفسار كلمنا م
 const CONFIRM_BTNS = [{ type: 'QUICK_REPLY', text: 'تأكيد الطلب' }, { type: 'QUICK_REPLY', text: 'الغاء الطلب' }, CALL_BTN];
 const TEMPLATE_DEFS = [
   {
-    name: 'order_confirm', language: 'ar', category: 'UTILITY',
+    name: 'order_confirmation', language: 'ar', category: 'UTILITY',
     components: [
       { type: 'BODY',
         text: 'أهلاً يا {{1}} 😊\nشكراً لطلبك من Protech، طلبك وصلنا.\n\n*رقم الطلب:* {{2}}\n\n*المنتجات:* {{3}}\n\n*الإجمالي:* {{4}} جنيه شامل الشحن (الدفع عند الاستلام)\n\n*العنوان:* {{5}}\n\nمن فضلك أكّد الطلب عشان نبدأ نجهزهولك 👇',
@@ -303,7 +303,7 @@ export default async function handler(req, res) {
       if (list.httpStatus !== 200) return res.status(200).json({ waba, error: 'could not list templates', list });
       const existing = Array.isArray(list.body?.data) ? list.body.data : [];
       const results = [];
-      // &only=order_confirm,order_reminder limits the sync to those templates.
+      // &only=order_confirmation,order_reminder limits the sync to those templates.
       const only = String(req.query.only || '').split(',').map(s => s.trim()).filter(Boolean);
       for (const t of TEMPLATE_DEFS.filter(d => !only.length || only.includes(d.name))) {
         const found = existing.find(e => e.name === t.name && e.language === t.language);
@@ -349,13 +349,13 @@ export default async function handler(req, res) {
         return res.status(500).json({ error: String(e && e.message || e) });
       }
     }
-    // Probe — ?probe=6 sends the order_confirm template with placeholder values
+    // Probe — ?probe=6 sends the order_confirmation template with placeholder values
     // P1..PN to the phone of the most recent order (created in the last 2h, so
     // it can only ever reach the owner's own test order). Whatever arrives on
     // WhatsApp shows exactly which body Meta has stored and where each {{N}} sits.
     if (req.query.probe) {
       const n = Math.min(10, Math.max(1, parseInt(req.query.probe, 10) || 6));
-      const name = String(req.query.name || process.env.WA_TEMPLATE_NAME || 'order_confirm');
+      const name = String(req.query.name || (process.env.WA_TEMPLATE_NAME !== 'order_confirm' && process.env.WA_TEMPLATE_NAME) || 'order_confirmation');
       if (!/^order_[a-z0-9_]+$/.test(name)) return res.status(400).json({ error: 'name must be an order_* template' });
       const since = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
       let rows = [];
