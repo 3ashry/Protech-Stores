@@ -119,22 +119,24 @@ function itemsSummary(products) {
 }
 
 // Send the approved order-confirmation template. Pass an order row (DB shape).
-// Matches the live `order_confirm` template body, in order:
-//   {{1}} customer name   {{2}} order code   {{3}} items summary
-//   {{4}} grand total (incl. shipping — order.total is the COD amount)
-//   {{5}} delivery address
-// Buttons: index 0 -> CONFIRM (تأكيد), index 1 -> CANCEL (إلغاء) as quick
-// replies the webhook reads back; a 3rd static "call us" button carries no
-// payload (it just dials), so it needs no send-time parameter.
+//
+// Robust to BOTH template shapes on the WABA, because Meta is still serving an
+// older `order_confirm` that expects 6 body params even though we've approved
+// a new 5-param version. We try the new 5-param layout first; if Meta rejects
+// it with code 132000 (param-count mismatch), we fall back to the OLD 6-param
+// layout so the customer still gets a message (in the old wording). Clean fix
+// is to delete the stuck older template in Meta's WABA — this makes the system
+// resilient while that's being hunted down.
+//
+// New 5-param order (matches the newly-created `order_confirm`):
+//   {{1}} customer name  {{2}} order code  {{3}} items summary
+//   {{4}} grand total    {{5}} delivery address
+// Old 6-param order (matches the Phase-12 `order_confirm` still cached):
+//   {{1}} customer name  {{2}} items summary  {{3}} shipping cost
+//   {{4}} total          {{5}} allow-open flag  {{6}} ship code
+// Buttons on both templates: index 0 -> CONFIRM, index 1 -> CANCEL quick-replies.
 // Returns { ok, msgId, error }.
-export async function sendConfirmTemplate(order = {}) {
-  const params = [
-    String(order.customer_name || 'عميلنا العزيز'),
-    String(order.code || ''),
-    itemsSummary(order.products),
-    fmtNum(order.total || 0),
-    String(order.address || '—'),
-  ];
+async function sendConfirmTemplateAttempt(order, params) {
   const r = await fetch(`https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}/messages`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
@@ -154,8 +156,38 @@ export async function sendConfirmTemplate(order = {}) {
     }),
   });
   const data = await r.json().catch(() => null);
-  if (!r.ok) return { ok: false, error: data };
-  return { ok: true, msgId: data?.messages?.[0]?.id || null };
+  return { ok: r.ok, data };
+}
+
+export async function sendConfirmTemplate(order = {}) {
+  const paramsNew = [
+    String(order.customer_name || 'عميلنا العزيز'),
+    String(order.code || ''),
+    itemsSummary(order.products),
+    fmtNum(order.total || 0),
+    String(order.address || '—'),
+  ];
+  const paramsOld = [
+    String(order.customer_name || 'عميلنا العزيز'),
+    itemsSummary(order.products),
+    fmtNum(order.est_shipping || 0),
+    fmtNum(order.total || 0),
+    order.allow_open ? 'متاح' : 'غير متاح',
+    String(order.ship_code || 'سيتم إرساله قريباً'),
+  ];
+  // First try: new 5-param layout.
+  let r = await sendConfirmTemplateAttempt(order, paramsNew);
+  if (r.ok) return { ok: true, msgId: r.data?.messages?.[0]?.id || null };
+  // Fall back to the old 6-param layout ONLY when Meta rejects due to a param
+  // count mismatch (error code 132000). Any other error (bad token, template
+  // deleted, phone blocked, etc.) is surfaced as-is — no point retrying.
+  const code = r.data?.error?.code;
+  if (code === 132000) {
+    const r2 = await sendConfirmTemplateAttempt(order, paramsOld);
+    if (r2.ok) return { ok: true, msgId: r2.data?.messages?.[0]?.id || null, fallback: '6-param' };
+    return { ok: false, error: r2.data, attempted: 'both' };
+  }
+  return { ok: false, error: r.data };
 }
 
 // Confirmation reminder — fired when the customer never answered the first
