@@ -12,14 +12,14 @@
 //   WA_TEMPLATE_LANG    template language code (default "ar")
 const WA_TOKEN = process.env.WA_TOKEN;
 const WA_PHONE_NUMBER_ID = process.env.WA_PHONE_NUMBER_ID;
-// "order_confirm" was deleted in Meta and its name is locked for 4 weeks, so
-// the confirmation lives under "order_confirmation"; a leftover env value of
-// the old name is ignored.
-const WA_TEMPLATE_NAME = (process.env.WA_TEMPLATE_NAME && process.env.WA_TEMPLATE_NAME !== 'order_confirm')
-  ? process.env.WA_TEMPLATE_NAME : 'order_confirmation';
+// The original template names were deleted in Meta, which locks a deleted
+// name for weeks, so the templates live under new names. A leftover env
+// value that still holds an old (deleted) name is ignored.
+const tplName = (envVal, deleted, current) => (envVal && envVal !== deleted) ? envVal : current;
+const WA_TEMPLATE_NAME = tplName(process.env.WA_TEMPLATE_NAME, 'order_confirm', 'order_confirmation');
 const WA_TEMPLATE_LANG = process.env.WA_TEMPLATE_LANG || 'ar';
 // Post-delivery feedback template. Approved separately in Meta Business Manager.
-const WA_FEEDBACK_TEMPLATE = process.env.WA_FEEDBACK_TEMPLATE || 'order_feedback';
+const WA_FEEDBACK_TEMPLATE = tplName(process.env.WA_FEEDBACK_TEMPLATE, 'order_feedback', 'order_delivered_feedback');
 // Abandoned-cart recovery template. Approved separately in Meta Business
 // Manager. Default 2 body vars: {{1}} customer name, {{2}} items summary.
 // Override the name via WA_CART_TEMPLATE if yours is named differently.
@@ -29,13 +29,13 @@ const WA_CART_TEMPLATE = process.env.WA_CART_TEMPLATE || 'cart_recovery';
 //   order_shipped:  {{1}} name, {{2}} tracking code, {{3}} amount to pay
 //                   + 1 "I have a problem" quick-reply.
 const WA_PREPARED_TEMPLATE = process.env.WA_PREPARED_TEMPLATE || 'order_prepared';
-const WA_SHIPPED_TEMPLATE = process.env.WA_SHIPPED_TEMPLATE || 'order_shipped';
+const WA_SHIPPED_TEMPLATE = tplName(process.env.WA_SHIPPED_TEMPLATE, 'order_shipped', 'order_handed_to_bosta');
 // "Out for delivery" template — fired when Bosta marks the parcel heading to
 // the customer. Body: {{1}} name {{2}} tracking code {{3}} amount. Call button only.
-const WA_OUTDELIVERY_TEMPLATE = process.env.WA_OUTDELIVERY_TEMPLATE || 'order_out_for_delivery';
+const WA_OUTDELIVERY_TEMPLATE = tplName(process.env.WA_OUTDELIVERY_TEMPLATE, 'order_out_for_delivery', 'order_on_the_way');
 // Confirmation REMINDER template — same confirm/cancel buttons as order_confirmation,
 // sent when the customer hasn't answered. Body vars: {{1}} name {{2}} code {{3}} total.
-const WA_REMINDER_TEMPLATE = process.env.WA_REMINDER_TEMPLATE || 'order_reminder';
+const WA_REMINDER_TEMPLATE = tplName(process.env.WA_REMINDER_TEMPLATE, 'order_reminder', 'order_confirm_reminder');
 
 export function waConfigured() {
   return !!(WA_TOKEN && WA_PHONE_NUMBER_ID);

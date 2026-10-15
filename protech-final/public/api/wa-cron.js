@@ -80,7 +80,7 @@ const TEMPLATE_DEFS = [
     ],
   },
   {
-    name: 'order_reminder', language: 'ar', category: 'UTILITY',
+    name: 'order_confirm_reminder', language: 'ar', category: 'UTILITY',
     components: [
       { type: 'BODY',
         text: 'أهلاً يا {{1}} 😊\nطلبك رقم {{2}} لسه مستني تأكيدك.\nالإجمالي {{3}} جنيه والدفع عند الاستلام.\n\nاختار من الأزرار تحت وإحنا نكمّل طلبك علطول.',
@@ -89,7 +89,7 @@ const TEMPLATE_DEFS = [
     ],
   },
   {
-    name: 'order_shipped', language: 'ar', category: 'UTILITY',
+    name: 'order_handed_to_bosta', language: 'ar', category: 'UTILITY',
     components: [
       { type: 'BODY',
         text: 'أهلاً يا {{1}}،\nطلبك رقم {{2}} اتسلّم لشركة الشحن بوسطة وبقى في الطريق ليك 🚚\n\nرقم الشحنة: {{3}}\nالمبلغ المطلوب عند الاستلام: {{4}} جنيه.\n\nهنبلّغك أول ما الطلب يخرج للتوصيل.',
@@ -98,7 +98,7 @@ const TEMPLATE_DEFS = [
     ],
   },
   {
-    name: 'order_out_for_delivery', language: 'ar', category: 'UTILITY',
+    name: 'order_on_the_way', language: 'ar', category: 'UTILITY',
     components: [
       { type: 'BODY',
         text: 'أهلاً يا {{1}}،\nطلبك خرج مع المندوب وهيوصلك النهارده إن شاء الله 🛵\n\nرقم الشحنة: {{2}}\nالمبلغ المطلوب: {{3}} جنيه كاش.\n\nالمندوب هيتصل بيك قبل ما يوصل، من فضلك خلّي تليفونك متاح 📞\nوتقدر تفتح الشحنة وتعاينها قبل الدفع.',
@@ -107,7 +107,7 @@ const TEMPLATE_DEFS = [
     ],
   },
   {
-    name: 'order_feedback', language: 'ar', category: 'UTILITY',
+    name: 'order_delivered_feedback', language: 'ar', category: 'UTILITY',
     components: [
       { type: 'BODY',
         text: 'أهلاً يا {{1}}،\nطلبك رقم {{2}} وصلك بالسلامة، شكراً لاختيارك Protech 🙏\n\nيهمنا نعرف رأيك، كانت تجربتك معانا عاملة إزاي؟😊',
@@ -303,7 +303,7 @@ export default async function handler(req, res) {
       if (list.httpStatus !== 200) return res.status(200).json({ waba, error: 'could not list templates', list });
       const existing = Array.isArray(list.body?.data) ? list.body.data : [];
       const results = [];
-      // &only=order_confirmation,order_reminder limits the sync to those templates.
+      // &only=order_confirmation,order_confirm_reminder limits the sync to those templates.
       const only = String(req.query.only || '').split(',').map(s => s.trim()).filter(Boolean);
       for (const t of TEMPLATE_DEFS.filter(d => !only.length || only.includes(d.name))) {
         const found = existing.find(e => e.name === t.name && e.language === t.language);
