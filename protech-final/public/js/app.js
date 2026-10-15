@@ -4826,16 +4826,68 @@ function finRenderMonths(model) {
     </div>`;
 }
 
+// Media buyer: how much of this month's salary is still unpaid. Single source.
+function finCurMediaBuyerOwed(model) {
+  const mo = model.current;
+  if (!mo) return 0;
+  const S = (typeof computeMediaBuyerMonth === 'function') ? computeMediaBuyerMonth(mo.y, mo.m) : null;
+  return S ? S.owed : 0;
+}
+
+// What actually needs the owner's attention. Returns are NOT listed: every
+// return's buy cost is already credited in the P&L and in "You owe Elashry",
+// so a return without a return invoice is not an open item.
+function finOpenItems(model) {
+  const waitingOrders = (cache.orders || [])
+    .filter(o => o.status === 'Delivered' && o.cash_cycle_closed !== true)
+    .sort((a, b) => String(a.delivered_at || a.created_at || '').localeCompare(String(b.delivered_at || b.created_at || '')));
+  const mbOwed = finCurMediaBuyerOwed(model);
+  return { waitingOrders, mbOwed, count: waitingOrders.length + (mbOwed > 1 ? 1 : 0) };
+}
+
+function finRenderOpenItems(model) {
+  const host = document.getElementById('fin-open-items'); if (!host) return;
+  const oi = finOpenItems(model);
+  if (!oi.count) {
+    host.innerHTML = '<div style="padding:10px 4px;font-size:13px;color:#15803d;font-weight:700">✅ Nothing needs your attention right now.</div>';
+    return;
+  }
+  const DAY = 86400000;
+  const rows = oi.waitingOrders.map(o => {
+    const d = o.delivered_at || o.created_at || o.date;
+    const days = d ? Math.floor((Date.now() - new Date(d).getTime()) / DAY) : null;
+    const late = days != null && days > 10;
+    return `<tr>
+      <td style="padding:4px"><span class="badge b-orange">${esc(o.code || '')}</span></td>
+      <td style="padding:4px">${esc(o.customer_name || '')}</td>
+      <td style="padding:4px;opacity:.75">${esc(String(d || '').slice(0, 10))}</td>
+      <td style="padding:4px;${late ? 'color:#dc2626;font-weight:700' : ''}">${days == null ? '—' : days + ' days'}</td>
+      <td style="padding:4px;text-align:right"><b>EGP ${fmt(parseFloat(o.total || 0) - finShipOf(o))}</b></td>
+    </tr>`;
+  }).join('');
+  host.innerHTML = `
+    ${oi.mbOwed > 1 ? `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 4px;border-bottom:1px solid var(--line)">
+      <div><b>🧮 Media buyer salary unpaid</b><div style="font-size:12px;color:var(--muted)">This month's salary still owed: EGP ${fmt(oi.mbOwed)}</div></div>
+      <button class="btn btn-ghost btn-sm" onclick="finOpenDetail('det-mediabuyer')">Open statement</button>
+    </div>` : ''}
+    ${oi.waitingOrders.length ? `
+    <div style="padding:10px 4px 4px"><b>🏦 Delivered, waiting for Bosta to close the cash cycle (${oi.waitingOrders.length})</b>
+      <div style="font-size:12px;color:var(--muted)">Bosta usually closes these within a week. Ones older than 10 days are in red — check them with Bosta.</div></div>
+    <div style="max-height:340px;overflow:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="text-align:left;border-bottom:1px solid var(--line)">
+          <th style="padding:6px 4px">Order</th><th style="padding:6px 4px">Customer</th><th style="padding:6px 4px">Delivered</th><th style="padding:6px 4px">Waiting</th><th style="padding:6px 4px;text-align:right">Amount</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>` : ''}`;
+}
+
 function finRenderActionCards(kpis, nc, model) {
   const host = document.getElementById('fin-action-cards'); if (!host) return;
-  const curOwed = (() => {
-    // media-buyer: is this month's salary still unpaid? Single source.
-    const mo = model.current;
-    if (!mo) return 0;
-    const S = (typeof computeMediaBuyerMonth === 'function') ? computeMediaBuyerMonth(mo.y, mo.m) : null;
-    return S ? S.owed : 0;
-  })();
-  const openItems = nc.waiting + (curOwed > 1 ? 1 : 0) + kpis.creditsCount;
+  const curOwed = finCurMediaBuyerOwed(model);
+  const openItems = finOpenItems(model).count;
   const bostaSettled = kpis.bostaOwes <= 1;
   const card = (onclick, icon, title, sub, badge) => `
     <button onclick="${onclick}" style="text-align:start;background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 16px;cursor:pointer;display:flex;flex-direction:column;gap:2px;position:relative;font-family:inherit">
@@ -4849,7 +4901,7 @@ function finRenderActionCards(kpis, nc, model) {
     card("finOpenDetail('det-mediabuyer')", '🧮', 'Media buyer', 'Monthly statements', curOwed > 1 ? { t: '1 unpaid', c: '#f59e0b' } : null) +
     card("finOpenDetail('det-bosta')", '🏦', 'Bosta transfers', 'Wednesday payouts', bostaSettled ? { t: '✓', c: '#16a34a' } : null) +
     card("finOpenDetail('det-elashry')", '🏭', 'Elashry account', 'Invoices · returns · payments') +
-    card("finOpenDetail('det-net')", '⚠️', 'Open items', 'Needs your attention', openItems > 0 ? { t: String(openItems), c: '#dc2626' } : null);
+    card("finOpenDetail('det-open')", '⚠️', 'Open items', 'Needs your attention', openItems > 0 ? { t: String(openItems), c: '#dc2626' } : { t: '✓', c: '#16a34a' });
 }
 
 function finOpenDetail(id) {
@@ -5058,6 +5110,7 @@ function renderFinancials() {
     finRenderNotCounted(nc);
     finRenderMonths(model);
     finRenderActionCards(kpis, nc, model);
+    finRenderOpenItems(model);
     renderBostaWednesdayReminder();
   } catch (e) { console.error('fin dashboard', e); }
 
@@ -5218,72 +5271,27 @@ function renderInflightBuyCost() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  NET PROFIT — the one-number bottom line
-//    Bosta receivable (confirmed delivered, net of actual shipping)
-//    − Returns shipping (Bosta charged us for the return leg)
-//    − All expenses (every category, including Media Buyer + Elashry
-//                    supplier payments — those are real cash outflows)
-//    − Elashry owed on confirmed delivered orders (goods we still
-//      owe the supplier for)
-//    = Net Profit
-//  Uses the same "cash cycle closed" filter the Bosta and Elashry
-//  KPIs use, so both sides of the equation are apples-to-apples.
+//  NET PROFIT — the same all-time figure as the hero card at the top:
+//  opening balance + every tracked month's result (finComputeModel, the
+//  ONE source). Listed month by month so the total can be checked.
 // ═══════════════════════════════════════════════════════════════════
 function renderNetProfitBlock() {
   const el = document.getElementById('fin-net');
   if (!el) return;
-  const orders = cache.orders || [];
-  const products = cache.products || [];
-  const expenses = cache.expenses || [];
-
-  const buyCostOf = finBuyCostOf;  // single source of truth
-
-  // 1. Bosta settlement — matches the Bosta card exactly.
-  //    Total collected on Delivered orders
-  //    − total shipping (pinned monthly Bosta totals for past months,
-  //      auto-computed for new months — the ONE canonical shipping figure)
-  //    = what Bosta will actually pay out.
-  const deliveredAll = orders.filter(o => o.status === 'Delivered');
-  const returnedAll  = orders.filter(o => o.status === 'Returned');
-  const _bs = finBostaSettlement();                     // ONE source
-  const totalCollectedD = _bs.collected;
-  const totalShippingD  = _bs.shipping;
-  const bostaSettlement = _bs.shouldReceive;
-
-  // 2. Elashry owed — the ONE source, identical to the Elashry tab & KPIs.
-  const _eo = finElashryOwed();
-  const ELASHRY_TOTAL_TAKEN    = _eo.taken;
-  const returnedBuyCost        = _eo.returned;
-  const elashryCredits         = _eo.credits;
-  const elashryPaid            = _eo.paid;
-  const elashryOwed            = _eo.owed;
-
-  // 3. All expenses — every category. Elashry supplier payments are
-  //    NOT in cache.expenses (they live in supplierCache.payments and
-  //    are already netted out of elashryOwed), so no double count.
-  const totalExpenses = expenses.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
-
-  const netProfit = bostaSettlement - elashryOwed - totalExpenses;
-  const winning = netProfit >= 0;
-
+  const model = finComputeModel();
+  const net = model.allTimeNet;
+  const winning = net >= 0;
+  const row = (label, v, note) => `<div class="fin-row"><span>${label}${note ? ` <span style="font-size:11px;color:var(--muted)">${note}</span>` : ''}</span><span class="fin-val${v < 0 ? ' deduct' : ''}">${v < 0 ? '−' : '+'} EGP ${fmt(Math.abs(v))}</span></div>`;
   el.innerHTML = `
-    <div class="fin-row" style="opacity:.75;font-size:12px">
-      <span>${deliveredAll.length} delivered · ${returnedAll.length} returned · ${expenses.length} expenses</span>
-      <span>Bosta settlement − Elashry owed − expenses</span>
-    </div>
-    <div class="fin-row"><span>💰 Bosta settlement (collected ${fmt(totalCollectedD)} − shipping ${fmt(totalShippingD)})</span><span class="fin-val">EGP ${fmt(bostaSettlement)}</span></div>
-    <div class="fin-row"><span>🏭 Elashry owed (${fmt(ELASHRY_TOTAL_TAKEN)} taken − ${fmt(returnedBuyCost)} returned${elashryCredits ? ' − ' + fmt(elashryCredits) + ' credits' : ''} − ${fmt(elashryPaid)} paid)</span><span class="fin-val deduct">− EGP ${fmt(elashryOwed)}</span></div>
-    <div class="fin-row"><span>🧾 All expenses (every category)</span><span class="fin-val deduct">− EGP ${fmt(totalExpenses)}</span></div>
+    ${model.openingBalance ? row('Opening balance', model.openingBalance) : ''}
+    ${model.months.map(mo => row(`${FIN_MO_EN[mo.m - 1]} ${mo.y}`, mo.result, mo.settling ? '(still settling)' : '')).join('')}
     <div class="fin-row ${winning ? 'profit' : 'loss'}" style="border-top:2px solid var(--line);padding-top:14px;margin-top:8px;font-size:1.2rem">
-      <span>${winning ? '🟢 Net Profit' : '🔴 Net Loss'}</span>
-      <span>${winning ? '+' : '−'} EGP ${fmt(Math.abs(netProfit))}</span>
+      <span>${winning ? '🟢 Net Profit' : '🔴 Net Loss'} · all time</span>
+      <span>${winning ? '+' : '−'} EGP ${fmt(Math.abs(net))}</span>
     </div>
     <div style="font-size:12px;color:var(--muted);margin-top:12px;line-height:1.6">
-      Uses the same numbers as the Bosta and Elashry cards above so
-      every subtotal is checkable. In-flight orders live in their own
-      section and are NOT part of this. Elashry supplier payments are
-      already netted out of Elashry-owed, so they don't double-count
-      inside "All expenses".
+      Same number as "Net profit · all time" at the top. Each month's result is its
+      P&amp;L in the Months list (tap a month there for the full breakdown).
     </div>`;
 }
 
