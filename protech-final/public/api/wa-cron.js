@@ -75,16 +75,26 @@ async function runDiag(res, WA_TOKEN, WA_PHONE_NUMBER_ID) {
     out.phone = await r.json().catch(() => ({ error: 'parse failed' }));
     if (!r.ok && out.phone) out.phone._httpStatus = r.status;
   } catch (e) { out.phone = { error: String(e && e.message || e) }; }
+  // Meta's Phone Number node doesn't expose `whatsapp_business_account` as a
+  // field, so we discover the owning WABA via /debug_token's granular_scopes
+  // (lists every WABA the token can access) and fall back to a hint from the
+  // WA_WABA_ID env var if the token's debug info is restricted.
+  let wabaId = (process.env.WA_WABA_ID || '').trim() || null;
   try {
     const r = await fetch(
-      `https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}?fields=whatsapp_business_account{id,name,currency,timezone_id,message_template_namespace}`,
-      { headers: { Authorization: `Bearer ${WA_TOKEN}` } }
+      `https://graph.facebook.com/v21.0/debug_token?input_token=${encodeURIComponent(WA_TOKEN)}&access_token=${encodeURIComponent(WA_TOKEN)}`
     );
     const d = await r.json().catch(() => ({}));
-    out.waba = d?.whatsapp_business_account || d;
-    if (!r.ok && out.waba) out.waba._httpStatus = r.status;
-  } catch (e) { out.waba = { error: String(e && e.message || e) }; }
-  const wabaId = out.waba && out.waba.id;
+    out.token = d?.data || d;
+    if (!r.ok && out.token) out.token._httpStatus = r.status;
+    // granular_scopes carries per-permission target_ids including WABA ids
+    const scopes = Array.isArray(d?.data?.granular_scopes) ? d.data.granular_scopes : [];
+    const waScope = scopes.find(s => String(s.scope || '').includes('whatsapp_business'));
+    const ids = Array.isArray(waScope?.target_ids) ? waScope.target_ids : [];
+    out.wabaCandidates = ids;
+    if (!wabaId && ids.length) wabaId = ids[0];
+  } catch (e) { out.token = { error: String(e && e.message || e) }; }
+  out.wabaIdUsed = wabaId;
   if (wabaId) {
     try {
       const r = await fetch(
