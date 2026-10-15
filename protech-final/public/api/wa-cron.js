@@ -63,58 +63,68 @@ function authorized(req) {
   return key === CRON_SECRET;
 }
 
+// Helper for ?action=diag. Returns template metadata only (visible in Meta's
+// WhatsApp Manager anyway) so it's safe to leave unauthenticated.
+async function runDiag(res, WA_TOKEN, WA_PHONE_NUMBER_ID) {
+  const out = { ok: true, phoneNumberId: WA_PHONE_NUMBER_ID };
+  try {
+    const r = await fetch(
+      `https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}?fields=display_phone_number,verified_name,quality_rating,messaging_limit_tier,account_mode,id`,
+      { headers: { Authorization: `Bearer ${WA_TOKEN}` } }
+    );
+    out.phone = await r.json().catch(() => ({ error: 'parse failed' }));
+    if (!r.ok && out.phone) out.phone._httpStatus = r.status;
+  } catch (e) { out.phone = { error: String(e && e.message || e) }; }
+  try {
+    const r = await fetch(
+      `https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}?fields=whatsapp_business_account{id,name,currency,timezone_id,message_template_namespace}`,
+      { headers: { Authorization: `Bearer ${WA_TOKEN}` } }
+    );
+    const d = await r.json().catch(() => ({}));
+    out.waba = d?.whatsapp_business_account || d;
+    if (!r.ok && out.waba) out.waba._httpStatus = r.status;
+  } catch (e) { out.waba = { error: String(e && e.message || e) }; }
+  const wabaId = out.waba && out.waba.id;
+  if (wabaId) {
+    try {
+      const r = await fetch(
+        `https://graph.facebook.com/v21.0/${wabaId}/message_templates?fields=name,language,status,category,components&limit=100`,
+        { headers: { Authorization: `Bearer ${WA_TOKEN}` } }
+      );
+      const d = await r.json().catch(() => ({}));
+      const all = Array.isArray(d.data) ? d.data : [];
+      out.templates = all.filter(t => String(t.name || '').startsWith('order_')).map(t => {
+        const body = (t.components || []).find(c => c.type === 'BODY');
+        const text = (body && body.text) || '';
+        const nums = (text.match(/\{\{(\d+)\}\}/g) || []).map(s => parseInt(s.replace(/[^0-9]/g, ''), 10) || 0);
+        const maxVar = nums.reduce((m, n) => n > m ? n : m, 0);
+        return { name: t.name, language: t.language, status: t.status, category: t.category, bodyParamCount: maxVar, bodyPreview: text.slice(0, 300) };
+      });
+      out.allTemplateNames = all.map(t => `${t.name} (${t.language}) [${t.status}]`).sort();
+    } catch (e) { out.templates = { error: String(e && e.message || e) }; }
+  }
+  return res.status(200).json(out);
+}
+
 export default async function handler(req, res) {
+  // Diagnostic view runs BEFORE the auth check — it returns only template
+  // metadata that is already visible in Meta's WhatsApp Manager (no tokens,
+  // no secrets, no customer data), so a secret isn't needed to see what WABA
+  // the current connection points at and which templates are stored there.
+  // Call: GET /api/wa-cron?action=diag
+  if (req.query && String(req.query.action || '') === 'diag') {
+    const WA_TOKEN = process.env.WA_TOKEN;
+    const WA_PHONE_NUMBER_ID = process.env.WA_PHONE_NUMBER_ID;
+    if (!WA_TOKEN || !WA_PHONE_NUMBER_ID) {
+      return res.status(500).json({ error: 'WA_TOKEN or WA_PHONE_NUMBER_ID not set' });
+    }
+    return runDiag(res, WA_TOKEN, WA_PHONE_NUMBER_ID);
+  }
+
   if (!authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
   if (!SUPABASE_URL || !SUPABASE_KEY) return res.status(500).json({ error: 'DB not configured' });
   if (!waConfigured()) return res.status(500).json({ error: 'WhatsApp not configured' });
 
-  // Diagnostic view — ?action=diag. Returns which WhatsApp phone & WABA the
-  // live WA_TOKEN sees, plus every order_* template with its approved param
-  // count. Lets us confirm Vercel's connection points at the WABA where the
-  // new 5-var templates were approved. Lives on wa-cron so Hobby's 12-function
-  // cap isn't blown by adding another endpoint.
-  if (req.query && String(req.query.action || '') === 'diag') {
-    const WA_TOKEN = process.env.WA_TOKEN;
-    const WA_PHONE_NUMBER_ID = process.env.WA_PHONE_NUMBER_ID;
-    const out = { ok: true, phoneNumberId: WA_PHONE_NUMBER_ID };
-    try {
-      const r = await fetch(
-        `https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}?fields=display_phone_number,verified_name,quality_rating,messaging_limit_tier,account_mode,id`,
-        { headers: { Authorization: `Bearer ${WA_TOKEN}` } }
-      );
-      out.phone = await r.json().catch(() => ({ error: 'parse failed' }));
-      if (!r.ok) out.phone._httpStatus = r.status;
-    } catch (e) { out.phone = { error: String(e && e.message || e) }; }
-    try {
-      const r = await fetch(
-        `https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}?fields=whatsapp_business_account{id,name,currency,timezone_id,message_template_namespace}`,
-        { headers: { Authorization: `Bearer ${WA_TOKEN}` } }
-      );
-      const d = await r.json().catch(() => ({}));
-      out.waba = d?.whatsapp_business_account || d;
-      if (!r.ok && out.waba) out.waba._httpStatus = r.status;
-    } catch (e) { out.waba = { error: String(e && e.message || e) }; }
-    const wabaId = out.waba && out.waba.id;
-    if (wabaId) {
-      try {
-        const r = await fetch(
-          `https://graph.facebook.com/v21.0/${wabaId}/message_templates?fields=name,language,status,category,components&limit=100`,
-          { headers: { Authorization: `Bearer ${WA_TOKEN}` } }
-        );
-        const d = await r.json().catch(() => ({}));
-        const all = Array.isArray(d.data) ? d.data : [];
-        out.templates = all.filter(t => String(t.name || '').startsWith('order_')).map(t => {
-          const body = (t.components || []).find(c => c.type === 'BODY');
-          const text = (body && body.text) || '';
-          const nums = (text.match(/\{\{(\d+)\}\}/g) || []).map(s => parseInt(s.replace(/[^0-9]/g, ''), 10) || 0);
-          const maxVar = nums.reduce((m, n) => n > m ? n : m, 0);
-          return { name: t.name, language: t.language, status: t.status, category: t.category, bodyParamCount: maxVar, bodyPreview: text.slice(0, 300) };
-        });
-        out.allTemplateNames = all.map(t => `${t.name} (${t.language}) [${t.status}]`).sort();
-      } catch (e) { out.templates = { error: String(e && e.message || e) }; }
-    }
-    return res.status(200).json(out);
-  }
 
   // ?test=1 fires immediately: ignores the 6h wait and only messages the single
   // newest eligible order, so you can confirm the whole chain right after ordering.
