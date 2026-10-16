@@ -382,7 +382,7 @@ export default async function handler(req, res) {
   let waResult = { skipped: true, reason: 'wa not configured' };
   if (waConfigured()) {
     try {
-      const rr = await sbFetch(`orders?id=eq.${encodeURIComponent(orderId)}&select=code,products`);
+      const rr = await sbFetch(`orders?id=eq.${encodeURIComponent(orderId)}&select=code,products,address,wa_phone`);
       const [row] = (await rr.json().catch(() => [])) || [];
       const orderForWa = {
         customer_name: customerName,
@@ -392,6 +392,8 @@ export default async function handler(req, res) {
         allow_open: !!allowOpen,
         ship_code: '',           // Filled in by the shipped template later
         phone,
+        wa_phone: row?.wa_phone || '',
+        address: row?.address || '',
         code: row?.code || orderId,
       };
       const sent = await sendConfirmTemplate(orderForWa);
