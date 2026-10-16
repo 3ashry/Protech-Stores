@@ -450,7 +450,7 @@ export default async function handler(req, res) {
       `delivered_at=gte.${encodeURIComponent(floor)}`,
     ];
     if (ONLY_PHONE) fbParts.push(`phone=eq.${encodeURIComponent(ONLY_PHONE)}`);
-    fbParts.push('order=updated_at.desc', 'limit=100');
+    fbParts.push('order=delivered_at.desc', 'limit=100');
     const fbOrders = await sbGet(`orders?${fbParts.join('&')}`);
     const fbSent = [], fbFailed = [];
     for (const o of fbOrders) {
