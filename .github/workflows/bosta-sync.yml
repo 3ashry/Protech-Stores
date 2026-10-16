@@ -1,43 +1,53 @@
-name: Bosta status sync
+name: Bosta sync + WhatsApp messages
 
-# Runs twice a day (≈ 8:00 and 20:00 Cairo time) and also on manual trigger.
-# The evening run ALSO fires today's Telegram summary (via ?summary=1) so
-# there's no need for a separate cron.
+# Runs every hour from 08:00 to 00:00 Cairo time (05–21 UTC) and on manual trigger.
+#  - Every run: WhatsApp messages (/api/wa-cron) — reminder 3h after an
+#    unanswered confirmation, handed to Bosta, out for delivery, feedback.
+#  - Every 2nd hour (even UTC hours): Bosta status sync first, so the
+#    "handed to Bosta" / "out for delivery" / "delivered" stages are fresh.
+#  - The 18:00 UTC run also sends today's Telegram summary (?summary=1).
+# GitHub may start scheduled runs late; the hour is read when the job runs.
 on:
   schedule:
-    - cron: '0 6 * * *'
-    - cron: '0 18 * * *'
+    - cron: '0 5-21 * * *'
   workflow_dispatch:
 
 jobs:
-  sync:
+  run:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Bosta sync
-        env:
-          # GitHub cron passes the matched schedule to $GITHUB_EVENT_NAME=schedule
-          # and $CRON_SCHEDULE in the workflow's schedule metadata isn't exposed;
-          # detect the evening run by the current UTC hour instead.
-          SCHEDULE_HOUR: ${{ github.event.schedule }}
+      - name: Bosta status sync (every 2 hours)
         run: |
-          if [ "$SCHEDULE_HOUR" = "0 18 * * *" ]; then
-            echo "Evening run — running sync + daily Telegram summary"
+          HOUR=$(date -u +%H)
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ] && [ $((10#$HOUR % 2)) -ne 0 ]; then
+            echo "Odd hour ($HOUR UTC) — skipping Bosta sync"; exit 0
+          fi
+          if [ "$HOUR" = "18" ]; then
+            echo "Evening run — sync + daily Telegram summary"
             URL="https://protech-stores.vercel.app/api/sync-status?summary=1"
           else
-            echo "Regular sync"
             URL="https://protech-stores.vercel.app/api/sync-status"
           fi
-          # 310s client timeout (Vercel's hard function limit is 300s + a
-          # tiny edge-proxy allowance). -S shows errors but we don't -f —
-          # a 504 means the function hit its budget cap and already made
-          # progress on the orders it had time for. Flagging the whole
-          # workflow failed on that would spam the inbox for runs that
-          # actually did their job.
+          # 310s client timeout (Vercel's hard function limit is 300s). A 504
+          # means the function hit its cap after making progress; the next run
+          # continues, so don't fail the workflow on it.
           HTTP_CODE=$(curl -sS -o /tmp/sync.out -w "%{http_code}" --max-time 310 -X POST "$URL" || echo "000")
           echo "HTTP $HTTP_CODE"
           cat /tmp/sync.out || true
           case "$HTTP_CODE" in
             2*) exit 0 ;;
-            504|000) echo "::warning::Sync hit the Vercel duration cap or network timeout. Partial progress likely — next cron will continue." ; exit 0 ;;
+            504|000) echo "::warning::Sync hit the Vercel duration cap or network timeout. Partial progress likely — next run will continue." ; exit 0 ;;
             *) echo "::error::Sync returned HTTP $HTTP_CODE" ; exit 1 ;;
+          esac
+
+      - name: WhatsApp messages
+        if: always()
+        run: |
+          HTTP_CODE=$(curl -sS -o /tmp/wa.out -w "%{http_code}" --max-time 120 "https://protech-stores.vercel.app/api/wa-cron" || echo "000")
+          echo "HTTP $HTTP_CODE"
+          # Public repo: print counts only, never order or phone details.
+          jq -c '{confirm: .confirm.sent, reminders: .escalation.reminders, flaggedForCall: .escalation.flaggedForCall, shipped: .shipped.sent, outForDelivery: .outForDelivery.sent, feedback: .feedback.sent, failed: ((.confirm.failed // 0) + (.escalation.remindersFailed // 0) + (.shipped.failed // 0) + (.outForDelivery.failed // 0) + (.feedback.failed // 0)), error}' /tmp/wa.out 2>/dev/null || echo "(unreadable response)"
+          case "$HTTP_CODE" in
+            2*) exit 0 ;;
+            *) echo "::error::wa-cron returned HTTP $HTTP_CODE" ; exit 1 ;;
           esac

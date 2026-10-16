@@ -35,6 +35,13 @@ const DELAY_HOURS = (Number.isFinite(RAW_DELAY_HOURS) && RAW_DELAY_HOURS >= 1) ?
 // this phone number and ignores every other order — so you can safely shorten the
 // delay and test end-to-end without messaging real customers. Remove after testing.
 const ONLY_PHONE = (process.env.WA_ONLY_PHONE || '').replace(/\D/g, '');
+// Go-live: the automated messages only ever touch orders placed (and, for the
+// feedback message, delivered) after this moment, so switching the automation on
+// never messages old customers or test orders in bulk.
+const GO_LIVE_MS = Date.parse(process.env.WA_GO_LIVE || '2026-10-16T17:00:00Z') || 0;
+// The abandoned-cart message needs its own approved template (cart_recovery);
+// it stays off until WA_CART_RECOVERY=1.
+const CART_RECOVERY_ON = process.env.WA_CART_RECOVERY === '1';
 
 async function sbGet(path) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
@@ -381,7 +388,11 @@ export default async function handler(req, res) {
     return runDiag(res, WA_TOKEN, WA_PHONE_NUMBER_ID, wabaOverride ? String(wabaOverride) : null);
   }
 
-  if (!authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
+  // The plain scheduled run is safe to trigger without the secret: every pass
+  // only messages orders that are due and records what it sent, so extra calls
+  // send nothing new. ?test=1 (which skips the waiting times) still needs it.
+  const isTestCall = !!(req.query && (req.query.test || req.query.now));
+  if (isTestCall && !authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
   if (!SUPABASE_URL || !SUPABASE_KEY) return res.status(500).json({ error: 'DB not configured' });
   if (!waConfigured()) return res.status(500).json({ error: 'WhatsApp not configured' });
 
@@ -391,7 +402,8 @@ export default async function handler(req, res) {
   const test = !!(req.query && (req.query.test || req.query.now));
   const now = Date.now();
   const cutoff = new Date(now - (test ? 0 : DELAY_HOURS * 3600 * 1000)).toISOString();
-  const floor = new Date(now - 72 * 3600 * 1000).toISOString(); // skip orders older than 3 days
+  // Skip orders older than 3 days, and anything from before the go-live moment.
+  const floor = new Date(Math.max(now - 72 * 3600 * 1000, GO_LIVE_MS)).toISOString();
 
   try {
     // Old enough, never sent, not yet resolved, still in an early state, has a phone.
@@ -434,6 +446,8 @@ export default async function handler(req, res) {
       'status=eq.Delivered',
       'wa_feedback_sent_at=is.null',
       'phone=not.is.null',
+      // Only orders delivered recently (and after go-live) — never the backlog.
+      `delivered_at=gte.${encodeURIComponent(floor)}`,
     ];
     if (ONLY_PHONE) fbParts.push(`phone=eq.${encodeURIComponent(ONLY_PHONE)}`);
     fbParts.push('order=updated_at.desc', 'limit=100');
@@ -468,7 +482,7 @@ export default async function handler(req, res) {
     if (ONLY_PHONE) cartParts.push(`phone=eq.${encodeURIComponent(ONLY_PHONE)}`);
     cartParts.push('order=updated_at.desc', `limit=${test ? 1 : 50}`);
     let cartCandidates = [];
-    try { cartCandidates = await sbGet(`abandoned_carts?${cartParts.join('&')}`); } catch (e) { console.warn('abandoned_carts query failed:', e.message); }
+    if (CART_RECOVERY_ON) try { cartCandidates = await sbGet(`abandoned_carts?${cartParts.join('&')}`); } catch (e) { console.warn('abandoned_carts query failed:', e.message); }
     const cartSent = [], cartFailed = [];
     for (const c of cartCandidates) {
       try {
@@ -492,16 +506,17 @@ export default async function handler(req, res) {
     const prepOrders = [], prepSent = [], prepFailed = [];
 
     // ─────────────────────────────────────────────────────────────────
-    //  SHIPPED PASS — handed to Bosta (ship_code assigned): order_shipped
-    //  (name, order code, tracking, amount) + a static call button only.
-    //  Not gated to Processing — the status may already have flipped to
-    //  In Transit by the time the cron runs; wa_shipped_sent_at dedupes.
+    //  SHIPPED PASS — handed to Bosta (courier picked it up, status In Transit
+    //  or already Heading to Customer): handed-to-Bosta template (name, order
+    //  code, tracking, amount) + a static call button. wa_shipped_sent_at dedupes.
     // ─────────────────────────────────────────────────────────────────
     const shipParts = [
       'select=id,code,phone,customer_name,ship_code,total',
       'ship_code=not.is.null',
       'wa_shipped_sent_at=is.null',
-      'status=not.in.(Delivered,Returned,Cancelled)',
+      // Handed to Bosta = the courier has picked it up. The ship code exists from
+      // the moment the order is placed, so the status is what tells us.
+      `status=in.(${encodeURIComponent('"In Transit","Heading to Customer"')})`,
       'phone=not.is.null',
       `created_at=gte.${encodeURIComponent(floor)}`,
     ];
