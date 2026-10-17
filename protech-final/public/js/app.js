@@ -1675,16 +1675,33 @@ const CAT_LABELS = {
 const SB_URL_IMG = 'https://wljxplbcfoorqpoflcdz.supabase.co';
 const SB_KEY_IMG = 'sb_publishable_zsHh-eOarHI7BSGtuP6WWQ_PQ4ACoHG';
 
+// Uploads to protech-media are admin-only (storage RLS checks is_admin()), so
+// they always go out with the logged-in session. If that session has expired,
+// refresh it once and retry instead of failing.
+async function uploadToMedia(path, file, contentType) {
+  const send = () => fetch(`${SB_URL_IMG}/storage/v1/object/protech-media/${path}`, {
+    method: 'POST',
+    headers: { apikey: SB_KEY_IMG, Authorization: 'Bearer ' + (accessToken || SB_KEY_IMG), 'Content-Type': contentType, 'x-upsert': 'true' },
+    body: file
+  });
+  let res = await send();
+  if (!res.ok && [400, 401, 403].includes(res.status)) {
+    const txt = await res.clone().text().catch(() => '');
+    if (/jwt|expired|unauthori|invalid.*token/i.test(txt) && typeof refreshSession === 'function' && await refreshSession()) {
+      res = await send();
+    }
+  }
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    throw new Error(/row-level security|unauthori/i.test(txt) ? 'Upload not allowed — log in again as an admin.' : txt);
+  }
+  return `${SB_URL_IMG}/storage/v1/object/public/protech-media/${path}`;
+}
+
 async function uploadProductImage(file, productId) {
   const ext = file.name.split('.').pop();
   const path = `products/${productId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-  const res = await fetch(`${SB_URL_IMG}/storage/v1/object/protech-media/${path}`, {
-    method: 'POST',
-    headers: { apikey: SB_KEY_IMG, Authorization: 'Bearer ' + (accessToken || SB_KEY_IMG), 'Content-Type': file.type, 'x-upsert': 'true' },
-    body: file
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return `${SB_URL_IMG}/storage/v1/object/public/protech-media/${path}`;
+  return uploadToMedia(path, file, file.type);
 }
 
 function renderImagePreviews(images) {
@@ -5987,13 +6004,7 @@ function clearExpenseReceipt() {
 async function uploadReceiptImage(file, expenseId) {
   const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
   const path = `receipts/${expenseId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-  const res = await fetch(`${SB_URL_IMG}/storage/v1/object/protech-media/${path}`, {
-    method: 'POST',
-    headers: { apikey: SB_KEY_IMG, Authorization: 'Bearer ' + (accessToken || SB_KEY_IMG), 'Content-Type': file.type || 'image/jpeg', 'x-upsert': 'true' },
-    body: file
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return `${SB_URL_IMG}/storage/v1/object/public/protech-media/${path}`;
+  return uploadToMedia(path, file, file.type || 'image/jpeg');
 }
 
 async function saveExpense() {
