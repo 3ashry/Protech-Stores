@@ -103,6 +103,19 @@ export default async function handler(req, res) {
     // that one (wa_phone) for every later message. If the second also fails
     // — or a later message fails — flag the order for a phone call.
     const statusEvt = change?.statuses?.[0];
+    // Meta's verdict on each sent message (no phone numbers or content), so a
+    // failure reason survives even when we fall back to the second number.
+    if (statusEvt) {
+      const err = statusEvt.errors?.[0];
+      console.log('wa-webhook status', JSON.stringify({
+        msgId: statusEvt.id || null,
+        status: statusEvt.status || null,
+        category: statusEvt.pricing?.category || null,
+        errorCode: err?.code || null,
+        errorTitle: err?.title || null,
+        errorDetails: err?.error_data?.details || err?.message || null,
+      }));
+    }
     if (statusEvt && (statusEvt.status === 'failed' || statusEvt.status === 'undelivered') && SUPABASE_URL && SUPABASE_KEY) {
       const failedId = statusEvt.id;
       const reason = statusEvt.errors?.[0]?.title || statusEvt.errors?.[0]?.message || statusEvt.status;
