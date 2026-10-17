@@ -1728,12 +1728,16 @@ function removeProductImage(idx) {
 // ── INVENTORY ──
 function renderInventory() {
   const all = cache.products;
-  const oos = all.filter(p => parseInt(p.qty || 0) === 0).length;
-  const low = all.filter(p => parseInt(p.qty || 0) > 0 && parseInt(p.qty || 0) <= 5).length;
-  const totalVal = all.reduce((a, p) => a + parseFloat(p.buy_price || p.price || 0) * parseInt(p.qty || 0), 0);
+  // On-order products sit in Elashry's warehouse: their qty is Elashry's stock,
+  // so they're kept out of my stock counts and inventory value.
+  const own = all.filter(p => !p.on_order);
+  const onOrderCount = all.length - own.length;
+  const oos = own.filter(p => parseInt(p.qty || 0) === 0).length;
+  const low = own.filter(p => parseInt(p.qty || 0) > 0 && parseInt(p.qty || 0) <= 5).length;
+  const totalVal = own.reduce((a, p) => a + parseFloat(p.buy_price || p.price || 0) * parseInt(p.qty || 0), 0);
 
   document.getElementById('inv-stats').innerHTML = `
-    <div class="stat-card orange"><div class="stat-val">${all.length}</div><div class="stat-label">Total Products</div></div>
+    <div class="stat-card orange"><div class="stat-val">${own.length}</div><div class="stat-label">My warehouse products${onOrderCount ? ` · +${onOrderCount} on order` : ''}</div></div>
     <div class="stat-card red"><div class="stat-val">${oos}</div><div class="stat-label">Out of Stock</div></div>
     <div class="stat-card blue"><div class="stat-val">${low}</div><div class="stat-label">Low Stock ≤5</div></div>
     <div class="stat-card green"><div class="stat-val">EGP ${fmt(totalVal)}</div><div class="stat-label">Inventory Value</div></div>`;
@@ -6114,10 +6118,11 @@ function downloadInventoryExcel() {
       'Sell Price (EGP)': parseFloat(p.price || 0),
       'Offer Price (EGP)': p.is_offer ? parseFloat(p.offer_price || 0) : '',
       'Published': p.is_published !== false ? 'Yes' : 'No',
+      'Stored at': p.on_order ? 'Elashry (on order)' : 'My warehouse',
     };
   });
   const ws = XLSX.utils.json_to_sheet(rows);
-  ws['!cols'] = [{ wch: 14 }, { wch: 40 }, { wch: 12 }, { wch: 30 }, { wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 10 }];
+  ws['!cols'] = [{ wch: 14 }, { wch: 40 }, { wch: 12 }, { wch: 30 }, { wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 10 }, { wch: 18 }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
   XLSX.writeFile(wb, `Protech_Inventory_${new Date().toISOString().slice(0,10)}.xlsx`);

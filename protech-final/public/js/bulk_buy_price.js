@@ -6,8 +6,13 @@
 //    2. Parser extracts { code, price } pairs.
 //    3. Preview shows: matched (old→new), unmatched file codes, and
 //       store products not in the file. Formula:
-//         buy_price = price × (1 − discount%)   (default 5%)
-//    4. Apply PATCHes each matched product's buy_price via the existing admin JWT.
+//         buy_price = price × (1 − discount%)   (default 3%)
+//       For "available on order" products (kept at Elashry's warehouse) it
+//       also sets the stock to Elashry's quantity (last column of the PDF),
+//       and lists on-order products missing from the file so the owner can
+//       tick the ones to delete.
+//    4. Apply PATCHes buy prices and on-order stock, then deletes the ticked
+//       products, via the existing admin JWT.
 // ═══════════════════════════════════════════════════════════════════
 
 // Loaded on-demand.
@@ -15,6 +20,8 @@ const PDFJS_SRC = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.mi
 const PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
 let _bulkPending = [];    // pending {id, code, newBuy} to PATCH
+let _bulkQtyPending = []; // pending {id, code, newQty} for on-order products
+let _bulkMissingOnOrder = []; // on-order products not in the file (deletion candidates)
 let _bulkParsed = [];     // last-parsed [{code, price}] from the file
 
 function _bulkEsc(s) {
@@ -88,7 +95,7 @@ async function _parsePdfFile(file) {
 }
 
 // Marker so we can see in DevTools which version of the parser is loaded.
-window._bulkParserVersion = 4;
+window._bulkParserVersion = 5;
 
 // Turn arbitrary extracted text into {code, price} pairs. Handles the
 // El Ashry layout (serial + type + code + name + carton + price + stock),
@@ -114,12 +121,28 @@ function _rowsFromText(rawText) {
     return null;
   };
 
+  let pendingPrice = null; // El Ashry row whose code wrapped onto the next line
   for (const ln of lines) {
+    if (pendingPrice) {
+      const lead = ln.match(/^\s*([A-Z][A-Z0-9\-]{2,25})\b/);
+      if (lead && !NON_CODE.test(lead[1])) { rows.push({ code: lead[1].toUpperCase(), ...pendingPrice }); pendingPrice = null; continue; }
+      pendingPrice = null;
+    }
     // El Ashry pattern first (works when serial + TOTAL/WADFOW + code all land in order).
+    // El Ashry rows end with: carton · price · Elashry stock.
     const strict = ln.match(
+      /^\s*\d{1,4}\s+(?:TOTAL|WADFOW|WADFO)\s+([A-Z][A-Z0-9\-]{2,25}).*?(\d{1,6}\.\d{2})(?:\s+(\d{1,7}))?\s*$/i
+    ) || ln.match(
       /^\s*\d{1,4}\s+(?:TOTAL|WADFOW|WADFO)\s+([A-Z][A-Z0-9\-]{2,25}).*?(\d{1,6}\.\d{2})/i
     );
-    if (strict) { rows.push({ code: strict[1].toUpperCase(), price: parseFloat(strict[2]) }); carry = null; continue; }
+    if (strict) {
+      rows.push({ code: strict[1].toUpperCase(), price: parseFloat(strict[2]), stock: strict[3] != null ? parseInt(strict[3], 10) : null });
+      carry = null; continue;
+    }
+    // Serial + brand + (name) + price + stock with the code on the NEXT line
+    // (happens when the product name is long enough to wrap).
+    const priceOnly = ln.match(/^\s*\d{1,4}\s+(?:TOTAL|WADFOW|WADFO)\s+.*?(\d{1,6}\.\d{2})(?:\s+(\d{1,7}))?\s*$/i);
+    if (priceOnly) { pendingPrice = { price: parseFloat(priceOnly[1]), stock: priceOnly[2] != null ? parseInt(priceOnly[2], 10) : null }; carry = null; continue; }
 
     const code = pickCode(ln);
     PRICE_RE.lastIndex = 0;
@@ -141,10 +164,10 @@ function _rowsFromText(rawText) {
   // different prices so the user can review.
   const map = new Map(); const dupes = new Set();
   for (const r of rows) {
-    if (map.has(r.code) && map.get(r.code) !== r.price) dupes.add(r.code);
-    map.set(r.code, r.price);
+    if (map.has(r.code) && map.get(r.code).price !== r.price) dupes.add(r.code);
+    map.set(r.code, r);
   }
-  return { rows: Array.from(map, ([code, price]) => ({ code, price })), dupes: Array.from(dupes) };
+  return { rows: Array.from(map.values()), dupes: Array.from(dupes) };
 }
 
 async function _parseXlsxFile(file) {
@@ -218,7 +241,7 @@ function _openBuyPricePreview() {
             </div>
             <div>
               <label style="display:block;font-size:12px;font-weight:700;color:#374151;margin-bottom:6px">Discount %</label>
-              <input type="number" id="bulk-discount-input" min="0" max="100" step="0.1" value="5"
+              <input type="number" id="bulk-discount-input" min="0" max="100" step="0.1" value="3"
                      oninput="_bulkRefreshPreview()"
                      style="width:100%;padding:8px;border:1px solid #d1d5db;border-radius:8px;font-size:14px">
             </div>
@@ -247,6 +270,8 @@ function _openBuyPricePreview() {
 function _closeBuyPricePreview() {
   document.getElementById('buy-price-mount')?.remove();
   _bulkPending = [];
+  _bulkQtyPending = [];
+  _bulkMissingOnOrder = [];
   _bulkParsed = [];
 }
 
@@ -297,21 +322,31 @@ function _bulkRefreshPreview() {
   const dbCodes = new Set(dbByCode.keys());
   const fileCodes = new Set();
 
-  const changes = [], unchanged = [], unmatched = [];
-  for (const { code, price } of _bulkParsed) {
+  const changes = [], unchanged = [], unmatched = [], qtyChanges = [];
+  for (const { code, price, stock } of _bulkParsed) {
     const c = String(code).toUpperCase().trim();
     fileCodes.add(c);
     const newBuy = Math.round(price * factor * 100) / 100;
     const p = dbByCode.get(c);
     if (!p) { unmatched.push({ code: c, price, newBuy }); continue; }
+    // On-order products show Elashry's own stock on the website.
+    if (p.on_order && stock != null && parseInt(p.qty || 0, 10) !== stock) {
+      qtyChanges.push({ product: p, oldQty: parseInt(p.qty || 0, 10), newQty: stock });
+    }
     const oldBuy = Number(p.buy_price || 0);
     if (Math.abs(oldBuy - newBuy) < 0.005) unchanged.push({ code: c, buy: oldBuy });
     else changes.push({ product: p, oldBuy, newBuy });
   }
-  const dbNotInFile = [];
-  for (const c of dbCodes) if (!fileCodes.has(c)) dbNotInFile.push(c);
+  const dbNotInFile = [], onOrderMissing = [];
+  for (const c of dbCodes) {
+    if (fileCodes.has(c)) continue;
+    const p = dbByCode.get(c);
+    if (p && p.on_order) onOrderMissing.push(p); else dbNotInFile.push(c);
+  }
 
   _bulkPending = changes.map(c => ({ id: c.product.id, code: c.product.code, newBuy: c.newBuy }));
+  _bulkQtyPending = qtyChanges.map(q => ({ id: q.product.id, code: q.product.code, newQty: q.newQty }));
+  _bulkMissingOnOrder = onOrderMissing.map(p => ({ id: p.id, code: p.code, name: p.name }));
 
   const chgRows = changes.length
     ? changes.slice(0, 500).map(c => `
@@ -331,9 +366,23 @@ function _bulkRefreshPreview() {
          <div style="font-family:monospace;font-size:12px;max-height:140px;overflow:auto;white-space:pre-wrap;user-select:all;background:#fff;padding:8px;border-radius:6px">${_bulkEsc(unmatched.map(u => u.code).join('\n'))}</div>
        </div>` : '';
 
+  const qtyBlock = qtyChanges.length
+    ? `<div style="margin-top:12px;background:#ecfeff;border:1px solid #06b6d4;border-radius:8px;padding:10px">
+         <div style="font-weight:800;color:#155e75;margin-bottom:6px">📦 ${qtyChanges.length} on-order products: stock set to Elashry's quantity</div>
+         <div style="font-size:12px;max-height:140px;overflow:auto;background:#fff;padding:8px;border-radius:6px">${qtyChanges.slice(0, 300).map(q => `<div><b>${_bulkEsc(q.product.code)}</b> ${_bulkEsc(q.product.name || '')}: ${q.oldQty} → <b>${q.newQty}</b></div>`).join('')}</div>
+       </div>` : '';
+
+  const deleteBlock = onOrderMissing.length
+    ? `<div style="margin-top:12px;background:#fef2f2;border:1px solid #f87171;border-radius:8px;padding:10px">
+         <div style="font-weight:800;color:#991b1b;margin-bottom:4px">🗑️ ${onOrderMissing.length} on-order products are no longer in Elashry's list</div>
+         <div style="font-size:12px;color:#7f1d1d;margin-bottom:8px">Tick the ones to delete from the store. Unticked products stay as they are.
+           <label style="margin-inline-start:10px;cursor:pointer"><input type="checkbox" id="bulk-del-all" onchange="document.querySelectorAll('.bulk-del-cb').forEach(cb=>cb.checked=this.checked);_bulkUpdateApplyFromState()"> Tick all</label></div>
+         <div style="font-size:12px;max-height:160px;overflow:auto;background:#fff;padding:8px;border-radius:6px">${onOrderMissing.map(p => `<label style="display:block;cursor:pointer;padding:2px 0"><input type="checkbox" class="bulk-del-cb" value="${_bulkEsc(p.id)}" onchange="_bulkUpdateApplyFromState()"> <b>${_bulkEsc(p.code)}</b> ${_bulkEsc(p.name || '')}</label>`).join('')}</div>
+       </div>` : '';
+
   const orphanBlock = dbNotInFile.length
     ? `<div style="margin-top:8px;background:#f3f4f6;border:1px solid #d1d5db;border-radius:8px;padding:10px">
-         <div style="font-weight:700;color:#374151;margin-bottom:6px">ℹ️ ${dbNotInFile.length} store products not in the file (buy price unchanged):</div>
+         <div style="font-weight:700;color:#374151;margin-bottom:6px">ℹ️ ${dbNotInFile.length} warehouse products not in the file (buy price unchanged):</div>
          <div style="font-family:monospace;font-size:11px;max-height:100px;overflow:auto;white-space:pre-wrap;user-select:all;background:#fff;padding:8px;border-radius:6px">${_bulkEsc(dbNotInFile.slice(0, 600).join('\n'))}${dbNotInFile.length > 600 ? '\n…' : ''}</div>
        </div>` : '';
 
@@ -358,18 +407,28 @@ function _bulkRefreshPreview() {
         <tbody>${chgRows}</tbody>
       </table>
     </div>
+    ${qtyBlock}
+    ${deleteBlock}
     ${unmatchedBlock}
     ${orphanBlock}`;
 
-  _updateApplyButton(changes.length);
+  _bulkUpdateApplyFromState();
 }
+
+function _bulkCheckedDeletes() {
+  return Array.from(document.querySelectorAll('.bulk-del-cb:checked')).map(cb => cb.value);
+}
+function _bulkUpdateApplyFromState() {
+  _updateApplyButton(_bulkPending.length + _bulkQtyPending.length + _bulkCheckedDeletes().length);
+}
+window._bulkUpdateApplyFromState = _bulkUpdateApplyFromState;
 
 function _updateApplyButton(n) {
   const btn = document.getElementById('buy-price-apply-btn');
   if (!btn) return;
   const enabled = n > 0;
   btn.disabled = !enabled;
-  btn.textContent = enabled ? `Apply ${n} update${n === 1 ? '' : 's'}` : (n === 0 && _bulkParsed.length ? 'Nothing to apply' : 'Choose a file first');
+  btn.textContent = enabled ? `Apply ${n} change${n === 1 ? '' : 's'}` : (n === 0 && _bulkParsed.length ? 'Nothing to apply' : 'Choose a file first');
   btn.style.background = enabled ? '#f97316' : '#d1d5db';
   btn.style.cursor = enabled ? 'pointer' : 'not-allowed';
 }
@@ -378,13 +437,31 @@ async function _applyBuyPriceUpdates() {
   const btn = document.getElementById('buy-price-apply-btn');
   if (!btn) return;
   const items = _bulkPending.slice();
-  if (!items.length) return;
+  const qtyItems = _bulkQtyPending.slice();
+  const delIds = _bulkCheckedDeletes();
+  if (!items.length && !qtyItems.length && !delIds.length) return;
   btn.disabled = true;
   btn.style.background = '#d1d5db';
   btn.style.cursor = 'not-allowed';
-  const total = items.length;
+  const total = items.length + qtyItems.length + delIds.length;
   let done = 0, failed = 0;
   const failedCodes = [];
+  for (const it of qtyItems) {
+    btn.textContent = `Applying ${++done}/${total}…`;
+    try {
+      await dbUpdate('products', it.id, { qty: it.newQty });
+      const i = cache.products.findIndex(p => p.id === it.id);
+      if (i >= 0) cache.products[i] = { ...cache.products[i], qty: it.newQty };
+    } catch (e) { failed++; failedCodes.push(it.code); console.warn('on-order stock update failed for', it.code, e); }
+  }
+  for (const id of delIds) {
+    const p = cache.products.find(x => x.id === id);
+    btn.textContent = `Applying ${++done}/${total}…`;
+    try {
+      await dbDelete('products', id);
+      cache.products = cache.products.filter(x => x.id !== id);
+    } catch (e) { failed++; failedCodes.push(p ? p.code : id); console.warn('delete failed for', id, e); }
+  }
   for (const it of items) {
     btn.textContent = `Applying ${++done}/${total}…`;
     try {
@@ -402,8 +479,8 @@ async function _applyBuyPriceUpdates() {
   if (failed) {
     alert(`Done: ${total - failed} updated, ${failed} failed.\nFailed codes:\n${failedCodes.join(', ')}`);
   } else if (typeof showToast === 'function') {
-    showToast(`✅ Updated buy price for ${total} products`);
+    showToast(`✅ Applied ${total} changes (${items.length} buy prices, ${qtyItems.length} stock, ${delIds.length} deleted)`);
   } else {
-    alert(`✅ Updated buy price for ${total} products`);
+    alert(`✅ Applied ${total} changes`);
   }
 }
