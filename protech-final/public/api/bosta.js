@@ -323,6 +323,37 @@ export default async function handler(req, res) {
     }
   }
 
+  // Bosta only accepts open-package images stored on its own side: ask for a
+  // signed upload URL per image, PUT the bytes there, and send the returned
+  // paths as deliveryImages. Plain links in productsImages still get 2150.
+  const deliveryImagePaths = [];
+  for (const url of productsImages) {
+    try {
+      const signRes = await fetch(`${BOSTA_BASE_URL}/deliveries/delivery-images/signed-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': BOSTA_API_KEY },
+        body: JSON.stringify({ type: 'ALLOW_TO_OPEN_THE_PACKAGE' }),
+      });
+      const signData = await signRes.json().catch(() => null);
+      const signedUrl = signData?.data?.signedUrl;
+      const path = signData?.data?.path;
+      if (!signRes.ok || !signedUrl || !path) {
+        console.warn('Bosta signed-url failed:', signRes.status, JSON.stringify(signData));
+        continue;
+      }
+      const img = await fetch(url);
+      if (!img.ok) { console.warn('product image fetch failed:', img.status, url); continue; }
+      const bytes = Buffer.from(await img.arrayBuffer());
+      const put = await fetch(signedUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': img.headers.get('content-type') || 'image/jpeg' },
+        body: bytes,
+      });
+      if (!put.ok) { console.warn('Bosta image upload failed:', put.status); continue; }
+      deliveryImagePaths.push(path);
+    } catch (e) { console.warn('Bosta image upload error:', e && e.message); }
+  }
+
   const bostaPayload = {
     type: 10,           // SEND with COD
     cod: total,         // Customer pays exactly this — same number shown at checkout
@@ -352,6 +383,9 @@ export default async function handler(req, res) {
     // Only keep allowToOpenPackage on if we actually have images to back it up;
     // otherwise Bosta rejects the whole shipment with errorCode 2150.
     allowToOpenPackage: !!(allowOpen && productsImages.length),
+    ...(deliveryImagePaths.length
+      ? { deliveryImages: [{ type: 'ALLOW_TO_OPEN_THE_PACKAGE', images: deliveryImagePaths }] }
+      : {}),
   };
 
   // ─────────────────────────────────────────────────────────────────────
