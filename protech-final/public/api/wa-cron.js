@@ -202,7 +202,7 @@ async function runDiag(res, WA_TOKEN, WA_PHONE_NUMBER_ID, wabaOverride) {
     // Probe the WABA itself first — tells us whether the token even has access.
     try {
       const r = await fetch(
-        `https://graph.facebook.com/v21.0/${wabaId}?fields=id,name,timezone_id,currency,primary_funding_id,message_template_namespace,account_review_status,business_verification_status,health_status,owner_business_info,on_behalf_of_business_info`,
+        `https://graph.facebook.com/v21.0/${wabaId}?fields=id,name,timezone_id,currency,message_template_namespace,account_review_status,business_verification_status,health_status,owner_business_info,on_behalf_of_business_info`,
         { headers: { Authorization: `Bearer ${WA_TOKEN}` } }
       );
       const d = await r.json().catch(() => ({}));
