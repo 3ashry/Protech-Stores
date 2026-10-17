@@ -130,7 +130,7 @@ async function runDiag(res, WA_TOKEN, WA_PHONE_NUMBER_ID, wabaOverride) {
   const out = { ok: true, phoneNumberId: WA_PHONE_NUMBER_ID };
   try {
     const r = await fetch(
-      `https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}?fields=display_phone_number,verified_name,quality_rating,messaging_limit_tier,account_mode,id`,
+      `https://graph.facebook.com/v21.0/${WA_PHONE_NUMBER_ID}?fields=display_phone_number,verified_name,quality_rating,messaging_limit_tier,account_mode,status,name_status,health_status,id`,
       { headers: { Authorization: `Bearer ${WA_TOKEN}` } }
     );
     out.phone = await r.json().catch(() => ({ error: 'parse failed' }));
@@ -202,7 +202,7 @@ async function runDiag(res, WA_TOKEN, WA_PHONE_NUMBER_ID, wabaOverride) {
     // Probe the WABA itself first — tells us whether the token even has access.
     try {
       const r = await fetch(
-        `https://graph.facebook.com/v21.0/${wabaId}?fields=id,name,timezone_id,message_template_namespace,account_review_status,business_verification_status,owner_business_info,on_behalf_of_business_info`,
+        `https://graph.facebook.com/v21.0/${wabaId}?fields=id,name,timezone_id,currency,primary_funding_id,message_template_namespace,account_review_status,business_verification_status,health_status,owner_business_info,on_behalf_of_business_info`,
         { headers: { Authorization: `Bearer ${WA_TOKEN}` } }
       );
       const d = await r.json().catch(() => ({}));
