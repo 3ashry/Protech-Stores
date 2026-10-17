@@ -675,6 +675,24 @@ export default async function handler(req, res) {
           monthLabel: `${String(now.getUTCMonth() + 1).padStart(2, '0')}/${now.getUTCFullYear()}`,
         });
       }
+      if (op === 'cancelled') {
+        // Orders the customer cancelled AFTER they were prepared, that no one
+        // at the prep center has acknowledged yet — the page shows a blocking
+        // popup for each until someone taps "got it".
+        const rows = await sbGet('orders?select=*&status=eq.Cancelled&post_prep_cancel_at=not.is.null&post_prep_cancel_ack_at=is.null&order=post_prep_cancel_at.asc&limit=50');
+        return res.status(200).json({ ok: true, orders: await expandAll(rows.map(o => ({ ...strip(o), cancelled_at: o.post_prep_cancel_at }))) });
+      }
+      if (op === 'ackcancel') {
+        const orderId = (req.query?.orderId || '').toString();
+        if (!/^[A-Za-z0-9_-]+$/.test(orderId)) return res.status(400).json({ error: 'Bad orderId' });
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}&post_prep_cancel_at=not.is.null`, {
+          method: 'PATCH',
+          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+          body: JSON.stringify({ post_prep_cancel_ack_at: new Date().toISOString() }),
+        });
+        if (!r.ok) return res.status(502).json({ error: 'DB write failed', detail: await r.text() });
+        return res.status(200).json({ ok: true });
+      }
       if (op === 'ready') {
         // Ready-for-Bosta-pickup queue — the admin must STILL have this
         // order flagged as sent, it must be marked prepared, and Bosta

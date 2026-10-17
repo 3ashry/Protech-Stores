@@ -213,6 +213,7 @@
           <input type="search" id="orders-search" placeholder="🔍 Search — code / name / phone / city / tracking…"
             oninput="renderOrders()" style="flex:1;padding:8px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;background:#fff">
           <span id="orders-search-count" style="font-size:12px;color:var(--muted);white-space:nowrap"></span>
+          <label style="font-size:12px;color:var(--muted);white-space:nowrap;display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="orders-show-cancelled" onchange="renderOrders()"> Show cancelled</label>
         </div>
       </div>
       <div class="table-wrap">

@@ -2243,7 +2243,8 @@ function renderOrders() {
   // all money calcs) — EXCEPT a post-prep cancellation that the prep center
   // hasn't acknowledged yet: that one stays visible, flagged "DO NOT SHIP",
   // until someone acknowledges it (Phase 3).
-  let visibleOrders = cache.orders.filter(o => o.status !== 'Cancelled' || isPostPrepCancelled(o));
+  const showCancelled = !!document.getElementById('orders-show-cancelled')?.checked;
+  let visibleOrders = cache.orders.filter(o => showCancelled || o.status !== 'Cancelled' || isPostPrepCancelled(o));
   // Free-text search — matches against every field the user is likely
   // to search by. Case-insensitive, matches partial words, and Arabic
   // digits get normalised to ASCII so "٠١٢٠٨" matches "01208".
@@ -2267,7 +2268,7 @@ function renderOrders() {
     : '';
   document.getElementById('orders-tbody').innerHTML = visibleOrders.length ? visibleOrders.map(o => `
     <tr${o.status === 'Awaiting Action' ? ' style="background:#fff4f4"' : ''}>
-      <td><span class="badge b-orange">${esc(o.code)}</span> ${isPostPrepCancelled(o) ? '<span class="badge b-danger" style="animation:ppcPulse 1s infinite" title="Cancelled after it was sent to prep — DO NOT SHIP">🚫 CANCELLED — DO NOT SHIP</span> ' : ''}${orderProgressBadge(o)}${o.allow_open ? ' <span class="badge b-warning" title="Wants to open the package before paying">📦</span>' : ''}${o.status === 'Returned' && !o.warehouse_confirmed ? ' <span class="badge b-danger" title="Returned — not back in the warehouse yet">↩️ Not in warehouse</span>' : ''}${o.picker_prepared_at ? ' <span class="badge b-success" title="Prepared by the picker">✅ Ready</span>' : ''}${o.revised_at ? ' <span class="badge b-success" title="Reviewed">📝 Reviewed</span>' : ''}${o.pending_elashry_at ? ' <span class="badge b-warning" title="In the Elashry returns list">📦 Elashry list</span>' : ''}${o.needs_call ? ` <span class="badge b-danger" title="${esc(o.needs_call_reason || 'Needs a call')}">📞 Needs call</span>` : ''}${cashCycleBadge(o)}</td>
+      <td><span class="badge b-orange">${esc(o.code)}</span> ${o.status === 'Cancelled' && o.cancel_stage === 'before_prep' ? '<span class="badge b-gray" title="Cancelled before the prep center prepared it">❌ Failed before preparing</span> ' : ''}${o.status === 'Cancelled' && o.cancel_stage === 'after_prep' && !isPostPrepCancelled(o) ? '<span class="badge b-danger" title="Cancelled after it was prepared — prep center acknowledged">🚫 Cancelled after preparing</span> ' : ''}${isPostPrepCancelled(o) ? '<span class="badge b-danger" style="animation:ppcPulse 1s infinite" title="Cancelled after it was sent to prep — DO NOT SHIP">🚫 CANCELLED — DO NOT SHIP</span> ' : ''}${orderProgressBadge(o)}${o.allow_open ? ' <span class="badge b-warning" title="Wants to open the package before paying">📦</span>' : ''}${o.status === 'Returned' && !o.warehouse_confirmed ? ' <span class="badge b-danger" title="Returned — not back in the warehouse yet">↩️ Not in warehouse</span>' : ''}${o.picker_prepared_at ? ' <span class="badge b-success" title="Prepared by the picker">✅ Ready</span>' : ''}${o.revised_at ? ' <span class="badge b-success" title="Reviewed">📝 Reviewed</span>' : ''}${o.pending_elashry_at ? ' <span class="badge b-warning" title="In the Elashry returns list">📦 Elashry list</span>' : ''}${o.needs_call ? ` <span class="badge b-danger" title="${esc(o.needs_call_reason || 'Needs a call')}">📞 Needs call</span>` : ''}${cashCycleBadge(o)}</td>
       <td><strong>${esc(o.customer_name)}</strong></td>
       <td>${esc(o.phone)}</td>
       <td>EGP ${fmt(o.total)}</td>
@@ -2884,9 +2885,15 @@ async function cancelOrder(id) {
   // deleting it we keep it on the board, flagged "DO NOT SHIP", and raise a
   // sticky popup+alarm until a prep employee acknowledges it. Orders cancelled
   // BEFORE reaching prep carry no shipping risk, so they're deleted as before.
+  // Only an order the prep center already PREPARED raises the DO NOT SHIP
+  // alarm. One that was sent but not prepared yet is kept as "failed before
+  // preparing" (it simply drops off the prep queue).
+  const prepared = !!order.picker_prepared_at;
   const sentToPrep = !!order.sent_to_picker_at;
-  const msg = sentToPrep
-    ? 'Cancel this order?\nIt was already sent to the prep center, so it will be flagged "DO NOT SHIP" for the prep staff (kept on the board, not deleted), and its stock goes back to inventory.'
+  const msg = prepared
+    ? 'Cancel this order?\nIt was already prepared, so the prep center gets a "DO NOT SHIP" popup until they acknowledge it, and its stock goes back to inventory.'
+    : sentToPrep
+    ? 'Cancel this order?\nIt is marked "failed before preparing" and removed from the prep queue; its stock goes back to inventory.'
     : 'Cancel this order?\nIts products go back to inventory and the order is deleted permanently.';
   if (!confirm(msg)) return;
   try {
@@ -2900,9 +2907,9 @@ async function cancelOrder(id) {
         }
       }
     }
-    if (sentToPrep) {
+    if (prepared) {
       const patch = {
-        status: 'Cancelled', customer_confirmed: false, confirm_outcome: 'cancelled',
+        status: 'Cancelled', customer_confirmed: false, confirm_outcome: 'cancelled', cancel_stage: 'after_prep',
         post_prep_cancel_at: new Date().toISOString(), post_prep_cancel_ack_at: null,
       };
       await dbUpdate('orders', id, patch);
@@ -2910,6 +2917,13 @@ async function cancelOrder(id) {
       if (i >= 0) cache.orders[i] = { ...cache.orders[i], ...patch };
       try { logAudit('order.cancel_after_prep', { entity: 'orders', entity_id: order.code || id, summary: 'Order cancelled after being sent to prep — flagged DO NOT SHIP' }); } catch (_) {}
       showToast('⚠️ Cancelled after prep — flagged for the prep center');
+    } else if (sentToPrep) {
+      const patch = { status: 'Cancelled', customer_confirmed: false, confirm_outcome: 'cancelled', cancel_stage: 'before_prep' };
+      await dbUpdate('orders', id, patch);
+      const i = cache.orders.findIndex(x => x.id === id);
+      if (i >= 0) cache.orders[i] = { ...cache.orders[i], ...patch };
+      try { logAudit('order.cancel_before_prep', { entity: 'orders', entity_id: order.code || id, summary: 'Order cancelled before it was prepared' }); } catch (_) {}
+      showToast('Order cancelled — failed before preparing, stock restored ✓');
     } else {
       await dbDelete('orders', id);
       cache.orders = cache.orders.filter(x => x.id !== id);
@@ -3262,11 +3276,14 @@ async function setConfirm(id, confirmed) {
 async function markConfirmedByCall(id) {
   try {
     const patch = { customer_confirmed: true, confirm_outcome: 'confirmed_call', needs_call: false };
+    // A confirmed order goes straight to the preparation center.
+    const cur = cache.orders.find(o => o.id === id);
+    if (cur && cur.status === 'Processing' && !cur.sent_to_picker_at) patch.sent_to_picker_at = new Date().toISOString();
     await dbUpdate('orders', id, patch);
     const i = cache.orders.findIndex(o => o.id === id);
     if (i >= 0) cache.orders[i] = { ...cache.orders[i], ...patch };
     try { logAudit('order.confirm_call', { entity: 'orders', entity_id: (i >= 0 ? cache.orders[i].code : id), summary: 'Order confirmed by phone call' }); } catch (_) {}
-    showToast('✅ Order confirmed by phone');
+    showToast(patch.sent_to_picker_at ? '✅ Confirmed by phone — sent to prep' : '✅ Order confirmed by phone');
     renderAllKeepScroll();
   } catch (e) { showToast('Error: ' + e.message); }
 }

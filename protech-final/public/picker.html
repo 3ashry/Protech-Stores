@@ -77,6 +77,15 @@
   .banner .em { font-size: 22px; }
   .banner .msg { flex: 1; font-size: 14px; line-height: 1.4; }
   .banner .msg small { display: block; opacity: .9; font-weight: 600; margin-top: 2px; }
+  /* Blocking popup: order cancelled by the customer after it was prepared. */
+  .ppc { position: fixed; inset: 0; z-index: 500; background: rgba(127,29,29,.92); display: none; align-items: center; justify-content: center; padding: 16px; }
+  .ppc.show { display: flex; }
+  .ppc .box { background: #fff; border-radius: 18px; max-width: 520px; width: 100%; max-height: 92vh; overflow: auto; padding: 22px 18px; border: 6px solid var(--danger); box-shadow: 0 10px 40px rgba(0,0,0,.4); animation: ppcPulse 1.2s infinite; }
+  .ppc h2 { margin: 0 0 6px; color: var(--danger); font-size: 24px; font-weight: 900; text-align: center; line-height: 1.4; }
+  .ppc .sub { text-align: center; font-size: 17px; font-weight: 800; margin-bottom: 14px; }
+  .ppc .big-code { display: block; text-align: center; font-size: 30px; font-weight: 900; color: #fff; background: var(--danger); border-radius: 12px; padding: 10px; margin: 10px 0; direction: ltr; }
+  .ppc .more { text-align: center; color: var(--muted); font-size: 13px; margin-top: 8px; }
+  @keyframes ppcPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(220,38,38,.7); } 50% { box-shadow: 0 0 0 14px rgba(220,38,38,0); } }
   .banner .close { background: rgba(255,255,255,.2); border: 0; color: #fff; font-size: 18px; cursor: pointer; padding: 4px 10px; border-radius: 6px; font-weight: 800; }
   .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
   .btn:disabled { opacity: .5; pointer-events: none; }
@@ -130,6 +139,9 @@
 </div>
 
 <!-- In-page notification banner -->
+<div id="ppc" class="ppc" role="alertdialog" aria-modal="true">
+  <div class="box" id="ppc-box"></div>
+</div>
 <div id="banner" class="banner" onclick="onBannerClick()">
   <span class="em" id="banner-em">🛒</span>
   <div class="msg" id="banner-msg">…</div>
@@ -611,6 +623,7 @@ async function loadOrders(opts) {
       apiCall('ready').catch(() => ({ orders: [] })),
       apiCall('returning').catch(() => ({ orders: [] })),
       apiCall('stats').catch(() => ({ preparedThisMonth: 0, monthLabel: '' })),
+      apiCall('cancelled').then(j => renderCancelPopup(j.orders || [])).catch(() => {}),
     ]);
     // Update the monthly-output pill (top-right of the header).
     const mVal = document.getElementById('month-val');
@@ -773,6 +786,43 @@ function playChime() {
     osc.connect(gain).connect(ctx.destination);
     osc.start(); osc.stop(ctx.currentTime + 0.6);
   } catch {}
+}
+
+// ── Order cancelled by the customer AFTER it was prepared ──────────
+// Blocking full-screen popup (one order at a time, oldest first) with an
+// alarm on every refresh until someone at the prep center acknowledges it.
+function renderCancelPopup(list) {
+  const wrap = document.getElementById('ppc');
+  if (!wrap) return;
+  if (!list.length) { wrap.classList.remove('show'); return; }
+  const o = list[0];
+  const products = (o.products || []).map(p => `
+    <div class="prod"><div><div>${esc(p.name || p.code || 'منتج')}</div><div class="code">${esc(p.code || '')}</div></div><div class="qty">×${p.qty}</div></div>`).join('');
+  document.getElementById('ppc-box').innerHTML = `
+    <h2>🚨 تم إلغاء هذا الطلب أثناء التجهيز</h2>
+    <div class="sub">العميل ألغى الطلب بعد ما اتجهّز — من فضلك ألغِه ولا تشحنه</div>
+    <span class="big-code">${esc(o.code || '')}</span>
+    <h2 class="customer" style="color:var(--ink);font-size:18px">${esc(o.customer_name || '')}</h2>
+    <div class="address">📍 ${esc(o.city || '')}${o.address ? ' — ' + esc(o.address) : ''}</div>
+    ${o.ship_code ? `<div class="row"><span class="k">كود بوسطة</span><span class="v" style="direction:ltr">${esc(o.ship_code)}</span></div>
+      <a href="${bostaAwbLink(o.ship_code)}" target="_blank" rel="noopener" style="display:block;text-align:center;margin:8px 0;padding:12px;border-radius:8px;background:#dcfce7;color:#15803d;font-weight:800;text-decoration:none">🚚 فتح الشحنة في بوسطة لإلغائها</a>` : ''}
+    <div class="products">${products}</div>
+    <button class="btn btn-success" style="background:var(--danger);font-size:17px;padding:16px" onclick="ackCancelled('${esc(o.id)}', this)">✓ تمام — تم إلغاؤه ولن يُشحن</button>
+    ${list.length > 1 ? `<div class="more">+ ${list.length - 1} طلب ملغي آخر في الانتظار</div>` : ''}`;
+  wrap.classList.add('show');
+  playChime(); setTimeout(playChime, 700); setTimeout(playChime, 1400);
+  sysNotify(`🚨 طلب ملغي بعد التجهيز — ${o.code || ''}`, 'من فضلك ألغِه ولا تشحنه', 'cancelled');
+}
+async function ackCancelled(orderId, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    await apiCall('ackcancel', { orderId });
+    const j = await apiCall('cancelled');
+    renderCancelPopup(j.orders || []);
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = '✓ تمام — تم إلغاؤه ولن يُشحن'; }
+    alert('حصل خطأ، حاول تاني');
+  }
 }
 
 function showBanner(kind, emoji, title, subtitle) {
