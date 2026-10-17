@@ -66,6 +66,20 @@ async function sbPatchRep(path, body) {
   return Array.isArray(rows) ? rows : [];
 }
 
+// Put an order's quantities back on its products (by product id, the same
+// way /api/bosta took them at checkout). Best-effort.
+async function restoreStock(products) {
+  for (const it of (Array.isArray(products) ? products : [])) {
+    if (!it || !it.id) continue;
+    try {
+      const rows = await sbGet(`products?id=eq.${encodeURIComponent(it.id)}&select=id,qty`);
+      if (!rows.length) continue;
+      const qty = (parseInt(rows[0].qty) || 0) + (parseInt(it.qty) || 0);
+      await sbPatchRep(`products?id=eq.${encodeURIComponent(it.id)}`, { qty });
+    } catch (e) { console.warn('restoreStock failed:', e.message); }
+  }
+}
+
 const CONFIRM_RE = /تأكيد|تاكيد|أكد|اكد|confirm|نعم|موافق|تمام|أوافق/i;
 const CANCEL_RE = /إلغاء|الغاء|ألغاء|cancel|رفض|لا اريد|لا أريد|مش عايز|مش عاوز/i;
 const PROBLEM_RE = /مشكلة|مشكله|problem|شكوى|شكوي|خطأ|غلط/i;
@@ -272,37 +286,49 @@ export default async function handler(req, res) {
     }
 
     if (intent) {
-      const update = intent === 'confirm'
-        ? { customer_confirmed: true, confirm_outcome: 'confirmed_button', needs_call: false }
-        : { customer_confirmed: false, status: 'Cancelled', confirm_outcome: 'cancelled', needs_call: false };
-
-      // 1) Precise: match the order by the id of the template message we sent.
-      let updated = [];
-      let matchedId = null;
+      // 1) Precise: find the order by the id of the template message we sent
+      //    (the tap may be on the 3h REMINDER rather than the first one).
+      const sel = 'id,phone,wa_phone,status,products,warehouse_confirmed,sent_to_picker_at,picker_prepared_at';
+      let order = null;
       const repliedToId = msg.context?.id;
       if (repliedToId) {
-        updated = await sbPatchRep(`orders?wa_msg_id=eq.${encodeURIComponent(repliedToId)}`, update);
-        // The tap may be on the 3h REMINDER rather than the first confirmation.
-        if (!updated.length) updated = await sbPatchRep(`orders?wa_confirm_reminder_msg_id=eq.${encodeURIComponent(repliedToId)}`, update);
-        if (updated.length) matchedId = updated[0].id;
+        for (const col of ['wa_msg_id', 'wa_confirm_reminder_msg_id']) {
+          const rows = await sbGet(`orders?${col}=eq.${encodeURIComponent(repliedToId)}&select=${sel}&limit=1`);
+          if (rows.length) { order = rows[0]; break; }
+        }
       }
-
       // 2) Fallback: match by the sender's phone → newest messaged, unresolved order.
-      if (!updated.length) {
+      if (!order) {
         const from = String(msg.from || '').replace(/\D/g, '');
         if (from) {
-          const rows = await sbGet('orders?select=id,phone,wa_sent_at&customer_confirmed=is.null&wa_sent_at=not.is.null&order=wa_sent_at.desc&limit=100');
-          const match = rows.find(o => waPhone(o.phone) === from);
-          if (match) { await sbPatchRep(`orders?id=eq.${encodeURIComponent(match.id)}`, update); matchedId = match.id; }
+          const rows = await sbGet(`orders?select=${sel}&customer_confirmed=is.null&wa_sent_at=not.is.null&order=wa_sent_at.desc&limit=100`);
+          order = rows.find(o => waPhone(o.wa_phone || o.phone) === from) || null;
         }
       }
 
-      // Phase 3: a customer cancelling an order that was already SENT TO PREP
-      // flags it "DO NOT SHIP" for the prep center. The filter makes this a
-      // no-op for orders that never reached prep.
-      if (intent === 'cancel' && matchedId) {
-        await sbPatchRep(`orders?id=eq.${encodeURIComponent(matchedId)}&sent_to_picker_at=not.is.null`,
-          { post_prep_cancel_at: new Date().toISOString(), post_prep_cancel_ack_at: null });
+      if (order) {
+        const now = new Date().toISOString();
+        const byId = `orders?id=eq.${encodeURIComponent(order.id)}`;
+        if (intent === 'confirm') {
+          // A confirmed order goes straight to the preparation center.
+          const patch = { customer_confirmed: true, confirm_outcome: 'confirmed_button', needs_call: false };
+          if (order.status === 'Processing' && !order.sent_to_picker_at) patch.sent_to_picker_at = now;
+          await sbPatchRep(byId, patch);
+        } else if (order.status !== 'Cancelled') {
+          // Not prepared yet → just "failed before preparing" (it drops off
+          // the prep queue). Already prepared → flag it so the prep center
+          // gets a blocking popup telling them to cancel it.
+          const prepared = !!order.picker_prepared_at;
+          const patch = {
+            customer_confirmed: false, status: 'Cancelled', confirm_outcome: 'cancelled', needs_call: false,
+            cancel_stage: prepared ? 'after_prep' : 'before_prep',
+          };
+          if (prepared) { patch.post_prep_cancel_at = now; patch.post_prep_cancel_ack_at = null; }
+          await sbPatchRep(byId, patch);
+          // Stock was taken at checkout; give it back while the goods are
+          // still with us (once Bosta has it, it comes back as a return).
+          if (order.status === 'Processing' && !order.warehouse_confirmed) await restoreStock(order.products);
+        }
       }
 
       // 3) Auto-reply to the customer (the 24h window is open since they just
