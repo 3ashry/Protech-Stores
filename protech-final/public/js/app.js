@@ -1760,7 +1760,7 @@ function renderInventory() {
           ${!p.is_published ? `<span class="badge b-gray" style="font-size:10px">Hidden</span>` : ''}
         </div>
       </td>
-      <td><span class="badge ${parseInt(p.qty || 0) === 0 ? 'b-danger' : parseInt(p.qty || 0) <= 5 ? 'b-warning' : 'b-success'}">${p.qty}</span></td>
+      <td><span class="badge ${parseInt(p.qty || 0) === 0 ? 'b-danger' : parseInt(p.qty || 0) <= 5 ? 'b-warning' : 'b-success'}">${p.qty}</span>${p.on_order ? ' <span class="badge b-orange" title="Orderable at 0 stock">On order</span>' : ''}</td>
       <td>EGP ${fmt(p.buy_price || 0)}</td>
       <td>EGP ${fmt(p.price)}</td>
       <td><div class="actions">
@@ -1992,6 +1992,7 @@ function editProduct(id) {
     document.getElementById('p-offer-row').style.display = p.is_offer ? 'block' : 'none';
     document.getElementById('p-is-published').checked = p.is_published !== false;
     document.getElementById('p-free-shipping').checked = !!p.free_shipping;
+    { const el = document.getElementById('p-on-order'); if (el) el.checked = !!p.on_order; }
     document.getElementById('p-is-suggested').checked = !!p.is_suggested;
     const flashEl = document.getElementById('p-is-flash-offer');
     if (flashEl) flashEl.checked = !!p.is_flash_offer;
@@ -2023,6 +2024,7 @@ async function saveProduct() {
   const offer_price = is_offer ? (parseFloat(document.getElementById('p-offer-price').value || 0) || null) : null;
   const is_published = document.getElementById('p-is-published').checked;
   const free_shipping = document.getElementById('p-free-shipping').checked;
+  const on_order = !!document.getElementById('p-on-order')?.checked;
   const is_suggested = document.getElementById('p-is-suggested').checked;
   const is_flash_offer = document.getElementById('p-is-flash-offer')?.checked || false;
   const bundleRaw = (document.getElementById('p-bundle-with').value || '').trim();
@@ -2043,7 +2045,7 @@ async function saveProduct() {
   if (is_offer && !offer_price) { showToast('Please enter the discounted price'); return; }
 
   const id = document.getElementById('p-idx').value;
-const payload = { code, elashry_code, name, qty, price, buy_price, brand, description, is_offer, offer_price, is_published, free_shipping, is_suggested, is_flash_offer, bundle_with, accessories_with, bundle_of, categories, category, variants, images: currentProductImages };
+const payload = { code, elashry_code, name, qty, price, buy_price, brand, description, is_offer, offer_price, is_published, free_shipping, on_order, is_suggested, is_flash_offer, bundle_with, accessories_with, bundle_of, categories, category, variants, images: currentProductImages };
   // If the DB is missing a new column PostgREST replies with "Could not find
   // the 'X' column …". Retry with each unknown column stripped so pre-migration
   // installs still save the rest, with a clear toast telling the admin how
@@ -2075,7 +2077,7 @@ const payload = { code, elashry_code, name, qty, price, buy_price, brand, descri
     ({ result, missing } = await stripUnknownColumns(payload));
     if (missing.length) {
       const alters = missing.map(c => {
-        const t = (c === 'is_flash_offer' || c === 'is_suggested' || c === 'is_offer' || c === 'free_shipping' || c === 'is_published') ? 'boolean' : 'jsonb';
+        const t = (c === 'is_flash_offer' || c === 'is_suggested' || c === 'is_offer' || c === 'free_shipping' || c === 'on_order' || c === 'is_published') ? 'boolean' : 'jsonb';
         return `ALTER TABLE products ADD COLUMN ${c} ${t};`;
       }).join(' ');
       showToast('Saved (run: ' + alters + ')');
