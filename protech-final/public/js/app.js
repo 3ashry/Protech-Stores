@@ -1726,6 +1726,14 @@ function removeProductImage(idx) {
 }
 
 // ── INVENTORY ──
+let _invWhere = (() => { try { return localStorage.getItem('inv-where') || 'all'; } catch (_) { return 'all'; } })();
+function setInvWhere(w) {
+  _invWhere = w;
+  try { localStorage.setItem('inv-where', w); } catch (_) {}
+  renderInventory();
+}
+window.setInvWhere = setInvWhere;
+
 function renderInventory() {
   const all = cache.products;
   // On-order products sit in Elashry's warehouse: their qty is Elashry's stock,
@@ -1742,11 +1750,20 @@ function renderInventory() {
     <div class="stat-card blue"><div class="stat-val">${low}</div><div class="stat-label">Low Stock ≤5</div></div>
     <div class="stat-card green"><div class="stat-val">EGP ${fmt(totalVal)}</div><div class="stat-label">Inventory Value</div></div>`;
 
-  // Filter by product code or name (case-insensitive, trimmed).
+  // Where-stored filter (All / My warehouse / Elashry on order), then the
+  // code-or-name search (case-insensitive, trimmed).
+  document.querySelectorAll('#inv-where button').forEach(btn => {
+    const on = btn.dataset.where === _invWhere;
+    btn.style.background = on ? '#f97316' : '#fff';
+    btn.style.color = on ? '#fff' : '#333';
+    const n = btn.dataset.where === 'mine' ? own.length : btn.dataset.where === 'elashry' ? onOrderCount : all.length;
+    btn.textContent = btn.textContent.replace(/\s*\(\d+\)$/, '') + ` (${n})`;
+  });
+  const scoped = _invWhere === 'mine' ? own : _invWhere === 'elashry' ? all.filter(p => p.on_order) : all;
   const q = (document.getElementById('inv-search')?.value || '').trim().toLowerCase();
   const ps = q
-    ? all.filter(p => String(p.code || '').toLowerCase().includes(q) || String(p.name || '').toLowerCase().includes(q))
-    : all;
+    ? scoped.filter(p => String(p.code || '').toLowerCase().includes(q) || String(p.name || '').toLowerCase().includes(q))
+    : scoped;
 
   document.getElementById('inv-tbody').innerHTML = ps.length ? ps.map(p => {
     // categories can be array or string
