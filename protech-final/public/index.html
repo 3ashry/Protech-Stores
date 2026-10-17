@@ -178,6 +178,11 @@
     <div class="card">
       <div class="card-header" style="gap:10px;flex-wrap:wrap">
         <span class="card-title">All Products</span>
+        <div id="inv-where" role="group" aria-label="Where the product is stored" style="display:inline-flex;border:1px solid #ddd;border-radius:8px;overflow:hidden">
+          <button type="button" data-where="all" onclick="setInvWhere('all')" style="padding:8px 12px;border:0;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer">All</button>
+          <button type="button" data-where="mine" onclick="setInvWhere('mine')" style="padding:8px 12px;border:0;border-inline-start:1px solid #ddd;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer">🏠 My warehouse</button>
+          <button type="button" data-where="elashry" onclick="setInvWhere('elashry')" style="padding:8px 12px;border:0;border-inline-start:1px solid #ddd;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer">📦 Elashry (on order)</button>
+        </div>
         <input id="inv-search" type="search" oninput="renderInventory()" placeholder="🔍 Search by code or product name…"
           style="flex:1;min-width:200px;max-width:360px;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px">
       </div>
