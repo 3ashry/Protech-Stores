@@ -65,7 +65,40 @@ function cairoDate(d) {
   return `${y}-${m}-${day}`;
 }
 
+// ?action=pixel_stats — where the pixel's events come from (by host, by
+// browser vs server source, by detection method). Counts only, no customer
+// data, so it needs no secret; used to explain Purchase counts that don't
+// match the real orders.
+const PIXEL_ID = process.env.META_PIXEL_ID || '1876792236325466';
+async function pixelStats(req, res) {
+  const event = String((req.query && req.query.event) || 'Purchase').replace(/[^A-Za-z]/g, '');
+  const hours = Math.min(168, Math.max(1, parseInt((req.query && req.query.hours) || '48', 10) || 48));
+  const start = Math.floor(Date.now() / 1000) - hours * 3600;
+  const out = {};
+  for (const agg of ['event', 'host', 'event_source', 'event_detection_method', 'url']) {
+    const u = `https://graph.facebook.com/${API_VERSION}/${PIXEL_ID}/stats?aggregation=${agg}&start_time=${start}`
+      + (agg === 'event' ? '' : `&event=${encodeURIComponent(event)}`);
+    try {
+      const r = await fetch(u, { headers: { Authorization: `Bearer ${META_ACCESS_TOKEN}` } });
+      const d = await r.json().catch(() => null);
+      if (!r.ok) { out[agg] = { httpStatus: r.status, error: d && d.error && d.error.message }; continue; }
+      // Sum each value across the hourly buckets.
+      const totals = {};
+      for (const bucket of (d && d.data) || []) {
+        for (const row of bucket.data || []) totals[row.value] = (totals[row.value] || 0) + (row.count || 0);
+      }
+      if (agg === 'url') {
+        const byPath = {};
+        for (const [k, v] of Object.entries(totals)) { const key = k.split('?')[0]; byPath[key] = (byPath[key] || 0) + v; }
+        out[agg] = byPath;
+      } else out[agg] = totals;
+    } catch (e) { out[agg] = { error: String(e && e.message || e) }; }
+  }
+  return res.status(200).json({ pixel: PIXEL_ID, event, sinceHours: hours, ...out });
+}
+
 export default async function handler(req, res) {
+  if (req.query && req.query.action === 'pixel_stats') return pixelStats(req, res);
   if (!(await authorized(req))) return res.status(401).json({ error: 'Unauthorized' });
   if (!META_ACCESS_TOKEN || !META_AD_ACCOUNT_ID) {
     return res.status(500).json({ error: 'Meta not configured — set META_ACCESS_TOKEN and META_AD_ACCOUNT_ID.' });
