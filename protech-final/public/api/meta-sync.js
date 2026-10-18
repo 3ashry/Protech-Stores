@@ -87,9 +87,11 @@ async function pixelStats(req, res) {
       for (const bucket of (d && d.data) || []) {
         for (const row of bucket.data || []) totals[row.value] = (totals[row.value] || 0) + (row.count || 0);
       }
-      out[agg] = agg === 'url'
-        ? Object.fromEntries(Object.entries(totals).map(([k, v]) => [k.split('?')[0], v]))
-        : totals;
+      if (agg === 'url') {
+        const byPath = {};
+        for (const [k, v] of Object.entries(totals)) { const key = k.split('?')[0]; byPath[key] = (byPath[key] || 0) + v; }
+        out[agg] = byPath;
+      } else out[agg] = totals;
     } catch (e) { out[agg] = { error: String(e && e.message || e) }; }
   }
   return res.status(200).json({ pixel: PIXEL_ID, event, sinceHours: hours, ...out });
