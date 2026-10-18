@@ -298,6 +298,7 @@ function generateInvoicePDF(order) {
         <div class="info-row"><span class="lbl">العميل</span><span class="val">${esc(order.customer_name) || '—'}</span></div>
         <div class="info-row"><span class="lbl">عنوان الشحن</span><span class="val">${esc((order.city || '') + (order.address ? ' — ' + order.address : '')) || '—'}</span></div>
         <div class="info-row"><span class="lbl">تليفون العميل</span><span class="val" style="direction:ltr;unicode-bidi:embed">${esc(order.phone) || '—'}</span></div>
+        ${order.second_phone ? `<div class="info-row"><span class="lbl">تليفون إضافي</span><span class="val" style="direction:ltr;unicode-bidi:embed">${esc(order.second_phone)}</span></div>` : ''}
       </div>
     </div>
 
@@ -2229,6 +2230,15 @@ function renderPostPrepCancelAlert() {
 }
 window.renderPostPrepCancelAlert = renderPostPrepCancelAlert;
 
+// Main phone plus the optional second number; 💬 marks the one WhatsApp
+// messages go to (the second number after a failed first confirmation).
+function phoneCell(o) {
+  const wa = o.wa_phone || o.phone;
+  const line = (num, label) => `<div style="white-space:nowrap">${label}${esc(num)}${num === wa ? ' <span title="WhatsApp messages go to this number">💬</span>' : ''}</div>`;
+  return line(o.phone || '', '') + (o.second_phone && o.second_phone !== o.phone
+    ? line(o.second_phone, '<span style="font-size:11px;color:var(--muted)">2nd: </span>') : '');
+}
+
 // ── ORDERS ──
 function renderOrders() {
   const prevCount = parseInt(sessionStorage.getItem("protech_order_count") || "0");
@@ -2256,7 +2266,7 @@ function renderOrders() {
     const q = normDigits(rawQ).toLowerCase();
     visibleOrders = visibleOrders.filter(o => {
       const hay = [
-        o.code, o.customer_name, o.phone, o.city, o.address,
+        o.code, o.customer_name, o.phone, o.second_phone, o.city, o.address,
         o.ship_code, o.status, o.total, o.notes,
       ].map(v => normDigits(v).toLowerCase()).join(' ');
       return hay.includes(q);
@@ -2270,7 +2280,7 @@ function renderOrders() {
     <tr${o.status === 'Awaiting Action' ? ' style="background:#fff4f4"' : ''}>
       <td><span class="badge b-orange">${esc(o.code)}</span> ${o.status === 'Cancelled' && o.cancel_stage === 'before_prep' ? '<span class="badge b-gray" title="Cancelled before the prep center prepared it">❌ Failed before preparing</span> ' : ''}${o.status === 'Cancelled' && o.cancel_stage === 'after_prep' && !isPostPrepCancelled(o) ? '<span class="badge b-danger" title="Cancelled after it was prepared — prep center acknowledged">🚫 Cancelled after preparing</span> ' : ''}${isPostPrepCancelled(o) ? '<span class="badge b-danger" style="animation:ppcPulse 1s infinite" title="Cancelled after it was sent to prep — DO NOT SHIP">🚫 CANCELLED — DO NOT SHIP</span> ' : ''}${orderProgressBadge(o)}${o.allow_open ? ' <span class="badge b-warning" title="Wants to open the package before paying">📦</span>' : ''}${o.status === 'Returned' && !o.warehouse_confirmed ? ' <span class="badge b-danger" title="Returned — not back in the warehouse yet">↩️ Not in warehouse</span>' : ''}${o.picker_prepared_at ? ' <span class="badge b-success" title="Prepared by the picker">✅ Ready</span>' : ''}${o.revised_at ? ' <span class="badge b-success" title="Reviewed">📝 Reviewed</span>' : ''}${o.pending_elashry_at ? ' <span class="badge b-warning" title="In the Elashry returns list">📦 Elashry list</span>' : ''}${o.needs_call ? ` <span class="badge b-danger" title="${esc(o.needs_call_reason || 'Needs a call')}">📞 Needs call</span>` : ''}${cashCycleBadge(o)}</td>
       <td><strong>${esc(o.customer_name)}</strong></td>
-      <td>${esc(o.phone)}</td>
+      <td>${phoneCell(o)}</td>
       <td>EGP ${fmt(o.total)}</td>
       <td>${o.status === 'Awaiting Action'
         ? `<span style="display:inline-block;background:#dc2626;color:#fff;font-weight:800;font-size:13px;padding:6px 12px;border-radius:8px;animation:none">⚠️ AWAITING ACTION</span>`
@@ -2695,7 +2705,7 @@ let oPRows = [];
 
 function openCreateOrder() {
   oPRows = [{ code: '', qty: 1, sell_price: '', buy_price: '' }];
-  ['o-name', 'o-phone', 'o-shipcode', 'o-shipest'].forEach(id => document.getElementById(id).value = '');
+  ['o-name', 'o-phone', 'o-phone2', 'o-shipcode', 'o-shipest'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('o-idx').value = '';
   document.getElementById('m-order-title').textContent = 'New Order';
   renderPRows(); showModal('tpl-order');
@@ -2725,6 +2735,7 @@ function editOrder(id) {
   setTimeout(() => {
     document.getElementById('o-name').value = o.customer_name;
     document.getElementById('o-phone').value = o.phone;
+    document.getElementById('o-phone2').value = o.second_phone || '';
     document.getElementById('o-shipcode').value = o.ship_code || '';
     document.getElementById('o-shipest').value = o.est_shipping || '';
     document.getElementById('o-idx').value = id;
@@ -2785,6 +2796,9 @@ async function saveOrder() {
   const est_shipping = parseFloat(document.getElementById('o-shipest').value || 0);
   if (!customer_name || !phone) { showToast('Please enter customer name and phone'); return; }
   if (!phoneOk(phone)) { showToast('Invalid Egyptian phone number (e.g. 01208198008)'); return; }
+  const second_phone = document.getElementById('o-phone2').value.trim() || null;
+  if (second_phone && !phoneOk(second_phone)) { showToast('Invalid second phone number (e.g. 01208198008)'); return; }
+  if (second_phone && second_phone === phone) { showToast('The second phone must be different from the first'); return; }
 
   // When editing an existing order, whatever the OLD order already reserved
   // for a product is about to be restored to stock a few lines below — so
@@ -2837,14 +2851,14 @@ async function saveOrder() {
           }
         }
       }
-      const upd = { customer_name, phone, ship_code, est_shipping, products: lineItems, total };
+      const upd = { customer_name, phone, second_phone, ship_code, est_shipping, products: lineItems, total };
       await dbUpdate('orders', id, upd);
       const i = cache.orders.findIndex(x => x.id === id);
       if (i >= 0) cache.orders[i] = { ...cache.orders[i], ...upd };
       showToast('Order updated ✓');
     } else {
       const data = {
-        id: genId(), code: genCode('ORD'), customer_name, phone, ship_code, est_shipping,
+        id: genId(), code: genCode('ORD'), customer_name, phone, second_phone, ship_code, est_shipping,
         products: lineItems, total, status: 'Processing', date: today(),
         actual_shipping: 0, cancel_reason: '', created_at: new Date().toISOString()
       };
@@ -3182,6 +3196,7 @@ protechstores.com
       <div><div class="detail-label">Date</div>${esc(o.date)}</div>
       <div><div class="detail-label">Customer</div><strong>${esc(o.customer_name)}</strong></div>
       <div><div class="detail-label">Phone</div>${esc(o.phone)}</div>
+      <div><div class="detail-label">Second Phone</div>${esc(o.second_phone) || '—'}</div>
       <div><div class="detail-label">City</div><strong>${esc(o.city) || '—'}</strong></div>
       <div><div class="detail-label">Address</div>${esc(o.address) || '—'}</div>
       <div><div class="detail-label">Shipping Code</div>${esc(o.ship_code) || '—'}</div>
@@ -6229,6 +6244,7 @@ function downloadOrdersFullReportExcel() {
       'Warehouse Confirmed': o.warehouse_confirmed ? 'Yes' : (o.status === 'Returned' ? 'No' : ''),
       'Customer Name': o.customer_name || '',
       'Phone': o.phone || '',
+      'Second Phone': o.second_phone || '',
       'City': o.city || '',
       'Address': o.address || '',
       'Notes': o.notes || '',
