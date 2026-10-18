@@ -224,6 +224,10 @@ function printInvoice(id) {
         <div class="info-label">تليفون العميل</div>
         <div class="info-value">${esc(o.phone) || '—'}</div>
       </div>
+      ${o.second_phone ? `<div class="info-group">
+        <div class="info-label">تليفون إضافي</div>
+        <div class="info-value">${esc(o.second_phone)}</div>
+      </div>` : ''}
     </div>
     <div style="text-align:left">
       <div class="info-group">
