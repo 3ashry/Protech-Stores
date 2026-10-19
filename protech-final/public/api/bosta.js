@@ -222,7 +222,10 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Server not configured' });
   }
 
-  const { orderId, customerName, phone, secondPhone, city, address, notes, total, allowOpen } = req.body || {};
+  const { orderId, customerName, phone, secondPhone, city, address, notes, total } = req.body || {};
+  // Every order may be opened and inspected before paying — not a customer
+  // choice any more, so ignore whatever an old cached checkout page sends.
+  const allowOpen = true;
 
   if (!orderId || !customerName || !phone || !city || !address || !total) {
     return res.status(400).json({ error: 'Missing required fields' });
