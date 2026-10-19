@@ -1267,7 +1267,9 @@ async function saveInvoiceMatch() {
       try { await dbInsert('supplier_invoices', cur); saved = true; break; }
       catch (e) {
         const msg = String(e.message || '');
-        const m = /column ["']?(\w+)["']?/i.exec(msg) || /'(\w+)'/i.exec(msg);
+        // PostgREST: "Could not find the 'x' column of 'supplier_invoices' in
+        // the schema cache"; Postgres: 'column "x" of relation … does not exist'.
+        const m = /'(\w+)' column/i.exec(msg) || /column ["'](\w+)["']/i.exec(msg);
         const col = m && Object.prototype.hasOwnProperty.call(cur, m[1]) ? m[1] : null;
         if (!col) throw e;
         missing.push(col);
@@ -1346,7 +1348,7 @@ async function saveInvoiceMatch() {
     }
   } catch (e) {
     const msg = String(e.message || '');
-    if (/supplier_invoices/i.test(msg) && (/relation|does not exist|schema cache/i.test(msg))) {
+    if (/relation .*supplier_invoices.* does not exist|table .*supplier_invoices.* in the schema cache/i.test(msg)) {
       showToast('Create table first (see the note below the save button).');
       alert(`Run this once in Supabase SQL editor:\n\nCREATE TABLE IF NOT EXISTS supplier_invoices (\n  id text PRIMARY KEY,\n  name text NOT NULL,\n  prepared_date date,\n  orders_snapshot jsonb,\n  invoice_text text,\n  invoice_map jsonb,\n  price_map jsonb,\n  aggregated jsonb,\n  adjustments jsonb,\n  original_file jsonb,\n  invoice_serial text,\n  created_at timestamptz DEFAULT now()\n);\n-- If you already created the table earlier without one of these columns:\nALTER TABLE supplier_invoices ADD COLUMN IF NOT EXISTS original_file jsonb;\nALTER TABLE supplier_invoices ADD COLUMN IF NOT EXISTS price_map jsonb;\nALTER TABLE supplier_invoices ADD COLUMN IF NOT EXISTS adjustments jsonb;\nALTER TABLE supplier_invoices ADD COLUMN IF NOT EXISTS invoice_serial text;\n\nALTER TABLE supplier_invoices ENABLE ROW LEVEL SECURITY;\nCREATE POLICY "admin full access" ON supplier_invoices FOR ALL TO authenticated USING (true) WITH CHECK (true);`);
     } else {
