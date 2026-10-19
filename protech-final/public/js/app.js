@@ -2752,6 +2752,48 @@ function editOrder(id) {
   }, 80);
 }
 
+// ── Order product picker: type to search by name or code ──
+const opNorm = (v) => String(v || '').toLowerCase()
+  .replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي')
+  .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
+const opFind = (code) => cache.products.find(p => String(p.code || '').toLowerCase() === String(code || '').toLowerCase());
+function opLabel(r) {
+  if (!r || !r.code) return '';
+  const p = opFind(r.code);
+  return `${(p && p.name) || r.name || ''} (${r.code})`;
+}
+function opSearch(i, q) {
+  const box = document.getElementById('op-res-' + i);
+  if (!box) return;
+  const words = opNorm(q).split(/\s+/).filter(Boolean);
+  const hits = cache.products.filter(p => {
+    const hay = opNorm(p.name) + ' ' + opNorm(p.code);
+    return words.every(w => hay.includes(w));
+  }).slice(0, 40);
+  box.innerHTML = hits.length ? hits.map(p => `
+    <div onmousedown="opPick(${i}, '${esc(String(p.code).replace(/'/g, ''))}')" style="padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--line);font-size:13px"
+      onmouseover="this.style.background='#fff4ec'" onmouseout="this.style.background=''">
+      <div style="font-weight:700">${esc(p.name)}</div>
+      <div style="font-size:11px;color:var(--muted)">${esc(p.code)} · stock ${parseInt(p.qty || 0)}${p.on_order ? ' (on order)' : ''} · EGP ${fmt(opSellPrice(p))}</div>
+    </div>`).join('') : '<div style="padding:10px;color:var(--muted);font-size:13px">No products match</div>';
+  box.style.display = 'block';
+}
+function opHide(i) { const box = document.getElementById('op-res-' + i); if (box) box.style.display = 'none'; }
+function opSellPrice(p) { const offer = parseFloat(p.offer_price || 0); return offer > 0 ? offer : parseFloat(p.price || 0); }
+// Picking a different product replaces the whole line (id, name, prices), so
+// the old product's id/name never stick to the new one.
+function opPick(i, code) {
+  const p = opFind(code);
+  if (!p) return;
+  const cur = oPRows[i] || {};
+  if (String(cur.code || '').toLowerCase() !== String(p.code).toLowerCase()) {
+    oPRows[i] = { id: p.id, code: p.code, name: p.name, qty: parseInt(cur.qty || 1) || 1,
+      sell_price: opSellPrice(p), buy_price: parseFloat(p.buy_price || 0) || '' };
+  }
+  renderPRows();
+}
+window.opSearch = opSearch; window.opHide = opHide; window.opPick = opPick;
+
 function addProdRow() { oPRows.push({ code: '', qty: 1, sell_price: '', buy_price: '' }); renderPRows(); }
 function removePRow(i) { oPRows.splice(i, 1); renderPRows(); }
 function updatePRow(i, f, v) { oPRows[i][f] = v; calcTotal(); }
@@ -2760,11 +2802,10 @@ function renderPRows() {
   document.getElementById('o-products').innerHTML = oPRows.map((r, i) => `
     <div class="op-row">
       <div class="op-row-grid">
-        <div class="form-group" style="margin:0"><label>Product</label>
-          <select onchange="updatePRow(${i},'code',this.value)">
-            <option value="">Select product</option>
-            ${cache.products.map(p => `<option value="${esc(p.code)}"${r.code === p.code ? ' selected' : ''}>${esc(p.name)} (${esc(p.code)})</option>`).join('')}
-          </select>
+        <div class="form-group" style="margin:0;position:relative"><label>Product</label>
+          <input type="search" autocomplete="off" placeholder="🔍 Search name or code…" value="${esc(opLabel(r))}"
+            onfocus="this.select();opSearch(${i},'')" oninput="opSearch(${i},this.value)" onblur="setTimeout(()=>opHide(${i}),150)">
+          <div class="op-results" id="op-res-${i}" style="display:none;position:absolute;z-index:50;top:100%;inset-inline:0;max-height:260px;overflow:auto;background:#fff;border:1px solid var(--line);box-shadow:0 6px 18px rgba(0,0,0,.15)"></div>
         </div>
         <div class="form-group" style="margin:0"><label>Qty</label>
           <input type="number" min="1" value="${r.qty}" inputmode="numeric" onchange="updatePRow(${i},'qty',this.value)">
@@ -2810,14 +2851,14 @@ async function saveOrder() {
   const oldReservedFor = (code) => {
     if (!oldOrder || !Array.isArray(oldOrder.products)) return 0;
     return oldOrder.products
-      .filter(p => p.code === code)
+      .filter(p => String(p.code || '').toLowerCase() === String(code || '').toLowerCase())
       .reduce((a, p) => a + parseInt(p.qty || 1), 0);
   };
   for (const r of oPRows) {
     if (!r.code) continue;
-    const prod = cache.products.find(p => p.code === r.code);
+    const prod = opFind(r.code);
     if (!prod) { showToast('Product not found: ' + r.code); return; }
-    const effectiveAvail = parseInt(prod.qty || 0) + oldReservedFor(r.code);
+    const effectiveAvail = parseInt(prod.qty || 0) + oldReservedFor(prod.code);
     if (parseInt(r.qty || 1) > effectiveAvail) {
       showToast(`Not enough stock for "${prod.name}" — available: ${effectiveAvail}`);
       return;
@@ -2827,30 +2868,32 @@ async function saveOrder() {
   const total = oPRows.reduce((a, r) => a + parseFloat(r.sell_price || 0) * parseInt(r.qty || 1), 0) + est_shipping;
   // Snapshot the buy price onto each line so the Elashry-owed figure stays fixed at the
   // price paid when the order was placed, even if the product's buy price changes later.
-  const lineItems = oPRows.map(r => ({
+  const lineItems = oPRows.filter(r => r.code).map(r => ({
     ...r,
+    id: opFind(r.code)?.id || r.id,
+    name: opFind(r.code)?.name || r.name,
+    price: parseFloat(r.sell_price || 0) || 0,
     // Use the buy price typed for this line; if left blank, fall back to the product's
     // current buy price. This is a per-order snapshot — editing it here does not change
     // the product's system-wide buy price.
     buy_price: (r.buy_price !== '' && r.buy_price != null)
       ? parseFloat(r.buy_price) || 0
-      : parseFloat(cache.products.find(p => p.code === r.code)?.buy_price || 0),
+      : parseFloat(opFind(r.code)?.buy_price || 0),
   }));
+  // Stock change per product = what the order held before − what it holds
+  // now. A product removed or swapped out goes back to inventory; a new one
+  // is taken out. Cancelled orders already gave their stock back.
+  const stockDelta = new Map();
+  const addDelta = (code, n) => {
+    const prod = opFind(code);
+    if (prod) stockDelta.set(prod.id, (stockDelta.get(prod.id) || 0) + n);
+  };
+  const oldForStock = (editingId && oldOrder && oldOrder.status !== 'Cancelled') ? (oldOrder.products || []) : [];
+  for (const op of oldForStock) addDelta(op.code, parseInt(op.qty || 1));
+  if (!(oldOrder && oldOrder.status === 'Cancelled')) for (const r of lineItems) addDelta(r.code, -parseInt(r.qty || 1));
   const id = document.getElementById('o-idx').value;
   try {
     if (id) {
-      const oldOrder = cache.orders.find(x => x.id === id);
-      if (oldOrder && oldOrder.products) {
-        for (const op of oldOrder.products) {
-          const prod = cache.products.find(p => p.code === op.code);
-          if (prod) {
-            const restored = parseInt(prod.qty || 0) + parseInt(op.qty || 1);
-            const pi = cache.products.findIndex(p => p.code === op.code);
-            cache.products[pi].qty = restored;
-            await dbUpdate('products', prod.id, { qty: restored });
-          }
-        }
-      }
       const upd = { customer_name, phone, second_phone, ship_code, est_shipping, products: lineItems, total };
       await dbUpdate('orders', id, upd);
       const i = cache.orders.findIndex(x => x.id === id);
@@ -2867,15 +2910,17 @@ async function saveOrder() {
       showToast('Order created ✓');
     }
 
-    for (const r of oPRows) {
-      if (!r.code) continue;
-      const pi = cache.products.findIndex(p => p.code === r.code);
-      if (pi >= 0) {
-        const newQty = Math.max(0, parseInt(cache.products[pi].qty || 0) - parseInt(r.qty || 1));
-        cache.products[pi].qty = newQty;
-        await dbUpdate('products', cache.products[pi].id, { qty: newQty });
-      }
+    const returned = [];
+    for (const [pid, delta] of stockDelta) {
+      if (!delta) continue;
+      const pi = cache.products.findIndex(p => p.id === pid);
+      if (pi < 0) continue;
+      const newQty = Math.max(0, parseInt(cache.products[pi].qty || 0) + delta);
+      cache.products[pi].qty = newQty;
+      await dbUpdate('products', pid, { qty: newQty });
+      if (delta > 0) returned.push(`${cache.products[pi].code} +${delta}`);
     }
+    if (returned.length) showToast('Back to inventory: ' + returned.join(', '));
     closeModal(); renderAllKeepScroll();
   } catch (e) { showToast('Error: ' + e.message); }
 }
