@@ -1,9 +1,14 @@
 // protech-final/public/api/promo.js
-// Promo-code check + redeem for the storefront. Free-shipping codes, single use.
+// Promo-code check + redeem for the storefront.
+// Code types (promo_codes.discount):
+//   'free_shipping'   -> shipping becomes 0
+//   'ship_off:<EGP>'  -> that many EGP off shipping (never below 0)
+// promo_codes.reusable=true -> code never burns (private/owner codes); the `used`
+// flag is ignored for these (they're stored used=true so older API builds reject them).
 // Enforced server-side (service_role) so a customer can't reuse a code by clearing
 // their browser or switching device.
 //
-//   POST { code, action:'validate' }            -> { valid, code, freeShipping, reason }
+//   POST { code, action:'validate' }            -> { valid, code, freeShipping, shippingOff, reason }
 //   POST { code, action:'redeem', orderId, phone } -> { ok, code }   (atomic single-use)
 //
 // Env: SUPABASE_URL, SUPABASE_KEY (service_role).
@@ -24,7 +29,13 @@ function normalizeCode(raw) {
   const digits = (s.match(/[0-9]/g) || []).join('');
   const hasPrefix = s.includes('بروتيك') || /protech/i.test(s);
   if (hasPrefix && digits.length === 4) return 'بروتيك-' + digits;
-  return s;
+  return s.toUpperCase();
+}
+
+// 'ship_off:100' -> 100; anything else -> 0 (free shipping).
+function parseShipOff(discount) {
+  const m = /^ship_off:(\d+)$/.exec(String(discount || ''));
+  return m ? Number(m[1]) : 0;
 }
 
 async function sbGet(path) {
@@ -51,6 +62,9 @@ export default async function handler(req, res) {
       // Only redeem against a real order (blocks burning codes without ordering).
       const ord = await sbGet(`orders?id=eq.${encodeURIComponent(orderId)}&select=id&limit=1`);
       if (!ord.length) return res.status(400).json({ ok: false, reason: 'Order not found' });
+      // Reusable codes never burn.
+      const meta = await sbGet(`promo_codes?code=eq.${encodeURIComponent(norm)}&select=reusable&limit=1`);
+      if (meta.length && meta[0].reusable) return res.status(200).json({ ok: true, code: norm, reusable: true });
       // Atomic single-use: the used=false filter means only the FIRST redeem wins.
       const r = await fetch(`${SUPABASE_URL}/rest/v1/promo_codes?code=eq.${encodeURIComponent(norm)}&used=eq.false`, {
         method: 'PATCH',
@@ -66,10 +80,12 @@ export default async function handler(req, res) {
     }
 
     // Default: validate (no state change).
-    const rows = await sbGet(`promo_codes?code=eq.${encodeURIComponent(norm)}&select=code,used&limit=1`);
+    const rows = await sbGet(`promo_codes?code=eq.${encodeURIComponent(norm)}&select=code,used,discount,reusable&limit=1`);
     if (!rows.length) return res.status(200).json({ valid: false, reason: 'كود غير صحيح' });
-    if (rows[0].used) return res.status(200).json({ valid: false, reason: 'هذا الكود مستخدم من قبل' });
-    return res.status(200).json({ valid: true, code: norm, freeShipping: true });
+    const row = rows[0];
+    if (row.used && !row.reusable) return res.status(200).json({ valid: false, reason: 'هذا الكود مستخدم من قبل' });
+    const shippingOff = parseShipOff(row.discount);
+    return res.status(200).json({ valid: true, code: row.code, freeShipping: shippingOff === 0, shippingOff });
   } catch (e) {
     console.error('promo error', e.message);
     return res.status(500).json({ valid: false, reason: 'خطأ في الخادم' });
