@@ -1800,6 +1800,7 @@ function renderInventory() {
           ${isOffer ? `<span class="badge b-danger" style="font-size:10px">🔥 EGP ${fmt(p.offer_price)}</span>` : ''}
           ${!p.is_published ? `<span class="badge b-gray" style="font-size:10px">Hidden</span>` : ''}
         </div>
+        ${shippingSpecsLine(p)}
       </td>
       <td><span class="badge ${parseInt(p.qty || 0) === 0 ? 'b-danger' : parseInt(p.qty || 0) <= 5 ? 'b-warning' : 'b-success'}">${p.qty}</span>${p.on_order ? ' <span class="badge b-orange" title="Orderable at 0 stock">On order</span>' : ''}</td>
       <td>EGP ${fmt(p.buy_price || 0)}</td>
@@ -1810,6 +1811,16 @@ function renderInventory() {
       </div></td>
     </tr>`;
   }).join('') : `<tr><td colspan="6"><div class="empty"><div class="empty-icon">📦</div>${q ? `لا توجد منتجات مطابقة لـ "${esc(q)}"` : 'No products yet. Add your first product.'}</div></td></tr>`;
+}
+
+// Per-unit shipping specs under the product name: weight · volume · carton.
+function shippingSpecsLine(p) {
+  const has = (v) => v !== null && v !== undefined && v !== '';
+  const parts = [];
+  if (has(p.unit_weight_kg)) parts.push(`⚖️ ${Number(p.unit_weight_kg).toLocaleString('en-US', { maximumFractionDigits: 3 })} kg`);
+  if (has(p.unit_volume_cm3)) parts.push(`📦 ${Number(p.unit_volume_cm3).toLocaleString('en-US', { maximumFractionDigits: 2 })} cm³`);
+  if (has(p.qty_per_carton)) parts.push(`${parseInt(p.qty_per_carton)} / carton`);
+  return `<div style="font-size:11px;color:var(--muted);margin-top:4px">${parts.length ? '📐 ' + parts.join(' · ') : '📐 No shipping specs'}</div>`;
 }
 
 // ── OFFER TOGGLE ──
@@ -1855,6 +1866,7 @@ function openAddProduct() {
     document.getElementById('p-offer-price').value = '';
     document.getElementById('p-offer-row').style.display = 'none';
     document.getElementById('p-is-published').checked = true;
+    ['p-unit-weight', 'p-unit-volume', 'p-qty-per-carton'].forEach(f => { const el = document.getElementById(f); if (el) el.value = ''; });
     document.querySelectorAll('.p-cat-cb').forEach(cb => cb.checked = false);
     renderVariantRows([]);
     renderBundleOfRows([]);
@@ -2034,6 +2046,9 @@ function editProduct(id) {
     document.getElementById('p-is-published').checked = p.is_published !== false;
     document.getElementById('p-free-shipping').checked = !!p.free_shipping;
     { const el = document.getElementById('p-on-order'); if (el) el.checked = !!p.on_order; }
+    { const el = document.getElementById('p-unit-weight'); if (el) el.value = p.unit_weight_kg ?? ''; }
+    { const el = document.getElementById('p-unit-volume'); if (el) el.value = p.unit_volume_cm3 ?? ''; }
+    { const el = document.getElementById('p-qty-per-carton'); if (el) el.value = p.qty_per_carton ?? ''; }
     document.getElementById('p-is-suggested').checked = !!p.is_suggested;
     const flashEl = document.getElementById('p-is-flash-offer');
     if (flashEl) flashEl.checked = !!p.is_flash_offer;
@@ -2084,9 +2099,19 @@ async function saveProduct() {
 
   if (!code || !name) { showToast('Please fill in code and name'); return; }
   if (is_offer && !offer_price) { showToast('Please enter the discounted price'); return; }
+  // Shipping specs — blank means "not set yet" (NULL), not zero.
+  const specNum = (elId) => {
+    const raw = String(document.getElementById(elId)?.value ?? '').trim();
+    return raw === '' ? null : Number(raw);
+  };
+  const unit_weight_kg = specNum('p-unit-weight');
+  const unit_volume_cm3 = specNum('p-unit-volume');
+  const qty_per_carton = specNum('p-qty-per-carton');
+  if ([unit_weight_kg, unit_volume_cm3].some(v => v !== null && (!isFinite(v) || v < 0))) { showToast('Weight and volume must be 0 or more'); return; }
+  if (qty_per_carton !== null && (!Number.isInteger(qty_per_carton) || qty_per_carton < 1)) { showToast('Qty per carton must be a whole number, 1 or more'); return; }
 
   const id = document.getElementById('p-idx').value;
-const payload = { code, elashry_code, name, qty, price, buy_price, brand, description, is_offer, offer_price, is_published, free_shipping, on_order, is_suggested, is_flash_offer, bundle_with, accessories_with, bundle_of, categories, category, variants, images: currentProductImages };
+const payload = { code, elashry_code, name, qty, price, buy_price, brand, description, is_offer, offer_price, is_published, free_shipping, on_order, is_suggested, is_flash_offer, bundle_with, accessories_with, bundle_of, categories, category, variants, images: currentProductImages, unit_weight_kg, unit_volume_cm3, qty_per_carton };
   // If the DB is missing a new column PostgREST replies with "Could not find
   // the 'X' column …". Retry with each unknown column stripped so pre-migration
   // installs still save the rest, with a clear toast telling the admin how
@@ -2118,7 +2143,8 @@ const payload = { code, elashry_code, name, qty, price, buy_price, brand, descri
     ({ result, missing } = await stripUnknownColumns(payload));
     if (missing.length) {
       const alters = missing.map(c => {
-        const t = (c === 'is_flash_offer' || c === 'is_suggested' || c === 'is_offer' || c === 'free_shipping' || c === 'on_order' || c === 'is_published') ? 'boolean' : 'jsonb';
+        const t = (c === 'is_flash_offer' || c === 'is_suggested' || c === 'is_offer' || c === 'free_shipping' || c === 'on_order' || c === 'is_published') ? 'boolean'
+          : c === 'qty_per_carton' ? 'integer' : (c === 'unit_weight_kg' || c === 'unit_volume_cm3') ? 'numeric' : 'jsonb';
         return `ALTER TABLE products ADD COLUMN ${c} ${t};`;
       }).join(' ');
       showToast('Saved (run: ' + alters + ')');
