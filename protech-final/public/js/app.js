@@ -3112,7 +3112,9 @@ async function undoWarehouse(id) {
 async function syncMetaAds() {
   showToast('Syncing Meta ad spend…');
   try {
-    const res = await fetch('/api/meta-sync', {
+    // Re-read the last 120 days each time, so any day the nightly job missed
+    // is filled in (Meta also revises spend for a few days after).
+    const res = await fetch('/api/meta-sync?days=120', {
       method: 'POST',
       headers: (typeof accessToken !== 'undefined' && accessToken)
         ? { Authorization: `Bearer ${accessToken}` } : {},
