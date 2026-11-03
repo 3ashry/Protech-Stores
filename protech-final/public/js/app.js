@@ -4481,6 +4481,11 @@ function finComputeMonth(y, m) {
   const inM = (o) => finSameMonth(finMonthOfOrderFinancial(o), y, m);
   const delivered = orders.filter(o => o.status === 'Delivered' && inM(o));
   const returned  = orders.filter(o => o.status === 'Returned'  && inM(o));
+  // Where every order MADE this month stands right now (counts only — the
+  // P&L below still uses delivered + returned).
+  const madeInM = orders.filter(o => o.status !== 'Cancelled' && inM(o));
+  const processingCount = madeInM.filter(o => o.status === 'Processing').length;
+  const withBostaCount = madeInM.length - delivered.length - returned.length - processingCount;
 
   let collected         = delivered.reduce((a, o) => a + parseFloat(o.total || 0), 0);
   let actualShipping    = delivered.reduce((a, o) => a + finShipOf(o), 0);
@@ -4565,6 +4570,7 @@ function finComputeMonth(y, m) {
   const denom = delivered.length + returned.length;
   return {
     y, m, delivered, returned, completedOrders: delivered.length,
+    ordersMade: madeInM.length, processingCount, withBostaCount,
     collected, actualShipping, shippingTotal, buyingCost, profitFromOrders,
     totalBought, returnsCost, deliveredBuy, returnedBuy, overridden: !!ov,
     refusedReturned: returned.length, bostaFeesReturns, returnedAfterDelivery, returnsTotal,
@@ -4925,7 +4931,17 @@ function finRenderMonths(model) {
       ...(mo.prepSalary ? [['Order-prep salary (10 × shipped)', finNeg(mo.prepSalary), 'color:#dc2626']] : []),
       ...other,
     ];
+    const pill = (label, n, bg, fg) => `<div style="flex:1;min-width:110px;background:${bg};border-radius:8px;padding:8px 10px"><div style="font-size:11px;color:${fg};font-weight:700">${label}</div><div style="font-size:18px;font-weight:900;color:${fg}">${n}</div></div>`;
     return `
+      <div style="padding:12px 4px 0;max-width:560px">
+        <div style="font-size:11px;letter-spacing:.05em;color:var(--muted);font-weight:700;text-transform:uppercase;margin-bottom:6px">Orders made this month — ${mo.ordersMade}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">
+          ${pill('✅ Delivered', mo.completedOrders, '#dcfce7', '#15803d')}
+          ${pill('↩️ Returned', mo.refusedReturned, '#fee2e2', '#b91c1c')}
+          ${pill('⏳ Still processing', mo.processingCount, '#fef3c7', '#92400e')}
+          ${pill('🚚 With Bosta', mo.withBostaCount, '#e0f2fe', '#0369a1')}
+        </div>
+      </div>
       <div style="padding:14px 4px 4px;max-width:560px">
         ${colList(pnl, finSigned(mo.result).replace('EGP ', '') + ' EGP', 'Profit')}
         <div style="margin-top:8px;font-size:11.5px;color:var(--muted);line-height:1.6">
@@ -4948,7 +4964,8 @@ function finRenderMonths(model) {
       <summary style="cursor:pointer;list-style:none;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:14px 4px">
         <span style="font-weight:800;min-width:150px">${FIN_MO_EN[mo.m - 1]} ${mo.y}</span>
         <span style="font-weight:800;color:${mo.result >= 0 ? '#16a34a' : '#dc2626'};min-width:90px">${finSigned(mo.result).replace('EGP ', '')}</span>
-        <span style="color:var(--muted);font-size:12.5px;flex:1;min-width:200px">Opening ${finFm(mo.opening)} → Closing <b style="color:#111">${finFm(mo.closing)}</b></span>
+        <span style="color:var(--muted);font-size:12.5px;flex:1;min-width:200px">Opening ${finFm(mo.opening)} → Closing <b style="color:#111">${finFm(mo.closing)}</b>
+          <span style="display:block;margin-top:2px">✅ ${mo.completedOrders} delivered · ↩️ ${mo.refusedReturned} returned · ⏳ ${mo.processingCount} processing${mo.withBostaCount ? ` · 🚚 ${mo.withBostaCount} with Bosta` : ''}</span></span>
         ${statusBadge(mo)}
       </summary>
       ${panel(mo)}
@@ -6976,15 +6993,15 @@ function finReportRows() {
   ]});
 
   // ── Months P&L ──
-  const moHead = ['Month', 'Completed', 'Returns', 'Collected', 'Shipping (del+ret)', 'Buying (gross)',
+  const moHead = ['Month', 'Orders made', 'Completed', 'Returns', 'Still processing', 'With Bosta', 'Collected', 'Shipping (del+ret)', 'Buying (gross)',
     'Returns credit', 'Paid ads', 'Media buyer', 'Order-prep salary', 'Other exp', 'Profit'];
   sheets.push({ name: 'Months', aoa: [
     ['Monthly P&L — delivered + returned orders bucketed by the date the order was MADE'], [],
     moHead,
-    ...months.map(mo => [moName(mo), mo.completedOrders, mo.refusedReturned,
+    ...months.map(mo => [moName(mo), mo.ordersMade, mo.completedOrders, mo.refusedReturned, mo.processingCount, mo.withBostaCount,
       r2(mo.collected), r2(mo.shippingTotal), r2(mo.totalBought), r2(mo.returnsCost),
       r2(mo.paidAds), r2(mo.mediaBuyer), r2(mo.prepSalary || 0), r2(-mo.otherTotal), r2(mo.result)]),
-    ['TOTAL', '', '', r2(T.collected), r2(T.shipping), r2(T.buying), r2(T.returnsCr),
+    ['TOTAL', '', '', '', '', '', r2(T.collected), r2(T.shipping), r2(T.buying), r2(T.returnsCr),
       r2(T.paidAds), r2(T.mediaBuyer), r2(T.prep), r2(T.other), r2(T.result)],
   ]});
 
