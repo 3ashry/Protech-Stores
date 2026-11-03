@@ -442,7 +442,7 @@ export default async function handler(req, res) {
     //  prevents re-sending. Phone-lock (WA_ONLY_PHONE) still respected.
     // ─────────────────────────────────────────────────────────────────
     const fbParts = [
-      'select=id,code,phone,customer_name',
+      'select=id,code,phone,customer_name,settled_at',
       'status=eq.Delivered',
       'wa_feedback_sent_at=is.null',
       'phone=not.is.null',
@@ -451,7 +451,12 @@ export default async function handler(req, res) {
     ];
     if (ONLY_PHONE) fbParts.push(`phone=eq.${encodeURIComponent(ONLY_PHONE)}`);
     fbParts.push('order=delivered_at.desc', 'limit=100');
-    const fbOrders = await sbGet(`orders?${fbParts.join('&')}`);
+    // A cash cycle Bosta closed before the window means the parcel was
+    // delivered long ago, even if our delivered_at was stamped late (the
+    // status sync can catch up on old orders) — don't thank those now.
+    const floorMs = Date.parse(floor);
+    const fbOrders = (await sbGet(`orders?${fbParts.join('&')}`))
+      .filter(o => !o.settled_at || Date.parse(o.settled_at) >= floorMs);
     const fbSent = [], fbFailed = [];
     for (const o of fbOrders) {
       const r = await sendFeedbackTemplate(o);

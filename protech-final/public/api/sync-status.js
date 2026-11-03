@@ -1239,6 +1239,14 @@ export default async function handler(req, res) {
         }
       }
 
+      // No Bosta delivery timestamp means delivered_at fell back to "now".
+      // When the cash cycle had already closed, the parcel was delivered
+      // before that date — use it, so a late catch-up doesn't move the sale
+      // into this month or trigger a fresh "thanks for your order" message.
+      if (patch.delivered_at && patch.settled_at) {
+        const del = new Date(patch.delivered_at), set = new Date(patch.settled_at);
+        if (!isNaN(set.getTime()) && set < del) patch.delivered_at = set.toISOString();
+      }
       if (trace) trace.steps.push({ step: 'patch', currentStatus: o.status, finalMapped: mapped, patch, warehouse_confirmed: o.warehouse_confirmed });
       if (Object.keys(patch).length) {
         const r = await sbPatch(o.id, patch);
