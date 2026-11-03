@@ -252,12 +252,32 @@ async function sbGet(path) {
   if (!r.ok) { console.error('sbGet failed', path, JSON.stringify(data)); throw new Error(data?.message || 'DB read failed'); }
   return Array.isArray(data) ? data : [];
 }
+// Timestamp columns must be ISO strings. Bosta sometimes gives dates as
+// JS-style text ("Sat Oct 24 2026 22:40:00 GMT+0000 (Coordinated Universal
+// Time)") that Postgres rejects — and one bad field made the WHOLE update
+// fail, so orders stayed "In Transit" though Bosta said Delivered.
+const TS_FIELDS = ['delivered_at', 'settled_at'];
+function normalizeTimestamps(body) {
+  const out = { ...body };
+  for (const k of TS_FIELDS) {
+    if (!(k in out) || out[k] == null) continue;
+    const t = new Date(out[k]);
+    if (isNaN(t.getTime())) delete out[k];
+    else out[k] = t.toISOString();
+  }
+  return out;
+}
 async function sbPatch(id, body) {
-  return fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(id)}`, {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/orders?id=eq.${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(normalizeTimestamps(body)),
   });
+  if (!r.ok) {
+    const txt = await r.clone().text().catch(() => '');
+    console.warn('sbPatch failed', id, r.status, txt.slice(0, 300));
+  }
+  return r;
 }
 
 // Audit every Delivered/Returned order and flag rows where our stored
@@ -1458,7 +1478,7 @@ export default async function handler(req, res) {
       tgSent.skipped = true;
     }
 
-    const result = { ok: true, buildMarker: 'v12-skip-closed-orders', bostaDeliveries: deliveries.length, ordersChecked: mainProcessed, ordersQueued: mainQueue.length, mainBudgetAborted: mainBudgetAbort, feeDetailCalls, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8), detailFetchStats, detailFetchCap: DETAIL_FETCH_CAP, backfill: { checked: backfillCandidates.length, updated: backfillChanges.length, changes: backfillChanges.slice(0, 20), errors: backfillErrors.slice(0, 20), budgetAborted: backfillBudgetAbort }, shipCodeBackfill: { checked: shipCodeCandidates.length, updated: shipCodeChanges.length, changes: shipCodeChanges.slice(0, 20), budgetAborted: shipCodeBudgetAbort }, telegram: tgSent, onlyTrace, elapsedMs: Date.now() - startMs };
+    const result = { ok: true, buildMarker: 'v13-iso-timestamps', bostaDeliveries: deliveries.length, ordersChecked: mainProcessed, ordersQueued: mainQueue.length, mainBudgetAborted: mainBudgetAbort, feeDetailCalls, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8), detailFetchStats, detailFetchCap: DETAIL_FETCH_CAP, backfill: { checked: backfillCandidates.length, updated: backfillChanges.length, changes: backfillChanges.slice(0, 20), errors: backfillErrors.slice(0, 20), budgetAborted: backfillBudgetAbort }, shipCodeBackfill: { checked: shipCodeCandidates.length, updated: shipCodeChanges.length, changes: shipCodeChanges.slice(0, 20), budgetAborted: shipCodeBudgetAbort }, telegram: tgSent, onlyTrace, elapsedMs: Date.now() - startMs };
     console.log('sync-status', JSON.stringify(result));
     // ?only=<code>: log that order's trace on its own line (the full result
     // line is truncated in the log viewer).
