@@ -1079,7 +1079,26 @@ export default async function handler(req, res) {
     // what mapState returned at each step, what patch was applied, etc.)
     const onlyCode = (req.query?.only || '').toString().trim();
     let onlyTrace = null;
-    for (const o of (orders || [])) {
+    // Closed orders have nothing left to sync (Cancelled; Delivered with the
+    // cash cycle closed; Returned and back in the warehouse). Skipping them,
+    // and handling still-moving orders FIRST, keeps a run inside Vercel's 300s
+    // limit — before, every run walked ~500 orders and asked Bosta about each,
+    // timed out, and never reached many in-transit orders.
+    const isClosedOrder = (o) => o.status === 'Cancelled'
+      || (o.status === 'Delivered' && o.cash_cycle_closed === true)
+      || (o.status === 'Returned' && !!o.warehouse_confirmed);
+    const isFinalStatus = (st) => st === 'Delivered' || st === 'Returned';
+    const mainQueue = (orders || [])
+      .filter(o => !isClosedOrder(o) || (onlyCode && o.code === onlyCode))
+      .sort((a, b) => (isFinalStatus(a.status) ? 1 : 0) - (isFinalStatus(b.status) ? 1 : 0));
+    // Detail calls made only to read the fee / cash cycle of a final order.
+    const FEE_DETAIL_CAP = 60;
+    let feeDetailCalls = 0;
+    let mainBudgetAbort = false;
+    let mainProcessed = 0;
+    for (const o of mainQueue) {
+      if (outOfBudget()) { mainBudgetAbort = true; break; }
+      mainProcessed++;
       const trace = (onlyCode && o.code === onlyCode) ? (onlyTrace = { code: o.code, steps: [] }) : null;
       let d = byRef[o.id] || (o.ship_code && byTrack[o.ship_code]);
       if (trace) trace.steps.push({ step: 'match', matchedByRef: !!byRef[o.id], matchedByTrack: !!(o.ship_code && byTrack[o.ship_code]), hasD: !!d });
@@ -1160,14 +1179,24 @@ export default async function handler(req, res) {
         // stored (older orders may pre-date the bosta_id column being populated).
         const bostaId = o.bosta_id || d._id;
         if (!o.bosta_id && d._id) patch.bosta_id = d._id;
-        const feeInfo = await fetchDeliveryFee(bostaId, d, feeLog);
+        // The cash-cycle state only exists on Bosta's detail endpoint, so ask it
+        // (capped per run). Past the cap, take the fee from the search hit and
+        // leave the cash-cycle flag as it is (null = unknown) — the old code
+        // reported "not closed" there and kept flipping closed orders back.
+        let feeInfo;
+        if (feeDetailCalls < FEE_DETAIL_CAP && !outOfBudget()) {
+          feeDetailCalls++;
+          feeInfo = await fetchDeliveryFee(bostaId, null, feeLog);
+        } else {
+          feeInfo = { fee: pickFee(d), cashCycleClosed: null, cashCycleDate: null };
+        }
         let cost = feeInfo.fee;
         let cashCycleClosed = feeInfo.cashCycleClosed;
         feeSrc = 'bosta';
         if (!(typeof cost === 'number' && cost > 0)) {
           cost = calcActualShipping(o.city, o.total);
           feeSrc = 'formula';
-          cashCycleClosed = false;
+          if (cashCycleClosed !== null) cashCycleClosed = false;
         }
         const currentStored = parseFloat(o.actual_shipping || 0);
         // Bosta value: always write when it differs. Formula value: only write when we have none.
@@ -1178,7 +1207,7 @@ export default async function handler(req, res) {
         else feeSrc = null;
         // Always keep the cash-cycle flag fresh so the dashboard badge is accurate,
         // even on runs where the fee itself didn't change.
-        if (o.cash_cycle_closed !== cashCycleClosed) patch.cash_cycle_closed = cashCycleClosed;
+        if (cashCycleClosed !== null && o.cash_cycle_closed !== cashCycleClosed) patch.cash_cycle_closed = cashCycleClosed;
         // Stamp the settlement date the first time we OBSERVE the cash cycle
         // close (false → true) and the order has none yet. The financials
         // bucket each month by this date, matching how Bosta reports. Prefer
@@ -1429,7 +1458,7 @@ export default async function handler(req, res) {
       tgSent.skipped = true;
     }
 
-    const result = { ok: true, buildMarker: 'v11-main-loop-budget', bostaDeliveries: deliveries.length, ordersChecked: (orders || []).length, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8), detailFetchStats, detailFetchCap: DETAIL_FETCH_CAP, backfill: { checked: backfillCandidates.length, updated: backfillChanges.length, changes: backfillChanges.slice(0, 20), errors: backfillErrors.slice(0, 20), budgetAborted: backfillBudgetAbort }, shipCodeBackfill: { checked: shipCodeCandidates.length, updated: shipCodeChanges.length, changes: shipCodeChanges.slice(0, 20), budgetAborted: shipCodeBudgetAbort }, telegram: tgSent, onlyTrace, elapsedMs: Date.now() - startMs };
+    const result = { ok: true, buildMarker: 'v12-skip-closed-orders', bostaDeliveries: deliveries.length, ordersChecked: mainProcessed, ordersQueued: mainQueue.length, mainBudgetAborted: mainBudgetAbort, feeDetailCalls, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8), detailFetchStats, detailFetchCap: DETAIL_FETCH_CAP, backfill: { checked: backfillCandidates.length, updated: backfillChanges.length, changes: backfillChanges.slice(0, 20), errors: backfillErrors.slice(0, 20), budgetAborted: backfillBudgetAbort }, shipCodeBackfill: { checked: shipCodeCandidates.length, updated: shipCodeChanges.length, changes: shipCodeChanges.slice(0, 20), budgetAborted: shipCodeBudgetAbort }, telegram: tgSent, onlyTrace, elapsedMs: Date.now() - startMs };
     console.log('sync-status', JSON.stringify(result));
     return res.status(200).json(result);
   } catch (e) {
