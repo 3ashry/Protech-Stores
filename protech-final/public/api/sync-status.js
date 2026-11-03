@@ -1460,6 +1460,16 @@ export default async function handler(req, res) {
 
     const result = { ok: true, buildMarker: 'v12-skip-closed-orders', bostaDeliveries: deliveries.length, ordersChecked: mainProcessed, ordersQueued: mainQueue.length, mainBudgetAborted: mainBudgetAbort, feeDetailCalls, updated: changes.length, changes, unknownStates: [...unknownStates], feeSamples: feeLog.slice(0, 8), detailFetchStats, detailFetchCap: DETAIL_FETCH_CAP, backfill: { checked: backfillCandidates.length, updated: backfillChanges.length, changes: backfillChanges.slice(0, 20), errors: backfillErrors.slice(0, 20), budgetAborted: backfillBudgetAbort }, shipCodeBackfill: { checked: shipCodeCandidates.length, updated: shipCodeChanges.length, changes: shipCodeChanges.slice(0, 20), budgetAborted: shipCodeBudgetAbort }, telegram: tgSent, onlyTrace, elapsedMs: Date.now() - startMs };
     console.log('sync-status', JSON.stringify(result));
+    // ?only=<code>: log that order's trace on its own line (the full result
+    // line is truncated in the log viewer).
+    if (onlyCode) console.log('sync-status trace', JSON.stringify({
+      onlyTrace,
+      inBackfillById: backfillCandidates.some(o => o.code === onlyCode),
+      inBackfillByTracking: shipCodeCandidates.some(o => o.code === onlyCode),
+      backfillChange: backfillChanges.find(c => c.code === onlyCode) || null,
+      shipCodeChange: shipCodeChanges.find(c => c.code === onlyCode) || null,
+      backfillError: backfillErrors.find(c => c.code === onlyCode) || null,
+    }));
     return res.status(200).json(result);
   } catch (e) {
     console.error('sync-status error', e.message);
