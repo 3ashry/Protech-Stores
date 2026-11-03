@@ -107,9 +107,12 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Supabase not configured.' });
   }
 
-  // Window: last SYNC_DAYS days through today (Cairo). ?since & ?until override.
+  // Window: last SYNC_DAYS days through today (Cairo). ?days=N widens it
+  // (the dashboard button asks for 120 so missed days get filled in);
+  // ?since & ?until override.
   const today = new Date();
-  const start = new Date(today.getTime() - (SYNC_DAYS - 1) * 86400000);
+  const days = Math.min(400, Math.max(1, parseInt(req.query && req.query.days, 10) || SYNC_DAYS));
+  const start = new Date(today.getTime() - (days - 1) * 86400000);
   const since = (req.query && req.query.since) || cairoDate(start);
   const until = (req.query && req.query.until) || cairoDate(today);
 
