@@ -39,6 +39,34 @@ function showToast(msg) {
   t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 2800);
 }
+// Public tracking page for an order's parcel (Aramex now, Bosta for old orders).
+function courierTrackUrl(o) {
+  if (o && o.courier === 'aramex' && o.ship_code) return 'https://www.aramex.com/eg/ar/track/results?ShipmentNumber=' + encodeURIComponent(o.ship_code);
+  return 'https://bosta.co/en-eg/tracking-shipments';
+}
+
+// Create (or retry) the Aramex shipment for an order that has none yet.
+async function sendToAramex(id) {
+  const o = (cache.orders || []).find(x => x.id === id);
+  if (!o) return;
+  if (o.ship_code) { showToast('Already has a tracking number: ' + o.ship_code); return; }
+  if (!confirm(`Create the Aramex shipment for ${o.code}?\nCOD ${fmt(o.total)} EGP · ${o.city || ''}`)) return;
+  showToast('Sending to Aramex…');
+  try {
+    const r = await fetch('/api/bosta', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId: id, retry: true }) });
+    const d = await r.json().catch(() => ({}));
+    const fresh = await dbFetch('orders', { filter: `id=eq.${encodeURIComponent(id)}` }).catch(() => null);
+    if (Array.isArray(fresh) && fresh[0]) {
+      const i = cache.orders.findIndex(x => x.id === id);
+      if (i >= 0) cache.orders[i] = { ...cache.orders[i], ...fresh[0] };
+    }
+    renderAllKeepScroll();
+    if (d.success) showToast('✅ Aramex shipment created: ' + (d.trackingNumber || ''));
+    else showToast('⚠️ Aramex: ' + (d.aramexError || d.error || 'failed'));
+  } catch (e) { showToast('Error: ' + e.message); }
+}
+window.sendToAramex = sendToAramex;
+
 function updateSendShipBtn(orderId) {
   const shipCode = document.getElementById('o-shipcode')?.value?.trim();
   const existing = document.getElementById('send-ship-btn');
@@ -70,7 +98,7 @@ ${products}
 فتح الشحنة قبل الاستلام: ${o.allow_open ? 'متاح' : 'غير متاح'}
 
 *كود الشحن: ${shipCode}*
-تتبع شحنتك: https://bosta.co/en-eg/tracking-shipments
+تتبع شحنتك: ${courierTrackUrl(o)}
 
 بروتيك — الشغل عليك والعدة علينا
 protechstores.com
@@ -2306,7 +2334,7 @@ function renderOrders() {
     : '';
   document.getElementById('orders-tbody').innerHTML = visibleOrders.length ? visibleOrders.map(o => `
     <tr${o.status === 'Awaiting Action' ? ' style="background:#fff4f4"' : ''}>
-      <td><span class="badge b-orange">${esc(o.code)}</span> ${o.status === 'Cancelled' && o.cancel_stage === 'before_prep' ? '<span class="badge b-gray" title="Cancelled before the prep center prepared it">❌ Failed before preparing</span> ' : ''}${o.status === 'Cancelled' && o.cancel_stage === 'after_prep' && !isPostPrepCancelled(o) ? '<span class="badge b-danger" title="Cancelled after it was prepared — prep center acknowledged">🚫 Cancelled after preparing</span> ' : ''}${isPostPrepCancelled(o) ? '<span class="badge b-danger" style="animation:ppcPulse 1s infinite" title="Cancelled after it was sent to prep — DO NOT SHIP">🚫 CANCELLED — DO NOT SHIP</span> ' : ''}${orderProgressBadge(o)}${o.allow_open ? ' <span class="badge b-warning" title="Wants to open the package before paying">📦</span>' : ''}${o.status === 'Returned' && !o.warehouse_confirmed ? ' <span class="badge b-danger" title="Returned — not back in the warehouse yet">↩️ Not in warehouse</span>' : ''}${o.picker_prepared_at ? ' <span class="badge b-success" title="Prepared by the picker">✅ Ready</span>' : ''}${o.revised_at ? ' <span class="badge b-success" title="Reviewed">📝 Reviewed</span>' : ''}${o.pending_elashry_at ? ' <span class="badge b-warning" title="In the Elashry returns list">📦 Elashry list</span>' : ''}${o.needs_call ? ` <span class="badge b-danger" title="${esc(o.needs_call_reason || 'Needs a call')}">📞 Needs call</span>` : ''}${cashCycleBadge(o)}</td>
+      <td><span class="badge b-orange">${esc(o.code)}</span> ${o.status === 'Cancelled' && o.cancel_stage === 'before_prep' ? '<span class="badge b-gray" title="Cancelled before the prep center prepared it">❌ Failed before preparing</span> ' : ''}${o.status === 'Cancelled' && o.cancel_stage === 'after_prep' && !isPostPrepCancelled(o) ? '<span class="badge b-danger" title="Cancelled after it was prepared — prep center acknowledged">🚫 Cancelled after preparing</span> ' : ''}${isPostPrepCancelled(o) ? '<span class="badge b-danger" style="animation:ppcPulse 1s infinite" title="Cancelled after it was sent to prep — DO NOT SHIP">🚫 CANCELLED — DO NOT SHIP</span> ' : ''}${orderProgressBadge(o)}${!o.ship_code && o.ship_error && o.status === 'Processing' ? ` <span class="badge b-danger" title="${esc(o.ship_error)}">⚠️ Not sent to Aramex</span>` : ''}${o.allow_open ? ' <span class="badge b-warning" title="Wants to open the package before paying">📦</span>' : ''}${o.status === 'Returned' && !o.warehouse_confirmed ? ' <span class="badge b-danger" title="Returned — not back in the warehouse yet">↩️ Not in warehouse</span>' : ''}${o.picker_prepared_at ? ' <span class="badge b-success" title="Prepared by the picker">✅ Ready</span>' : ''}${o.revised_at ? ' <span class="badge b-success" title="Reviewed">📝 Reviewed</span>' : ''}${o.pending_elashry_at ? ' <span class="badge b-warning" title="In the Elashry returns list">📦 Elashry list</span>' : ''}${o.needs_call ? ` <span class="badge b-danger" title="${esc(o.needs_call_reason || 'Needs a call')}">📞 Needs call</span>` : ''}${cashCycleBadge(o)}</td>
       <td><strong>${esc(o.customer_name)}</strong></td>
       <td>${phoneCell(o)}</td>
       <td>EGP ${fmt(o.total)}</td>
@@ -2316,7 +2344,7 @@ function renderOrders() {
           o.customer_confirmed === true ? `<div style="font-size:11px;color:#16a34a;font-weight:700;margin-top:3px">✅ ${o.confirm_outcome === 'confirmed_call' ? 'Confirmed (call)' : 'Confirmed'}</div>`
           : o.customer_confirmed === false ? `<div style="font-size:11px;color:#dc2626;font-weight:700;margin-top:3px">❌ Cancelled</div>`
           : o.confirm_outcome === 'no_answer' ? `<div style="font-size:11px;color:#b45309;font-weight:700;margin-top:3px">⏳ No answer</div>`
-          : ''}${o.allow_open ? `<div style="font-size:11px;color:#F26A21;font-weight:700;margin-top:3px">📦 Open package</div>` : ''}</td>
+          : ''}${o.allow_open ? `<div style="font-size:11px;color:#F26A21;font-weight:700;margin-top:3px">📦 Open package</div>` : ''}${o.courier === 'aramex' && o.ship_code ? `<div style="font-size:11px;color:var(--muted);margin-top:3px" title="${esc(o.courier_status || '')}">🚚 <a href="${courierTrackUrl(o)}" target="_blank" rel="noopener">${esc(o.ship_code)}</a>${o.courier_status ? ' · ' + esc(String(o.courier_status).slice(0, 40)) : ''}</div>` : ''}</td>
       <td><div class="actions">
         <button class="btn btn-ghost btn-xs" onclick="viewOrder('${o.id}')">View</button>
         <button class="btn btn-dark btn-xs" onclick="editOrder('${o.id}')">Edit</button>
@@ -2325,6 +2353,8 @@ function renderOrders() {
              <button class="btn btn-danger btn-xs" onclick="ackPostPrepCancel('${o.id}')" title="Prep staff: acknowledge you have seen this and will NOT ship it">✓ Got it — won't ship</button>`
           : `<button class="btn ${o.sent_to_picker_at ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="toggleSentToPicker('${o.id}', ${!!o.sent_to_picker_at})" title="${o.sent_to_picker_at ? 'Undo send to prep' : 'Send to prep'}">${o.sent_to_picker_at ? '📤 Sent to prep' : '📦 Send to prep'}</button>
         <button class="btn ${o.revised_at ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="toggleRevised('${o.id}', ${!!o.revised_at})" title="${o.revised_at ? 'Undo review' : 'Mark as reviewed — order checked and verified'}">${o.revised_at ? '✓ Reviewed' : '📝 Review'}</button>`}
+        ${o.status === 'Processing' && !o.ship_code ? `<button class="btn ${o.ship_error ? 'btn-danger' : 'btn-ghost'} btn-xs" onclick="sendToAramex('${o.id}')" title="${esc(o.ship_error || 'Create the Aramex shipment')}">🚚 Send to Aramex</button>` : ''}
+        ${o.courier === 'aramex' && o.shipping_label_url ? `<a class="btn btn-ghost btn-xs" href="${esc(o.shipping_label_url)}" target="_blank" rel="noopener">🖨️ Label</a>` : ''}
         ${o.status === 'Processing' && o.customer_confirmed !== true ? `<button class="btn ${o.needs_call ? 'btn-danger' : 'btn-ghost'} btn-xs" onclick="markConfirmedByCall('${o.id}')" title="Confirm the order over a phone call">📞 Confirm by call</button>` : ''}
         ${o.status === 'Returned' ? `<button class="btn ${o.pending_elashry_at ? 'btn-primary' : 'btn-ghost'} btn-xs" onclick="toggleElashryReturn('${o.id}', ${!!o.pending_elashry_at})" title="${o.pending_elashry_at ? 'Remove from the Elashry list' : 'Add this order to the Elashry returns list'}">${o.pending_elashry_at ? '✓ In Elashry list' : '📦 Send to Elashry list'}</button>` : ''}
         <button class="btn btn-danger btn-xs" onclick="delOrder('${o.id}')">Delete</button>
@@ -3245,7 +3275,7 @@ ${confirmProducts}
 فتح الشحنة قبل الاستلام: ${o.allow_open ? 'متاح' : 'غير متاح'}
 
 *كود الشحن: ${o.ship_code || 'سيتم إرساله قريباً'}*
-تتبع شحنتك: https://bosta.co/en-eg/tracking-shipments
+تتبع شحنتك: ${courierTrackUrl(o)}
 
 بروتيك — الشغل عليك والعدة علينا
 protechstores.com
@@ -3274,7 +3304,10 @@ protechstores.com
       <div><div class="detail-label">Second Phone</div>${esc(o.second_phone) || '—'}</div>
       <div><div class="detail-label">City</div><strong>${esc(o.city) || '—'}</strong></div>
       <div><div class="detail-label">Address</div>${esc(o.address) || '—'}</div>
-      <div><div class="detail-label">Shipping Code</div>${esc(o.ship_code) || '—'}</div>
+      <div><div class="detail-label">Shipping Code</div>${o.ship_code ? `<a href="${courierTrackUrl(o)}" target="_blank" rel="noopener">${esc(o.ship_code)}</a>${o.courier ? ' (' + esc(o.courier) + ')' : ''}` : (o.ship_error ? `<span style="color:#dc2626">Not sent: ${esc(o.ship_error)}</span>` : '—')}</div>
+      ${o.courier === 'aramex' ? `<div><div class="detail-label">Aramex status</div>${esc(o.courier_status || '—')}${o.courier_status_at ? `<div style="font-size:11px;color:var(--muted)">${esc(String(o.courier_status_at).slice(0, 16).replace('T', ' '))}</div>` : ''}</div>
+      <div><div class="detail-label">Label</div>${o.shipping_label_url ? `<a href="${esc(o.shipping_label_url)}" target="_blank" rel="noopener">🖨️ Print label</a>` : '—'}</div>
+      <div><div class="detail-label">Aramex charge (estimated)</div>EGP ${fmt(o.calc_shipping || 0)}</div>` : ''}
       <div><div class="detail-label">Est. Shipping</div>EGP ${fmt(o.est_shipping || 0)}</div>
       <div style="grid-column:1/-1"><div class="detail-label">Open Package</div>
         <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-weight:700">

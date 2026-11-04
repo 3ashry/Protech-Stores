@@ -275,9 +275,13 @@ function orderCard(o, tab) {
   // data-oid + data-tab lets the diff-renderer identify cards across
   // refreshes so unchanged rows stay in the DOM (and the ops manager's
   // scroll position stays put).
-  const bostaBtn = o.ship_code
-    ? `<a class="wa" href="${bostaAwbLink(o.ship_code)}" target="_blank" rel="noopener">🚚 فتح بوسطة (AWB)</a>`
-    : `<span class="wa" style="opacity:.5;cursor:not-allowed" title="لا يوجد كود شحن مسجل بعد">🚚 لا يوجد كود شحن</span>`;
+  // Aramex: print the shipping label (bolisa). Older Bosta orders keep the
+  // Bosta AWB link.
+  const bostaBtn = !o.ship_code
+    ? `<span class="wa" style="opacity:.5;cursor:not-allowed" title="لا يوجد كود شحن مسجل بعد">🚚 لا يوجد كود شحن</span>`
+    : o.courier === 'aramex'
+      ? `<a class="wa" href="${esc(o.label_url || ('https://www.aramex.com/eg/ar/track/results?ShipmentNumber=' + encodeURIComponent(o.ship_code)))}" target="_blank" rel="noopener">🖨️ طباعة بوليصة أرامكس</a>`
+      : `<a class="wa" href="${bostaAwbLink(o.ship_code)}" target="_blank" rel="noopener">🚚 فتح بوسطة (AWB)</a>`;
   // Bottom action per tab:
   //   • preparing → "✅ تم التجهيز" button (flips row into "ready")
   //   • ready     → waiting-for-Bosta banner (no action)
@@ -804,8 +808,8 @@ function renderCancelPopup(list) {
     <span class="big-code">${esc(o.code || '')}</span>
     <h2 class="customer" style="color:var(--ink);font-size:18px">${esc(o.customer_name || '')}</h2>
     <div class="address">📍 ${esc(o.city || '')}${o.address ? ' — ' + esc(o.address) : ''}</div>
-    ${o.ship_code ? `<div class="row"><span class="k">كود بوسطة</span><span class="v" style="direction:ltr">${esc(o.ship_code)}</span></div>
-      <a href="${bostaAwbLink(o.ship_code)}" target="_blank" rel="noopener" style="display:block;text-align:center;margin:8px 0;padding:12px;border-radius:8px;background:#dcfce7;color:#15803d;font-weight:800;text-decoration:none">🚚 فتح الشحنة في بوسطة لإلغائها</a>` : ''}
+    ${o.ship_code ? `<div class="row"><span class="k">رقم الشحنة</span><span class="v" style="direction:ltr">${esc(o.ship_code)}</span></div>
+      <a href="${o.courier === 'aramex' ? 'https://www.aramex.com/eg/ar/track/results?ShipmentNumber=' + encodeURIComponent(o.ship_code) : bostaAwbLink(o.ship_code)}" target="_blank" rel="noopener" style="display:block;text-align:center;margin:8px 0;padding:12px;border-radius:8px;background:#dcfce7;color:#15803d;font-weight:800;text-decoration:none">🚚 فتح الشحنة لإلغائها</a>` : ''}
     <div class="products">${products}</div>
     <button class="btn btn-success" style="background:var(--danger);font-size:17px;padding:16px" onclick="ackCancelled('${esc(o.id)}', this)">✓ تمام — تم إلغاؤه ولن يُشحن</button>
     ${list.length > 1 ? `<div class="more">+ ${list.length - 1} طلب ملغي آخر في الانتظار</div>` : ''}`;

@@ -1,10 +1,10 @@
-name: Bosta sync + WhatsApp messages
+name: Courier sync + WhatsApp messages
 
 # Runs every hour from 08:00 to 00:00 Cairo time (05–21 UTC) and on manual trigger.
 #  - Every run: WhatsApp messages (/api/wa-cron) — reminder 3h after an
-#    unanswered confirmation, handed to Bosta, out for delivery, feedback.
-#  - Every 2nd hour (even UTC hours): Bosta status sync first, so the
-#    "handed to Bosta" / "out for delivery" / "delivered" stages are fresh.
+#    unanswered confirmation, handed to the courier, out for delivery, feedback.
+#  - Every run: Aramex status sync first, so the "handed to the courier" /
+#    "out for delivery" / "delivered" stages are fresh. (Bosta is off.)
 #  - The 18:00 UTC run also sends today's Telegram summary (?summary=1).
 #  - 06:00 and 20:00 UTC: Meta ad spend for the last 14 days (needs the
 #    CRON_SECRET repository secret).
@@ -18,12 +18,9 @@ jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-      - name: Bosta status sync (every 2 hours)
+      - name: Aramex status sync
         run: |
           HOUR=$(date -u +%H)
-          if [ "${{ github.event_name }}" != "workflow_dispatch" ] && [ $((10#$HOUR % 2)) -ne 0 ]; then
-            echo "Odd hour ($HOUR UTC) — skipping Bosta sync"; exit 0
-          fi
           if [ "$HOUR" = "18" ]; then
             echo "Evening run — sync + daily Telegram summary"
             URL="https://protech-stores.vercel.app/api/sync-status?summary=1"
@@ -35,7 +32,8 @@ jobs:
           # continues, so don't fail the workflow on it.
           HTTP_CODE=$(curl -sS -o /tmp/sync.out -w "%{http_code}" --max-time 310 -X POST "$URL" || echo "000")
           echo "HTTP $HTTP_CODE"
-          cat /tmp/sync.out || true
+          # Public repo: counts only, never order details.
+          jq -c '{ok, courier, checked: .aramex.checked, updated: .aramex.updated, errors: (.aramex.errors // [] | length), skipped: .aramex.skipped}' /tmp/sync.out 2>/dev/null || echo "(unreadable response)"
           case "$HTTP_CODE" in
             2*) exit 0 ;;
             504|000) echo "::warning::Sync hit the Vercel duration cap or network timeout. Partial progress likely — next run will continue." ; exit 0 ;;

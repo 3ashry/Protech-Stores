@@ -6,7 +6,7 @@
 //   Returned/Cancelled or returned-to-stock.
 // - Tries to read the actual shipping fee from Bosta's pricing if present (usually empty).
 import { tgNotifyStatusChange, tgSendDailySummary, tgConfigured } from './_telegram.js';
-import { aramexCall, aramexErrors, aramexEnvStatus, aramexConfigured, aramexBaseUrl } from './_aramex.js';
+import { aramexCall, aramexErrors, aramexEnvStatus, aramexConfigured, aramexBaseUrl, aramexTrack, aramexStatusOf } from './_aramex.js';
 
 // Vercel: tell the platform we need the full function-duration window.
 // The default on Pro is 10s and the sync (hundreds of per-order Bosta
@@ -390,10 +390,52 @@ async function sendDailySummaryFromDb() {
   return tgSendDailySummary({ newToday, delivered, returned, inTransit, cashCycleOpen, revenue, dateLabel });
 }
 
+// Aramex tracking pass. For every open Aramex order (has a tracking number,
+// not Cancelled / closed), read the tracking history and apply the latest
+// update: status, delivered_at from Aramex's own timestamp, the last update
+// text (courier_status), and a "needs call" flag when Aramex reports a
+// problem. Telegram gets each status change.
+async function runAramexSync() {
+  if (!aramexConfigured()) return { skipped: 'Aramex settings missing' };
+  const orders = await sbGet("orders?select=id,code,status,phone,customer_name,city,total,ship_code,delivered_at,courier_status,needs_call,warehouse_confirmed&courier=eq.aramex&ship_code=not.is.null&status=not.in.(Cancelled)&limit=1000");
+  const open = orders.filter(o => o.ship_code && !(o.status === 'Returned' && o.warehouse_confirmed) && !(o.status === 'Delivered' && o.delivered_at && Date.now() - Date.parse(o.delivered_at) > 3 * 86400000));
+  const out = { checked: open.length, updated: 0, changes: [], errors: [] };
+  for (let i = 0; i < open.length; i += 50) {
+    const batch = open.slice(i, i + 50);
+    let tr;
+    try { tr = await aramexTrack(batch.map(o => o.ship_code)); }
+    catch (e) { out.errors.push(e.message); continue; }
+    if (tr.errors.length) out.errors.push(...tr.errors.map(e => `${e.code} ${e.message}`));
+    for (const o of batch) {
+      const hist = tr.results.get(String(o.ship_code)) || [];
+      if (!hist.length) continue;
+      const last = hist[hist.length - 1];
+      const mapped = aramexStatusOf(last);
+      const patch = {};
+      const statusText = [last.description, last.location].filter(Boolean).join(' — ').slice(0, 300);
+      if (statusText && statusText !== o.courier_status) { patch.courier_status = statusText; patch.courier_status_at = last.at || new Date().toISOString(); }
+      if (mapped && mapped !== o.status && !o.warehouse_confirmed) {
+        patch.status = mapped;
+        if (mapped === 'Delivered' && !o.delivered_at) patch.delivered_at = last.at || new Date().toISOString();
+        if (mapped === 'Delivered' && o.needs_call) patch.needs_call = false;
+        if (mapped === 'Awaiting Action') { patch.needs_call = true; patch.needs_call_reason = ('أرامكس: ' + (last.description || last.problem || 'مشكلة في التوصيل')).slice(0, 200); }
+      }
+      if (!Object.keys(patch).length) continue;
+      const r = await sbPatch(o.id, patch);
+      if (r.ok) {
+        out.updated++;
+        out.changes.push({ code: o.code, from: o.status, to: patch.status || o.status, update: statusText });
+        if (patch.status) { try { await tgNotifyStatusChange(o, o.status, patch.status); } catch (_) {} }
+      }
+    }
+  }
+  return out;
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   if (req.method === 'OPTIONS') return res.status(204).end();
-  if (!BOSTA_API_KEY || !SUPABASE_URL || !SUPABASE_KEY) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
     return res.status(500).json({ error: 'Server not configured' });
   }
 
@@ -674,7 +716,9 @@ export default async function handler(req, res) {
         allow_open: !!o.allow_open,
         notes: o.notes || '',
         total: parseFloat(o.total || 0),
-        ship_code: o.ship_code || '',   // needed for the "Open in Bosta" button
+        ship_code: o.ship_code || '',   // tracking number (label / courier link)
+        courier: o.courier || '',
+        label_url: o.shipping_label_url || '',
         created_at: o.created_at,
         prepared_at: o.picker_prepared_at || null,
         // Each product line keeps name / code / qty ONLY — no price / buy_price.
@@ -1096,6 +1140,16 @@ export default async function handler(req, res) {
 
   // ?summary=1 runs the normal sync AND fires the summary afterwards.
   const alsoSummary = req.query?.summary === '1' || req.query?.summary === 'true';
+
+  // ── Aramex (the courier since Nov 2026) ─────────────────────────────
+  // Track every open Aramex order and move its status. Bosta's sync below
+  // only runs when BOSTA_SYNC=1 (we stopped working with Bosta).
+  const aramexOut = await runAramexSync().catch(e => ({ error: e.message }));
+  if (process.env.BOSTA_SYNC !== '1' || !BOSTA_API_KEY) {
+    if (alsoSummary) { try { await sendDailySummaryFromDb(); aramexOut.summary = true; } catch (e) { console.warn('daily-summary failed', e.message); } }
+    console.log('sync-status aramex', JSON.stringify(aramexOut).slice(0, 3000));
+    return res.status(200).json({ ok: true, courier: 'aramex', aramex: aramexOut });
+  }
 
   try {
     // Wall-clock budget — Vercel kills the function at 300s. Keep a 40s
