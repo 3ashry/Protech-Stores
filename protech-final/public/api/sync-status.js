@@ -6,6 +6,7 @@
 //   Returned/Cancelled or returned-to-stock.
 // - Tries to read the actual shipping fee from Bosta's pricing if present (usually empty).
 import { tgNotifyStatusChange, tgSendDailySummary, tgConfigured } from './_telegram.js';
+import { aramexCall, aramexErrors, aramexEnvStatus, aramexConfigured, aramexBaseUrl } from './_aramex.js';
 
 // Vercel: tell the platform we need the full function-duration window.
 // The default on Pro is 10s and the sync (hundreds of per-order Bosta
@@ -411,6 +412,27 @@ export default async function handler(req, res) {
   // ?action=collection-audit — reconciles our stored `total` against what
   // Bosta actually collected / expected for every Delivered/Returned order.
   // Slow-ish (does a detail fetch per target) so it's on-demand only.
+  // ?action=aramex-check — read-only connection test for the Aramex account:
+  // lists Egypt's cities (creates nothing). Reports which settings exist
+  // (true/false only, never their values) and Aramex's own error messages.
+  if (action === 'aramex-check') {
+    const envPresent = aramexEnvStatus();
+    if (!aramexConfigured()) return res.status(200).json({ ok: false, reason: 'missing settings', envPresent });
+    try {
+      const r = await aramexCall('Location', 'FetchCities', { CountryCode: 'EG', State: null, NameStartsWith: null });
+      const cities = Array.isArray(r.data && r.data.Cities) ? r.data.Cities : [];
+      return res.status(200).json({
+        ok: r.httpStatus === 200 && r.data && r.data.HasErrors === false,
+        httpStatus: r.httpStatus, server: aramexBaseUrl(), envPresent,
+        hasErrors: r.data ? r.data.HasErrors : null,
+        notifications: aramexErrors(r.data),
+        cityCount: cities.length, sampleCities: cities.slice(0, 25),
+        nonJson: r.raw,
+      });
+    } catch (e) {
+      return res.status(200).json({ ok: false, reason: 'request failed', error: e.message, envPresent });
+    }
+  }
   if (action === 'collection-audit') {
     try { return res.status(200).json(await runCollectionAudit()); }
     catch (e) { return res.status(500).json({ error: e.message }); }
