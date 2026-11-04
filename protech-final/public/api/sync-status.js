@@ -420,6 +420,26 @@ export default async function handler(req, res) {
     const mode = req.query?.env === 'test' ? 'test' : 'live';
     const envPresent = aramexEnvStatus();
     if (!aramexConfigured(mode)) return res.status(200).json({ ok: false, mode, reason: 'missing settings', envPresent });
+    // Test mode: try Aramex's known sandbox hosts in turn (dev, then sbx).
+    if (mode === 'test' && !process.env.ARAMEX_TEST_BASE_URL) {
+      const tried = [];
+      for (const host of ['https://ws.dev.aramex.net/ShippingAPI.V2', 'https://ws.sbx.aramex.net/ShippingAPI.V2']) {
+        process.env.ARAMEX_TEST_BASE_URL = host;
+        try {
+          const r = await aramexCall('Location', 'FetchCities', { CountryCode: 'EG', State: null, NameStartsWith: null }, mode);
+          const cities = Array.isArray(r.data && r.data.Cities) ? r.data.Cities : [];
+          tried.push({ host, httpStatus: r.httpStatus, hasErrors: r.data ? r.data.HasErrors : null, notifications: aramexErrors(r.data), cityCount: cities.length, nonJson: r.raw });
+          if (r.data && r.data.HasErrors === false) {
+            return res.status(200).json({ ok: true, mode, server: host, cityCount: cities.length, cities: req.query?.all === '1' ? cities : cities.slice(0, 25), tried });
+          }
+        } catch (e) {
+          tried.push({ host, error: e.message, cause: e.cause ? String(e.cause.code || e.cause.message || e.cause) : null });
+        } finally {
+          delete process.env.ARAMEX_TEST_BASE_URL;
+        }
+      }
+      return res.status(200).json({ ok: false, mode, tried });
+    }
     try {
       const r = await aramexCall('Location', 'FetchCities', { CountryCode: 'EG', State: null, NameStartsWith: null }, mode);
       const cities = Array.isArray(r.data && r.data.Cities) ? r.data.Cities : [];
