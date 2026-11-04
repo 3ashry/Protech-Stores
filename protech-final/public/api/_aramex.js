@@ -51,9 +51,10 @@ export function aramexLoginShape() {
   const user = raw('ARAMEX_USERNAME').trim();
   return {
     username: { ...shape('ARAMEX_USERNAME'), looksLikeEmail: /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(user), hasUppercase: /[A-Z]/.test(user), domain: user.includes('@') ? user.split('@')[1].toLowerCase() : null },
-    password: shape('ARAMEX_PASSWORD'),
+    // Secrets: no lengths (this check is public) — only stray-character flags.
+    password: (({ length, ...rest }) => rest)(shape('ARAMEX_PASSWORD')),
     accountNumber: { ...shape('ARAMEX_ACCOUNT_NUMBER'), digitsOnly: /^\d+$/.test(raw('ARAMEX_ACCOUNT_NUMBER').trim()) },
-    accountPin: { ...shape('ARAMEX_ACCOUNT_PIN'), digitsOnly: /^\d+$/.test(raw('ARAMEX_ACCOUNT_PIN').trim()) },
+    accountPin: { ...(({ length, ...rest }) => rest)(shape('ARAMEX_ACCOUNT_PIN')), digitsOnly: /^\d+$/.test(raw('ARAMEX_ACCOUNT_PIN').trim()) },
     entity: raw('ARAMEX_ACCOUNT_ENTITY').trim() || null,
     country: raw('ARAMEX_COUNTRY_CODE').trim() || null,
   };
