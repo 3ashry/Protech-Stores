@@ -159,20 +159,21 @@ export function aramexEstimate(gov, weightKg, cod) {
   return { zone, weight: w, base, fuel: Math.round(fuel * 100) / 100, codFee: Math.round(codFee * 100) / 100, total: Math.round(total * 100) / 100 };
 }
 
-// Shipment weight from the products' Shipping specs: per unit the higher of
-// real weight and volumetric weight (cm³ ÷ 3000), × qty. Products without
-// specs count as ARAMEX_DEFAULT_KG (1 kg).
+// Shipment weight from the products' Shipping specs: the higher of the
+// order's total real weight and its total volumetric weight (total cm³ ÷
+// 3000) — the same rule as the checkout price. A product with no specs
+// counts as ARAMEX_DEFAULT_KG (1 kg).
 export function aramexOrderWeight(lines, productsById) {
   const dflt = parseFloat(process.env.ARAMEX_DEFAULT_KG) || 1;
-  let total = 0;
+  let kg = 0, cm3 = 0;
   for (const l of (lines || [])) {
     const p = productsById.get(l && l.id) || {};
-    const real = parseFloat(p.unit_weight_kg) || 0;
-    const vol = (parseFloat(p.unit_volume_cm3) || 0) / 3000;
-    const unit = Math.max(real, vol) || dflt;
-    total += unit * (parseInt(l && l.qty, 10) || 1);
+    const qty = parseInt(l && l.qty, 10) || 1;
+    const w = parseFloat(p.unit_weight_kg) || 0, v = parseFloat(p.unit_volume_cm3) || 0;
+    kg += (w || (v ? 0 : dflt)) * qty;
+    cm3 += v * qty;
   }
-  return Math.round(Math.max(total, 0.5) * 100) / 100;
+  return Math.round(Math.max(kg, cm3 / 3000, 0.5) * 100) / 100;
 }
 
 const emptyAddress = () => ({ Line1: '', Line2: '', Line3: '', City: '', StateOrProvinceCode: '', PostCode: '', CountryCode: '', Longitude: 0, Latitude: 0, BuildingNumber: null, BuildingName: null, Floor: null, Apartment: null, POBox: null, Description: null });
