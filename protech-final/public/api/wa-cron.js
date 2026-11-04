@@ -105,6 +105,16 @@ const TEMPLATE_DEFS = [
     ],
   },
   {
+    // Same message for Aramex orders (the courier since Nov 2026).
+    name: 'order_handed_to_aramex', language: 'ar', category: 'UTILITY',
+    components: [
+      { type: 'BODY',
+        text: 'أهلاً يا {{1}}،\nطلبك رقم {{2}} اتسلّم لشركة الشحن أرامكس وبقى في الطريق ليك 🚚\n\nرقم الشحنة: {{3}}\nالمبلغ المطلوب عند الاستلام: {{4}} جنيه.\n\nهنبلّغك أول ما الطلب يخرج للتوصيل.',
+        example: { body_text: [['محمد علي', 'PRO-10234', '45123456789', '1,250']] } },
+      { type: 'BUTTONS', buttons: [CALL_BTN] },
+    ],
+  },
+  {
     name: 'order_on_the_way', language: 'ar', category: 'UTILITY',
     components: [
       { type: 'BODY',
@@ -516,7 +526,7 @@ export default async function handler(req, res) {
     //  code, tracking, amount) + a static call button. wa_shipped_sent_at dedupes.
     // ─────────────────────────────────────────────────────────────────
     const shipParts = [
-      'select=id,code,phone,customer_name,ship_code,total',
+      'select=id,code,phone,customer_name,ship_code,total,courier,wa_phone',
       'ship_code=not.is.null',
       'wa_shipped_sent_at=is.null',
       // Handed to Bosta = the courier has picked it up. The ship code exists from

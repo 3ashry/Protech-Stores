@@ -244,7 +244,8 @@ export async function sendShippedTemplate(order = {}) {
       to: orderWaTo(order),
       type: 'template',
       template: {
-        name: WA_SHIPPED_TEMPLATE,
+        // Aramex orders get the Aramex wording; older Bosta orders keep theirs.
+        name: order.courier === 'aramex' ? (process.env.WA_SHIPPED_TEMPLATE_ARAMEX || 'order_handed_to_aramex') : WA_SHIPPED_TEMPLATE,
         language: { code: WA_TEMPLATE_LANG },
         components: [
           { type: 'body', parameters: params.map(text => ({ type: 'text', text })) },
