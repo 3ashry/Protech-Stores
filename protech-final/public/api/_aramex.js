@@ -144,19 +144,25 @@ const ZONE_RATES = {
 };
 const FUEL_PCT = () => { const v = parseFloat(process.env.ARAMEX_FUEL_PCT); return isFinite(v) ? v : 38; };
 const VAT = 0.14;
+// "Open the shipment upon delivery" value-added service (SLA CMT 305 CAI):
+// 5 EGP per AWB, subject to all surcharges (fuel + VAT). Every order uses it.
+const OPEN_FEE = () => { const v = parseFloat(process.env.ARAMEX_OPEN_FEE); return isFinite(v) ? v : 5; };
 
 // Estimated (agreed) charge for one shipment:
-//   zone rate by weight (rounded up to whole kg) + fuel surcharge, + 0.5% COD
-//   fee when the COD is over 4,000, all + 14% VAT.
+//   zone rate by weight (rounded up to whole kg) + 5 EGP open-shipment fee,
+//   + fuel surcharge on both, + 0.5% COD fee when the COD is over 4,000,
+//   all + 14% VAT.
 export function aramexEstimate(gov, weightKg, cod) {
   const zone = aramexZoneFor(gov) || 3;
   const r = ZONE_RATES[zone];
   const w = Math.max(1, Math.ceil(Number(weightKg) || 1));
-  const base = w <= 5 ? r[0] : w <= 10 ? r[1] : w <= 15 ? r[2] : w <= 25 ? r[3] : r[3] + (w - 25) * r[4];
+  const rate = w <= 5 ? r[0] : w <= 10 ? r[1] : w <= 15 ? r[2] : w <= 25 ? r[3] : r[3] + (w - 25) * r[4];
+  const openFee = OPEN_FEE();
+  const base = rate + openFee;
   const fuel = base * FUEL_PCT() / 100;
   const codFee = (Number(cod) || 0) > 4000 ? (Number(cod) || 0) * 0.005 : 0;
   const total = (base + fuel + codFee) * (1 + VAT);
-  return { zone, weight: w, base, fuel: Math.round(fuel * 100) / 100, codFee: Math.round(codFee * 100) / 100, total: Math.round(total * 100) / 100 };
+  return { zone, weight: w, rate, openFee, base, fuel: Math.round(fuel * 100) / 100, codFee: Math.round(codFee * 100) / 100, total: Math.round(total * 100) / 100 };
 }
 
 // Shipment weight from the products' Shipping specs: the higher of the
@@ -203,7 +209,11 @@ export async function aramexCreateShipment(order, { weightKg, mode = 'live' } = 
   const consigneeContact = { ...emptyContact(), PersonName: String(order.customer_name || '').slice(0, 45), CompanyName: String(order.customer_name || '').slice(0, 45),
     PhoneNumber1: localPhone(order.phone), PhoneNumber2: localPhone(order.second_phone), CellPhone: localPhone(order.phone) };
   const now = Date.now();
-  const openNote = 'يسمح للعميل بفتح الشحنة ومعاينتها قبل الدفع';
+  // SLA: the AWB must say "OPEN THE SHIPMENT UPON DELIVERY" and the special
+  // service must be flagged when the shipment is created. Its service code is
+  // ARAMEX_OPEN_SERVICE_CODE (added to Services once Aramex confirms it).
+  const openNote = 'OPEN THE SHIPMENT UPON DELIVERY - يسمح للعميل بفتح الشحنة ومعاينتها قبل الدفع';
+  const services = ['CODS', env('ARAMEX_OPEN_SERVICE_CODE')].filter(Boolean).join(',');
   const shipment = {
     Reference1: String(order.code || order.id), Reference2: String(order.id), Reference3: '',
     Shipper: { Reference1: '', Reference2: '', AccountNumber: ci.AccountNumber,
@@ -221,7 +231,7 @@ export async function aramexCreateShipment(order, { weightKg, mode = 'live' } = 
       PaymentType: 'P', PaymentOptions: '', CustomsValueAmount: null,
       CashOnDeliveryAmount: { CurrencyCode: 'EGP', Value: Math.round((parseFloat(order.total) || 0) * 100) / 100 },
       InsuranceAmount: null, CashAdditionalAmount: null, CashAdditionalAmountDescription: '', CollectAmount: null,
-      Services: 'CODS', Items: [],
+      Services: services, Items: [],
     },
     Attachments: [], ForeignHAWB: '', TransportType: 0, PickupGUID: '', Number: null, ScheduledDelivery: null,
   };
