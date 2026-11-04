@@ -40,6 +40,26 @@ export function aramexEnvStatus() {
   return Object.fromEntries(LIVE_KEYS.map(k => [k, !!env(k)]));
 }
 
+// Shape of the stored login, to spot typos without revealing anything:
+// lengths, hidden spaces / line breaks, and whether the username is an email.
+export function aramexLoginShape() {
+  const raw = (k) => String(process.env[k] || '');
+  const shape = (k) => {
+    const v = raw(k);
+    return { length: v.trim().length, hasSpacesAround: v !== v.trim(), hasLineBreak: /[\r\n]/.test(v), hasInnerSpace: /\s/.test(v.trim()) };
+  };
+  const user = raw('ARAMEX_USERNAME').trim();
+  return {
+    username: { ...shape('ARAMEX_USERNAME'), looksLikeEmail: /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(user), hasUppercase: /[A-Z]/.test(user), domain: user.includes('@') ? user.split('@')[1].toLowerCase() : null },
+    // Secrets: no lengths (this check is public) — only stray-character flags.
+    password: (({ length, ...rest }) => rest)(shape('ARAMEX_PASSWORD')),
+    accountNumber: { ...shape('ARAMEX_ACCOUNT_NUMBER'), digitsOnly: /^\d+$/.test(raw('ARAMEX_ACCOUNT_NUMBER').trim()) },
+    accountPin: { ...(({ length, ...rest }) => rest)(shape('ARAMEX_ACCOUNT_PIN')), digitsOnly: /^\d+$/.test(raw('ARAMEX_ACCOUNT_PIN').trim()) },
+    entity: raw('ARAMEX_ACCOUNT_ENTITY').trim() || null,
+    country: raw('ARAMEX_COUNTRY_CODE').trim() || null,
+  };
+}
+
 export function aramexConfigured(mode = 'live') {
   if (normMode(mode) === 'test') return true;
   return LIVE_KEYS.slice(0, 4).every(k => !!env(k));
