@@ -412,25 +412,27 @@ export default async function handler(req, res) {
   // ?action=collection-audit — reconciles our stored `total` against what
   // Bosta actually collected / expected for every Delivered/Returned order.
   // Slow-ish (does a detail fetch per target) so it's on-demand only.
-  // ?action=aramex-check — read-only connection test for the Aramex account:
-  // lists Egypt's cities (creates nothing). Reports which settings exist
-  // (true/false only, never their values) and Aramex's own error messages.
+  // ?action=aramex-check[&env=test] — read-only connection test for the
+  // Aramex account (or Aramex's sandbox with env=test): lists Egypt's cities,
+  // creates nothing. Reports which live settings exist (true/false only,
+  // never their values) and Aramex's own error messages.
   if (action === 'aramex-check') {
+    const mode = req.query?.env === 'test' ? 'test' : 'live';
     const envPresent = aramexEnvStatus();
-    if (!aramexConfigured()) return res.status(200).json({ ok: false, reason: 'missing settings', envPresent });
+    if (!aramexConfigured(mode)) return res.status(200).json({ ok: false, mode, reason: 'missing settings', envPresent });
     try {
-      const r = await aramexCall('Location', 'FetchCities', { CountryCode: 'EG', State: null, NameStartsWith: null });
+      const r = await aramexCall('Location', 'FetchCities', { CountryCode: 'EG', State: null, NameStartsWith: null }, mode);
       const cities = Array.isArray(r.data && r.data.Cities) ? r.data.Cities : [];
       return res.status(200).json({
         ok: r.httpStatus === 200 && r.data && r.data.HasErrors === false,
-        httpStatus: r.httpStatus, server: aramexBaseUrl(), envPresent,
+        mode, httpStatus: r.httpStatus, server: aramexBaseUrl(mode), envPresent,
         hasErrors: r.data ? r.data.HasErrors : null,
         notifications: aramexErrors(r.data),
-        cityCount: cities.length, sampleCities: cities.slice(0, 25),
+        cityCount: cities.length, cities: req.query?.all === '1' ? cities : cities.slice(0, 25),
         nonJson: r.raw,
       });
     } catch (e) {
-      return res.status(200).json({ ok: false, reason: 'request failed', error: e.message, envPresent });
+      return res.status(200).json({ ok: false, mode, reason: 'request failed', error: e.message, envPresent });
     }
   }
   if (action === 'collection-audit') {
