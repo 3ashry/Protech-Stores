@@ -6,7 +6,7 @@
 //   Returned/Cancelled or returned-to-stock.
 // - Tries to read the actual shipping fee from Bosta's pricing if present (usually empty).
 import { tgNotifyStatusChange, tgSendDailySummary, tgConfigured } from './_telegram.js';
-import { aramexCall, aramexErrors, aramexEnvStatus, aramexConfigured, aramexBaseUrl, aramexTrack, aramexStatusOf } from './_aramex.js';
+import { aramexCall, aramexErrors, aramexEnvStatus, aramexConfigured, aramexBaseUrl, aramexTrack, aramexStatusOf, aramexLoginShape } from './_aramex.js';
 
 // Vercel: tell the platform we need the full function-duration window.
 // The default on Pro is 10s and the sync (hundreds of per-order Bosta
@@ -488,6 +488,7 @@ export default async function handler(req, res) {
       return res.status(200).json({
         ok: r.httpStatus === 200 && r.data && r.data.HasErrors === false,
         mode, httpStatus: r.httpStatus, server: aramexBaseUrl(mode), envPresent,
+        loginShape: mode === 'live' ? aramexLoginShape() : undefined,
         hasErrors: r.data ? r.data.HasErrors : null,
         notifications: aramexErrors(r.data),
         cityCount: cities.length, cities: req.query?.all === '1' ? cities : cities.slice(0, 25),
