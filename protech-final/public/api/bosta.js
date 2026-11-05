@@ -10,7 +10,7 @@
 import { tgNotifyOrder } from './_telegram.js';
 import { sendPushForOrder } from './_push.js';
 import { sendConfirmTemplate, waConfigured } from './_wa.js';
-import { aramexConfigured, aramexCreateShipment, aramexEstimate, aramexOrderWeight } from './_aramex.js';
+import { aramexConfigured, aramexCreateShipment, aramexEstimate, aramexOrderWeight, aramexLabel } from './_aramex.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
@@ -173,9 +173,11 @@ export default async function handler(req, res) {
     // other field can never lose it (that happened once: a missing column
     // failed the whole update while Aramex had created the shipment).
     await sbPatch({ courier: 'aramex', ship_code: r.awb, ship_error: null, ship_sent_at: new Date().toISOString() });
-    await sbPatch({ shipping_label_url: r.labelUrl, calc_shipping: estimate.total, actual_shipping: 0 });
+    let labelUrl = r.labelUrl;
+    if (!labelUrl) { try { labelUrl = (await aramexLabel(r.awb)).url; } catch (_) {} }
+    await sbPatch({ shipping_label_url: labelUrl || null, calc_shipping: estimate.total, actual_shipping: 0 });
     console.log('Aramex shipment created', order.code, r.awb);
-    return res.status(200).json({ success: true, trackingNumber: r.awb, labelUrl: r.labelUrl, estimate, whatsapp: waResult });
+    return res.status(200).json({ success: true, trackingNumber: r.awb, labelUrl, estimate, whatsapp: waResult });
   } catch (e) {
     console.error('bosta.js Aramex exception:', e.message);
     await sbPatch({ courier: 'aramex', ship_error: String(e.message).slice(0, 500), calc_shipping: estimate.total }).catch(() => {});
