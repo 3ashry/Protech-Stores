@@ -32,5 +32,5 @@ create trigger agent_reports_notify
   for each row
   when (new.notify)
   execute function supabase_functions.http_request(
-    'https://protech-stores.vercel.app/api/agent-report', 'POST',
+    'https://protech-stores.vercel.app/api/stats?action=agent-report', 'POST',
     '{"Content-type":"application/json"}', '{}', '5000');

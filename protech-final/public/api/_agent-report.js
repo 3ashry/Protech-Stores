@@ -1,4 +1,6 @@
-// protech-final/public/api/agent-report.js
+// protech-final/public/api/_agent-report.js
+// Served through /api/stats?action=agent-report (POST): the Hobby plan allows
+// 12 functions and all 12 are taken, so this rides on stats.js.
 // Sends a new agent report (public.agent_reports) to the admin's Telegram.
 //
 // Called by the database webhook on every insert into agent_reports. The
@@ -31,7 +33,7 @@ const KIND = {
   market: 'Market research', alert: 'Alert', test: 'Test',
 };
 
-export default async function handler(req, res) {
+export async function agentReportHandler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
   if (!SUPABASE_URL || !SUPABASE_KEY) return res.status(500).json({ error: 'Supabase not configured' });
   if (!tgConfigured()) return res.status(500).json({ error: 'Telegram not configured' });

@@ -2,6 +2,8 @@
 // Lightweight JSON stats for a phone / Apple Watch widget.
 //   GET /api/stats?key=<CRON_SECRET>
 // Returns: { orders, delivered, inTransit, processing, today }
+import { agentReportHandler } from './_agent-report.js';
+
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const CRON_SECRET = (process.env.CRON_SECRET || '').trim();
@@ -20,6 +22,8 @@ async function countOrders(filter = '') {
 }
 
 export default async function handler(req, res) {
+  // Agent reports → Telegram (called by the agent_reports database webhook).
+  if (req.query && req.query.action === 'agent-report') return agentReportHandler(req, res);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'no-store');
   const key = ((req.query && (req.query.key || req.query.secret)) || '').toString().trim();
