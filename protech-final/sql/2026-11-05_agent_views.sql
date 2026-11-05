@@ -16,6 +16,10 @@
 --   * Media buyer      = 1% of (goods revenue − courier cost) on delivered
 --                        orders + 20% of ad spend.
 --   * Returned goods come back to stock, so a return costs courier only.
+--   * Outcomes: delivered / returned / cancelled / not_shipped (customer never
+--     confirmed, so it never left the warehouse) / open (still in progress).
+--     Ad spend is shared across ALL orders placed that month, so unconfirmed
+--     orders carry their share of the ad cost that produced them.
 -- ============================================================================
 
 create schema if not exists agent;
@@ -65,8 +69,13 @@ create or replace view agent.order_lines as
 with lines as (
   select o.id as order_id, o.code as order_code,
          (o.created_at at time zone 'Africa/Cairo')::date as order_date,
-         case o.status when 'Delivered' then 'delivered' when 'Returned' then 'returned'
-                       when 'Cancelled' then 'cancelled' else 'open' end as outcome,
+         case when o.status = 'Delivered' then 'delivered'
+              when o.status = 'Returned'  then 'returned'
+              when o.status = 'Cancelled' then 'cancelled'
+              -- never sent for preparation and older than 3 days: the customer
+              -- didn't confirm, so it was never shipped
+              when o.sent_to_picker_at is null and o.created_at < now() - interval '3 days' then 'not_shipped'
+              else 'open' end as outcome,
          li.ordinality as line_no,
          li.value->>'code' as line_code,
          coalesce((li.value->>'qty')::int, 1) as qty,
@@ -119,8 +128,13 @@ with o as (
   select o.id as order_id, o.code as order_code,
          (o.created_at at time zone 'Africa/Cairo')::date as order_date,
          date_trunc('month', o.created_at at time zone 'Africa/Cairo')::date as month,
-         case o.status when 'Delivered' then 'delivered' when 'Returned' then 'returned'
-                       when 'Cancelled' then 'cancelled' else 'open' end as outcome,
+         case when o.status = 'Delivered' then 'delivered'
+              when o.status = 'Returned'  then 'returned'
+              when o.status = 'Cancelled' then 'cancelled'
+              -- never sent for preparation and older than 3 days: the customer
+              -- didn't confirm, so it was never shipped
+              when o.sent_to_picker_at is null and o.created_at < now() - interval '3 days' then 'not_shipped'
+              else 'open' end as outcome,
          o.total - coalesce(o.est_shipping, 0) as goods_revenue,
          coalesce(o.actual_shipping, 0) as courier_cost,
          o.cancel_stage, o.confirm_outcome
@@ -146,7 +160,8 @@ select o.*,
                                      - 0.01 * (o.goods_revenue - o.courier_cost)
                                      - coalesce(a.spend, 0) / nullif(pm.orders, 0) * 1.20, 2)
          when 'returned'  then round(-o.courier_cost - coalesce(a.spend, 0) / nullif(pm.orders, 0) * 1.20, 2)
-         when 'cancelled' then round(-coalesce(a.spend, 0) / nullif(pm.orders, 0) * 1.20, 2)
+         when 'cancelled'   then round(-coalesce(a.spend, 0) / nullif(pm.orders, 0) * 1.20, 2)
+         when 'not_shipped' then round(-coalesce(a.spend, 0) / nullif(pm.orders, 0) * 1.20, 2)
          else null end as profit_after_ads
 from o
 left join cost c on c.order_id = o.order_id
@@ -190,6 +205,7 @@ with wk as (
          count(*) filter (where outcome = 'delivered') as delivered,
          count(*) filter (where outcome = 'returned') as returned,
          count(*) filter (where outcome = 'cancelled') as cancelled,
+         count(*) filter (where outcome = 'not_shipped') as not_shipped,
          count(*) filter (where outcome = 'open') as still_open,
          sum(goods_revenue) filter (where outcome = 'delivered') as revenue_delivered,
          sum(gross_profit) as gross_profit
@@ -202,7 +218,7 @@ ads as (
 select coalesce(w.week, a.week) as week,
        coalesce(a.ad_spend, 0) as ad_spend,
        coalesce(w.orders, 0) as orders, w.confirmed, w.no_answer,
-       w.delivered, w.returned, w.cancelled, w.still_open,
+       w.delivered, w.returned, w.cancelled, w.not_shipped, w.still_open,
        round(coalesce(a.ad_spend, 0) / nullif(w.orders, 0), 0)    as ad_cost_per_order,
        round(coalesce(a.ad_spend, 0) / nullif(w.delivered, 0), 0) as ad_cost_per_delivered,
        w.revenue_delivered,
@@ -210,7 +226,8 @@ select coalesce(w.week, a.week) as week,
 from wk w full join ads a on a.week = w.week;
 
 -- ---------------------------------------------------------------------------
--- Orders still open, by age — money sitting in limbo.
+-- Orders still in progress (placed in the last 3 days, or sent for
+-- preparation but not yet delivered/returned).
 -- ---------------------------------------------------------------------------
 create or replace view agent.open_orders as
 select order_id, order_code, order_date,
