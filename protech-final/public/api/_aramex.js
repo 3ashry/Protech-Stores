@@ -126,8 +126,8 @@ export function parseAramexDate(v) {
 }
 
 // ─── Governorate → Aramex city + price zone ──────────────────────────────
-// City = the governorate's main city as Aramex names it (checked against
-// FetchCities once the live login works). Zones are from the Aramex price
+// City = the governorate's main city exactly as Aramex spells it in its
+// FetchCities list for EG (checked against the live list, 348 cities). Zones are from the Aramex price
 // list (E-commerce Domestic, CAI).
 const GOV = {
   'القاهرة': ['Cairo', 1], 'القاهره': ['Cairo', 1],
@@ -136,17 +136,17 @@ const GOV = {
   'بورسعيد': ['Port Said', 2], 'بور سعيد': ['Port Said', 2],
   'الإسماعيلية': ['Ismailia', 2], 'الاسماعيليه': ['Ismailia', 2], 'الإسماعيليه': ['Ismailia', 2], 'الاسماعيلية': ['Ismailia', 2],
   'السويس': ['Suez', 2],
-  'القليوبية': ['Banha', 3], 'القليوبيه': ['Banha', 3],
-  'المنوفية': ['Shebin El Kom', 3], 'المنوفيه': ['Shebin El Kom', 3],
-  'الشرقية': ['Zagazig', 3], 'الشرقيه': ['Zagazig', 3],
+  'القليوبية': ['Benha', 3], 'القليوبيه': ['Benha', 3],
+  'المنوفية': ['Shebin El Koum', 3], 'المنوفيه': ['Shebin El Koum', 3],
+  'الشرقية': ['Zakazik', 3], 'الشرقيه': ['Zakazik', 3],
   'الغربية': ['Tanta', 3], 'الغربيه': ['Tanta', 3],
   'الدقهلية': ['Mansoura', 3], 'الدقهليه': ['Mansoura', 3],
   'البحيرة': ['Damanhour', 3], 'البحيره': ['Damanhour', 3],
-  'دمياط': ['Damietta', 3],
-  'كفر الشيخ': ['Kafr El Sheikh', 3],
-  'الفيوم': ['Fayoum', 4], 'بني سويف': ['Beni Suef', 4], 'المنيا': ['Minya', 4],
-  'أسيوط': ['Assiut', 4], 'اسيوط': ['Assiut', 4], 'سوهاج': ['Sohag', 4],
-  'قنا': ['Qena', 5], 'الأقصر': ['Luxor', 5], 'الاقصر': ['Luxor', 5],
+  'دمياط': ['Dumiatta', 3],
+  'كفر الشيخ': ['Kafr Al Sheikh', 3],
+  'الفيوم': ['Fayoum', 4], 'بني سويف': ['Bani Swif', 4], 'المنيا': ['Menia City', 4],
+  'أسيوط': ['Assiut', 4], 'اسيوط': ['Assiut', 4], 'سوهاج': ['sohag City', 4],
+  'قنا': ['Qena', 5], 'الأقصر': ['Luxour', 5], 'الاقصر': ['Luxour', 5],
   'أسوان': ['Aswan', 5], 'اسوان': ['Aswan', 5],
   'البحر الأحمر': ['Hurghada', 5], 'البحر الاحمر': ['Hurghada', 5],
   'جنوب سيناء': ['Sharm El Sheikh', 5],
