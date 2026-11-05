@@ -97,10 +97,30 @@ async function pixelStats(req, res) {
   return res.status(200).json({ pixel: PIXEL_ID, event, sinceHours: hours, ...out });
 }
 
+// Heartbeat: one row per run in public.sync_runs, success or failure, so the
+// dashboard and the agents can tell "no ad spend" apart from "sync not running".
+// Never throws — a heartbeat failure must not break the sync itself.
+async function heartbeat(entry) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return;
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/sync_runs`, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({ job: 'meta-sync', ...entry }),
+    });
+  } catch (_) {}
+}
+
 export default async function handler(req, res) {
   if (req.query && req.query.action === 'pixel_stats') return pixelStats(req, res);
   if (!(await authorized(req))) return res.status(401).json({ error: 'Unauthorized' });
   if (!META_ACCESS_TOKEN || !META_AD_ACCOUNT_ID) {
+    await heartbeat({ ok: false, error: 'Meta not configured (META_ACCESS_TOKEN / META_AD_ACCOUNT_ID missing)' });
     return res.status(500).json({ error: 'Meta not configured — set META_ACCESS_TOKEN and META_AD_ACCOUNT_ID.' });
   }
   if (!SUPABASE_URL || !SUPABASE_KEY) {
@@ -136,6 +156,8 @@ export default async function handler(req, res) {
       const r = await fetch(url);
       const d = await r.json().catch(() => null);
       if (!r.ok) {
+        const msg = (d && d.error && (d.error.message || d.error.type)) || `HTTP ${r.status}`;
+        await heartbeat({ ok: false, window_since: since, window_until: until, error: `Meta API: ${msg}` });
         return res.status(502).json({ error: 'Meta API error', details: d && d.error ? d.error : d });
       }
       for (const row of (d.data || [])) {
@@ -170,16 +192,24 @@ export default async function handler(req, res) {
         }
       );
       if (!up.ok) {
-        return res.status(502).json({ error: 'Supabase upsert failed', details: await up.text().catch(() => '') });
+        const details = await up.text().catch(() => '');
+        await heartbeat({ ok: false, window_since: since, window_until: until, error: `Supabase upsert: ${details.slice(0, 300)}` });
+        return res.status(502).json({ error: 'Supabase upsert failed', details });
       }
       upserted = rows.length;
     }
 
-    const result = { ok: true, since, until, currency, rows: upserted };
+    // Latest day in the window that had any spend (null = no spend at all).
+    const spendDays = rows.filter(r => r.spend > 0).map(r => r.spend_date).sort();
+    const lastSpend = spendDays.length ? spendDays[spendDays.length - 1] : null;
+    await heartbeat({ ok: true, window_since: since, window_until: until, rows: upserted, last_spend_date: lastSpend });
+
+    const result = { ok: true, since, until, currency, rows: upserted, last_spend_date: lastSpend };
     console.log('meta-sync', JSON.stringify(result));
     return res.status(200).json(result);
   } catch (e) {
     console.error('meta-sync error', e.message);
+    await heartbeat({ ok: false, window_since: since, window_until: until, error: String(e.message || e).slice(0, 300) });
     return res.status(500).json({ error: e.message });
   }
 }
