@@ -6,7 +6,7 @@
 //   Returned/Cancelled or returned-to-stock.
 // - Tries to read the actual shipping fee from Bosta's pricing if present (usually empty).
 import { tgNotifyStatusChange, tgSendDailySummary, tgConfigured } from './_telegram.js';
-import { aramexCall, aramexErrors, aramexEnvStatus, aramexConfigured, aramexBaseUrl, aramexTrack, aramexStatusOf, aramexLoginShape } from './_aramex.js';
+import { aramexCall, aramexErrors, aramexEnvStatus, aramexConfigured, aramexBaseUrl, aramexTrack, aramexStatusOf, aramexLoginShape, aramexLabel } from './_aramex.js';
 
 // Vercel: tell the platform we need the full function-duration window.
 // The default on Pro is 10s and the sync (hundreds of per-order Bosta
@@ -397,9 +397,17 @@ async function sendDailySummaryFromDb() {
 // problem. Telegram gets each status change.
 async function runAramexSync() {
   if (!aramexConfigured()) return { skipped: 'Aramex settings missing' };
-  const orders = await sbGet("orders?select=id,code,status,phone,customer_name,city,total,ship_code,delivered_at,courier_status,needs_call,warehouse_confirmed&courier=eq.aramex&ship_code=not.is.null&status=not.in.(Cancelled)&limit=1000");
+  const orders = await sbGet("orders?select=id,code,status,phone,customer_name,city,total,ship_code,delivered_at,courier_status,needs_call,warehouse_confirmed,shipping_label_url&courier=eq.aramex&ship_code=not.is.null&status=not.in.(Cancelled)&limit=1000");
   const open = orders.filter(o => o.ship_code && !(o.status === 'Returned' && o.warehouse_confirmed) && !(o.status === 'Delivered' && o.delivered_at && Date.now() - Date.parse(o.delivered_at) > 3 * 86400000));
-  const out = { checked: open.length, updated: 0, changes: [], errors: [] };
+  const out = { checked: open.length, updated: 0, changes: [], errors: [], labels: 0 };
+  // Fill in a missing label link (e.g. when saving it failed at creation).
+  for (const o of open.filter(x => !x.shipping_label_url && x.status === 'Processing').slice(0, 20)) {
+    try {
+      const l = await aramexLabel(o.ship_code);
+      if (l.ok && (await sbPatch(o.id, { shipping_label_url: l.url })).ok) out.labels++;
+      else if (l.errors.length) out.errors.push(`label ${o.code}: ${l.errors.map(e => e.code + ' ' + e.message).join('; ')}`);
+    } catch (e) { out.errors.push(`label ${o.code}: ${e.message}`); }
+  }
   for (let i = 0; i < open.length; i += 50) {
     const batch = open.slice(i, i + 50);
     let tr;
