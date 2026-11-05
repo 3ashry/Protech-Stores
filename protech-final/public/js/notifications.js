@@ -53,18 +53,7 @@ function notifyForNewOrders(orders) {
       };
     } catch (e) { console.warn('notify failed:', e); }
   }
-  // Play the cash-register sound at full volume for each new order.
-  // A "primed" element (created on the first user gesture, see bottom of
-  // this file) is reused so mobile autoplay policy doesn't silence it.
-  try {
-    const a = window._orderChime ? window._orderChime.cloneNode() : new Audio('/cash.mp3');
-    a.volume = 1.0;
-    a.play().catch(() => {
-      // If cloning path was blocked, retry with a fresh Audio (this fires
-      // after the first genuine user gesture on the page).
-      try { new Audio('/cash.mp3').play().catch(() => {}); } catch (_) {}
-    });
-  } catch (_) {}
+  // (No sound: the cash-register sound was removed at the owner's request.)
 }
 
 // UI: floating "Enable notifications" prompt while permission is still default.
@@ -201,42 +190,4 @@ document.addEventListener('DOMContentLoaded', () => {
   }, 2500);
 });
 
-// Prime the cash-register audio on the first user gesture so mobile browsers
-// (which block autoplay until they see interaction) allow subsequent
-// programmatic plays. Play muted the first time, then unmute for real
-// notifications — the muted play satisfies the autoplay policy.
-(function primeOrderChime() {
-  const unlock = () => {
-    try {
-      const a = new Audio('/cash.mp3');
-      a.muted = true;
-      a.play().then(() => {
-        a.pause();
-        a.currentTime = 0;
-        a.muted = false;
-        window._orderChime = a;
-      }).catch(() => {});
-    } catch (_) {}
-    window.removeEventListener('pointerdown', unlock);
-    window.removeEventListener('keydown', unlock);
-    window.removeEventListener('touchstart', unlock);
-  };
-  window.addEventListener('pointerdown', unlock, { once: true, passive: true });
-  window.addEventListener('keydown', unlock, { once: true });
-  window.addEventListener('touchstart', unlock, { once: true, passive: true });
-})();
 
-// If the service worker (Web Push) delivers a notification while the app is
-// open in the background, it can post a message to any open clients — we
-// use that to fire the cash chime alongside the system banner.
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.addEventListener('message', (e) => {
-    if (e.data && e.data.type === 'play-cash-sound') {
-      try {
-        const a = window._orderChime ? window._orderChime.cloneNode() : new Audio('/cash.mp3');
-        a.volume = 1.0;
-        a.play().catch(() => {});
-      } catch (_) {}
-    }
-  });
-}

@@ -1,22 +1,19 @@
+// Short beep used only by the "cancelled after prep — DO NOT SHIP" alarm.
+// (The cash-register sound for new orders was removed at the owner's request.)
 function playNotificationSound() {
   try {
-    const audio = new Audio('/cash.mp3');
-    audio.volume = 1.0;
-    audio.play().catch(() => {
-      // fallback beep if audio fails
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const oscillator = ctx.createOscillator();
-      const gainNode = ctx.createGain();
-      oscillator.connect(gainNode);
-      gainNode.connect(ctx.destination);
-      oscillator.type = "sine";
-      oscillator.frequency.setValueAtTime(880, ctx.currentTime);
-      oscillator.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.3);
-      gainNode.gain.setValueAtTime(0.5, ctx.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
-      oscillator.start(ctx.currentTime);
-      oscillator.stop(ctx.currentTime + 0.5);
-    });
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+    oscillator.connect(gainNode);
+    gainNode.connect(ctx.destination);
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(880, ctx.currentTime);
+    oscillator.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.3);
+    gainNode.gain.setValueAtTime(0.5, ctx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+    oscillator.start(ctx.currentTime);
+    oscillator.stop(ctx.currentTime + 0.5);
   } catch(e) {}
 }
 // Add this function anywhere in app.js:
@@ -2300,7 +2297,6 @@ function renderOrders() {
   const prevCount = parseInt(sessionStorage.getItem("protech_order_count") || "0");
   const newCount = cache.orders.length;
   if (newCount > prevCount && prevCount !== 0) {
-    playNotificationSound();
     showToast("🛒 طلب جديد وصل!");
   }
   sessionStorage.setItem("protech_order_count", newCount);
