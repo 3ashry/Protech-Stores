@@ -268,3 +268,44 @@ from public.products p
 left join agent.unit_cost uc on uc.code = p.code
 left join agent.product_performance pp on pp.code = p.code
 cross join recent r cross join ads a;
+
+-- ---------------------------------------------------------------------------
+-- Confirmation test: do orders shipped WITHOUT confirmation pay off?
+-- Groups every order sent to prep since tracking began (confirmed_at_prep set):
+--   confirmed_first   customer confirmed before it went to prep
+--   confirmed_later   shipped unconfirmed, customer confirmed afterwards
+--   never_responded   shipped unconfirmed, customer never confirmed or cancelled
+--   cancelled_after   shipped unconfirmed, customer cancelled after prep
+-- Break-even for the unconfirmed groups: delivered share must beat
+-- avg return courier / (avg delivered profit + avg return courier) — shown
+-- per row from the same period's own averages.
+-- ---------------------------------------------------------------------------
+create or replace view agent.confirmation_test as
+with shipped as (
+  select o.id, o.confirmed_at_prep,
+         case when o.confirmed_at_prep then 'confirmed_first'
+              when o.customer_confirmed is true then 'confirmed_later'
+              when o.customer_confirmed is false or o.post_prep_cancel_at is not null then 'cancelled_after'
+              else 'never_responded' end as grp,
+         e.outcome, e.gross_profit, e.courier_cost
+  from public.orders o
+  join agent.order_economics e on e.order_id = o.id
+  where o.confirmed_at_prep is not null
+),
+avgs as (
+  select avg(gross_profit) filter (where outcome = 'delivered') as avg_delivered_profit,
+         avg(courier_cost) filter (where outcome = 'returned')  as avg_return_courier
+  from agent.order_economics
+)
+select s.grp,
+       count(*) as shipped,
+       count(*) filter (where s.outcome = 'delivered') as delivered,
+       count(*) filter (where s.outcome = 'returned')  as returned,
+       count(*) filter (where s.outcome = 'cancelled') as cancelled,
+       count(*) filter (where s.outcome in ('open','not_shipped')) as in_progress,
+       round(100.0 * count(*) filter (where s.outcome = 'delivered')
+             / nullif(count(*) filter (where s.outcome in ('delivered','returned')), 0), 1) as delivered_pct,
+       round(100.0 * a.avg_return_courier / nullif(a.avg_delivered_profit + a.avg_return_courier, 0), 1) as break_even_delivered_pct,
+       round(sum(s.gross_profit) filter (where s.outcome in ('delivered','returned')), 0) as profit_before_ads
+from shipped s cross join avgs a
+group by s.grp, a.avg_delivered_profit, a.avg_return_courier;
