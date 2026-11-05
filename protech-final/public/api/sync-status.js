@@ -404,7 +404,7 @@ async function runAramexSync() {
   for (const o of open.filter(x => !x.shipping_label_url && x.status === 'Processing').slice(0, 20)) {
     try {
       const l = await aramexLabel(o.ship_code);
-      if (l.ok && (await sbPatch(o.id, { shipping_label_url: l.url })).ok) out.labels++;
+      if (l.ok && (await sbPatch(o.id, { shipping_label_url: l.url })).ok) { out.labels++; out.labelTemplate = l.reportId; if (l.errors.length) out.labelNotes = l.errors; }
       else if (l.errors.length) out.errors.push(`label ${o.code}: ${l.errors.map(e => e.code + ' ' + e.message).join('; ')}`);
     } catch (e) { out.errors.push(`label ${o.code}: ${e.message}`); }
   }

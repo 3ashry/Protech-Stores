@@ -255,7 +255,9 @@ export async function aramexCreateShipment(order, { weightKg, mode = 'live' } = 
     },
     Attachments: [], ForeignHAWB: '', TransportType: 0, PickupGUID: '', Number: null, ScheduledDelivery: null,
   };
-  const body = { LabelInfo: { ReportID: 9201, ReportType: 'URL' }, Shipments: [shipment] };
+  // No label here: an unknown template would fail the whole creation. The
+  // caller asks for the label separately (aramexLabel, with a fallback).
+  const body = { LabelInfo: null, Shipments: [shipment] };
   const r = await aramexCall('Shipping', 'CreateShipments', body, mode);
   const sh = r.data && Array.isArray(r.data.Shipments) ? r.data.Shipments[0] : null;
   const errors = [...aramexErrors(r.data), ...aramexErrors(sh)];
@@ -269,13 +271,24 @@ export async function aramexCreateShipment(order, { weightKg, mode = 'live' } = 
 }
 
 // Label URL for an existing shipment.
+// Label template. 9729 is Aramex's COD label (prints the amount to collect);
+// 9201 is the standard one. ARAMEX_LABEL_REPORT_ID overrides.
+const LABEL_REPORT_ID = () => parseInt(env('ARAMEX_LABEL_REPORT_ID'), 10) || 9729;
+
+// Label URL for an existing shipment — the COD template first, the standard
+// one if Aramex refuses it.
 export async function aramexLabel(awb, mode = 'live') {
-  const r = await aramexCall('Shipping', 'PrintLabel', {
-    LabelInfo: { ReportID: 9201, ReportType: 'URL' },
-    OriginEntity: aramexClientInfo(mode).AccountEntity, ProductGroup: 'DOM', ShipmentNumber: String(awb),
-  }, mode);
-  const url = r.data && r.data.ShipmentLabel ? r.data.ShipmentLabel.LabelURL : null;
-  return { ok: !!url, url, errors: aramexErrors(r.data) };
+  const errors = [];
+  for (const reportId of [...new Set([LABEL_REPORT_ID(), 9201])]) {
+    const r = await aramexCall('Shipping', 'PrintLabel', {
+      LabelInfo: { ReportID: reportId, ReportType: 'URL' },
+      OriginEntity: aramexClientInfo(mode).AccountEntity, ProductGroup: 'DOM', ShipmentNumber: String(awb),
+    }, mode);
+    const url = r.data && r.data.ShipmentLabel ? r.data.ShipmentLabel.LabelURL : null;
+    if (url) return { ok: true, url, reportId, errors };
+    errors.push(...aramexErrors(r.data).map(e => ({ ...e, reportId })));
+  }
+  return { ok: false, url: null, errors };
 }
 
 // Tracking history for up to 50 shipments: Map awb → [{code, description,
