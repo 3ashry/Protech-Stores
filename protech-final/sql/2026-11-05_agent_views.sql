@@ -11,7 +11,8 @@
 --   * Courier cost     = actual_shipping, charged on delivered AND returned orders.
 --   * Unit cost        = latest Elashry invoice price for that code (total/qty
 --                        from supplier_invoices.price_map); if the code was
---                        never invoiced, products.buy_price (list price).
+--                        never invoiced, products.buy_price (matches the
+--                        invoiced net price within ~0.3% where both exist).
 --   * Ad spend         = meta_ad_spend_daily (Meta's daily spend).
 --   * Media buyer      = 1% of (goods revenue − courier cost) on delivered
 --                        orders + 20% of ad spend.

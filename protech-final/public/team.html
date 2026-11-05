@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#ec3013">
+<title>Protech Team</title>
+<link rel="icon" href="/favicon.png">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  :root {
+    --acc: #ec3013; --acc-tint: #fff2ef; --ink: #201e1d; --muted: #6b6461;
+    --bg: #f3f2f2; --card: #ffffff; --line: rgba(32,30,29,.14);
+    --info: #2563eb; --warn: #d97706; --alert: #dc2626; --ok: #16a34a;
+  }
+  html, body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 'Segoe UI', Tahoma, system-ui, sans-serif; }
+  header { position: sticky; top: 0; z-index: 2; background: var(--ink); color: #fff;
+    display: flex; align-items: center; gap: 12px; padding: 12px 16px; }
+  header h1 { font-size: 17px; margin: 0; flex: 1; }
+  header a { color: #fff; opacity: .8; text-decoration: none; font-size: 14px; }
+  .wrap { display: grid; grid-template-columns: 340px 1fr; gap: 16px; padding: 16px; max-width: 1200px; margin: 0 auto; }
+  .list { display: flex; flex-direction: column; gap: 8px; }
+  .filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
+  .chip { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 4px 10px;
+    font-size: 13px; cursor: pointer; color: var(--ink); }
+  .chip.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .item { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--info);
+    border-radius: 8px; padding: 10px 12px; cursor: pointer; }
+  .item.warn { border-left-color: var(--warn); } .item.alert { border-left-color: var(--alert); }
+  .item.sel { outline: 2px solid var(--acc); }
+  .item .k { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; }
+  .item .t { font-weight: 600; margin-top: 2px; }
+  .detail { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px 22px; min-height: 300px; overflow-wrap: anywhere; }
+  .detail h2 { margin: 0 0 4px; font-size: 20px; }
+  .meta { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+  .summary { background: var(--acc-tint); border-radius: 8px; padding: 10px 12px; white-space: pre-wrap; margin-bottom: 16px; }
+  .md table { border-collapse: collapse; width: 100%; font-size: 14px; display: block; overflow-x: auto; }
+  .md th, .md td { border: 1px solid var(--line); padding: 5px 8px; text-align: left; }
+  .md th { background: #f6f4f4; }
+  .md code { background: #f1efef; padding: 1px 4px; border-radius: 4px; font-size: 13px; }
+  details { margin-top: 16px; } summary { cursor: pointer; color: var(--muted); }
+  pre { background: #1d1b1a; color: #eee; padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 12px; }
+  .empty, .msg { color: var(--muted); padding: 24px; text-align: center; }
+  .tg { font-size: 12px; } .tg.bad { color: var(--alert); }
+  @media (max-width: 800px) {
+    .wrap { grid-template-columns: 1fr; padding: 12px 16px; }
+    .wrap.viewing .list { display: none; }
+    .back { display: inline-block !important; }
+  }
+  .back { display: none; margin-bottom: 10px; color: var(--acc); cursor: pointer; font-size: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🧠 Protech Team</h1>
+  <a href="/">← Admin</a>
+</header>
+<div class="wrap" id="wrap">
+  <div class="list">
+    <div class="filters" id="filters"></div>
+    <div id="items"><div class="msg">Loading…</div></div>
+  </div>
+  <div class="detail" id="detail"><div class="empty">Pick a report.</div></div>
+</div>
+<script>
+const SUPABASE_URL = 'https://wljxplbcfoorqpoflcdz.supabase.co';
+const ANON = 'sb_publishable_zsHh-eOarHI7BSGtuP6WWQ_PQ4ACoHG';
+const KIND = { daily_check: 'Daily check', weekly_brief: 'Weekly brief', pricing: 'Pricing',
+  market: 'Market research', alert: 'Alert', test: 'Test' };
+let token = null, reports = [], filter = 'all';
+
+function store(k, v, s) { try { (s ? sessionStorage : localStorage).setItem(k, v); } catch (_) {} }
+function read(k, s) { try { return (s ? sessionStorage : localStorage).getItem(k); } catch (_) { return null; } }
+
+// Reuse the admin's sign-in: same storage keys as js/db.js. Refreshing
+// rotates the refresh token, so the new one is written back for the admin.
+async function getToken(forceRefresh) {
+  if (!forceRefresh) { const t = read('pt_access', true); if (t) return t; }
+  const rt = read('pt_refresh');
+  if (!rt) return null;
+  const r = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+    method: 'POST', headers: { apikey: ANON, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh_token: rt }) });
+  if (!r.ok) return null;
+  const d = await r.json();
+  if (!d.access_token) return null;
+  store('pt_access', d.access_token, true); store('pt_refresh', d.refresh_token); store('pt_auth', '1', true);
+  return d.access_token;
+}
+
+async function load(retried) {
+  token = await getToken(retried);
+  if (!token) { document.getElementById('items').innerHTML = '<div class="msg">Sign in to the <a href="/">admin</a> first, then come back.</div>'; return; }
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/agent_reports?select=*&order=created_at.desc&limit=100`,
+    { headers: { apikey: ANON, Authorization: 'Bearer ' + token } });
+  if (r.status === 401 && !retried) return load(true);
+  if (!r.ok) { document.getElementById('items').innerHTML = '<div class="msg">Could not load reports.</div>'; return; }
+  reports = await r.json();
+  renderFilters(); renderList();
+  const m = location.hash.match(/^#r(\d+)$/);
+  const pick = m ? reports.find(x => String(x.id) === m[1]) : null;
+  if (pick) show(pick.id); else if (reports[0] && innerWidth > 800) show(reports[0].id);
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+function when(t) { return new Date(t).toLocaleString('en-GB', { timeZone: 'Africa/Cairo', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); }
+
+function renderFilters() {
+  const kinds = ['all', ...new Set(reports.map(r => r.kind))];
+  document.getElementById('filters').innerHTML = kinds.map(k =>
+    `<button class="chip ${k === filter ? 'on' : ''}" data-k="${esc(k)}">${esc(k === 'all' ? 'All' : (KIND[k] || k))}</button>`).join('');
+  document.querySelectorAll('.chip').forEach(b => b.onclick = () => { filter = b.dataset.k; renderFilters(); renderList(); });
+}
+
+function renderList() {
+  const rows = reports.filter(r => filter === 'all' || r.kind === filter);
+  document.getElementById('items').innerHTML = rows.length ? rows.map(r => `
+    <div class="item ${esc(r.severity)}" id="i${r.id}" data-id="${r.id}">
+      <div class="k"><span>${esc(KIND[r.kind] || r.kind)} · ${esc(r.agent)}</span><span>${when(r.created_at)}</span></div>
+      <div class="t">${esc(r.title)}</div>
+    </div>`).join('') : '<div class="msg">No reports yet.</div>';
+  document.querySelectorAll('.item').forEach(el => el.onclick = () => show(+el.dataset.id));
+}
+
+function show(id) {
+  const r = reports.find(x => x.id === id); if (!r) return;
+  document.querySelectorAll('.item').forEach(el => el.classList.toggle('sel', +el.dataset.id === id));
+  history.replaceState(null, '', '#r' + id);
+  document.getElementById('wrap').classList.add('viewing');
+  const tg = r.telegram_error ? `<span class="tg bad">Telegram failed: ${esc(r.telegram_error)}</span>`
+    : r.telegram_sent_at ? '<span class="tg">Sent to Telegram</span>' : (r.notify ? '<span class="tg">Telegram pending</span>' : '<span class="tg">Saved only</span>');
+  const md = r.body_md ? DOMPurify.sanitize(marked.parse(r.body_md)) : '';
+  document.getElementById('detail').innerHTML = `
+    <span class="back" id="back">← All reports</span>
+    <h2>${esc(r.title)}</h2>
+    <div class="meta">${esc(KIND[r.kind] || r.kind)} · ${esc(r.agent)} · ${when(r.created_at)} · ${tg}</div>
+    <div class="summary">${esc(r.summary)}</div>
+    <div class="md">${md}</div>
+    ${r.data ? `<details><summary>Numbers and queries behind this report</summary><pre>${esc(JSON.stringify(r.data, null, 2))}</pre></details>` : ''}`;
+  document.getElementById('back').onclick = () => { document.getElementById('wrap').classList.remove('viewing'); };
+}
+
+load(false).catch(() => { document.getElementById('items').innerHTML = '<div class="msg">Could not load reports.</div>'; });
+</script>
+</body>
+</html>
