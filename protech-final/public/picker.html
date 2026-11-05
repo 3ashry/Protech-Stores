@@ -280,7 +280,7 @@ function orderCard(o, tab) {
   const bostaBtn = !o.ship_code
     ? `<span class="wa" style="opacity:.5;cursor:not-allowed" title="لا يوجد كود شحن مسجل بعد">🚚 لا يوجد كود شحن</span>`
     : o.courier === 'aramex'
-      ? `<a class="wa" href="${esc(o.label_url || ('https://www.aramex.com/eg/ar/track/results?ShipmentNumber=' + encodeURIComponent(o.ship_code)))}" target="_blank" rel="noopener">🖨️ طباعة بوليصة أرامكس</a>`
+      ? `<a class="wa" href="javascript:void(0)" onclick="openAwb('${esc(o.id)}')">🖨️ طباعة البوليصة</a>`
       : `<a class="wa" href="${bostaAwbLink(o.ship_code)}" target="_blank" rel="noopener">🚚 فتح بوسطة (AWB)</a>`;
   // Bottom action per tab:
   //   • preparing → "✅ تم التجهيز" button (flips row into "ready")
@@ -315,6 +315,22 @@ function orderCard(o, tab) {
       <div class="total"><span>الإجمالي</span><span>${money(o.total)} ج.م</span></div>
       ${bottomAction}
     </div>`;
+}
+
+// Open the Aramex airway bill (bolisa) ready to print. The tab is opened
+// straight away (inside the tap, so the browser doesn't block it) and pointed
+// at a fresh label link once the server has it.
+async function openAwb(orderId) {
+  const w = window.open('', '_blank');
+  if (w) w.document.write('<p style="font-family:sans-serif;padding:24px;text-align:center">جاري تحميل البوليصة…</p>');
+  try {
+    const j = await apiCall('label', { orderId });
+    if (!j.url) throw new Error('no label');
+    if (w) w.location.href = j.url; else window.location.href = j.url;
+  } catch (e) {
+    if (w) w.close();
+    alert('تعذر فتح البوليصة: ' + (e.message || 'خطأ'));
+  }
 }
 
 // Print the customer-facing invoice — same template as the admin's

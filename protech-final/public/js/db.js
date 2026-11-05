@@ -94,7 +94,6 @@ function showApp() {
   document.getElementById('app').style.display = 'block';
   loadUserRole();
   loadAll();
-  try { const a = new Audio('/cash.mp3'); a.volume = 0; a.play().catch(()=>{}); } catch(e) {}
 }
 
 async function doLogin() {

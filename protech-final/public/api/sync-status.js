@@ -928,6 +928,29 @@ export default async function handler(req, res) {
         if (!r.ok) return res.status(502).json({ error: 'DB write failed', detail: await r.text() });
         return res.status(200).json({ ok: true });
       }
+      if (op === 'label') {
+        // Fresh Aramex label (bolisa) link for one order, fetched when the
+        // prep staff tap "print" — Aramex's label links are cached reports
+        // and may expire, so the stored one is only a fallback.
+        const orderId = (req.query?.orderId || '').toString();
+        if (!/^[A-Za-z0-9_-]+$/.test(orderId)) return res.status(400).json({ error: 'Bad orderId' });
+        const rr = await sbGet(`orders?select=id,ship_code,courier,shipping_label_url&id=eq.${encodeURIComponent(orderId)}&limit=1`);
+        const o = rr && rr[0];
+        if (!o || !o.ship_code) return res.status(404).json({ error: 'No shipment for this order' });
+        if (o.courier !== 'aramex') return res.status(200).json({ ok: true, url: `https://business.bosta.co/orders/${encodeURIComponent(o.ship_code)}` });
+        try {
+          const l = await aramexLabel(o.ship_code);
+          if (l.ok) {
+            if (l.url !== o.shipping_label_url) await sbPatch(o.id, { shipping_label_url: l.url });
+            return res.status(200).json({ ok: true, url: l.url });
+          }
+          if (o.shipping_label_url) return res.status(200).json({ ok: true, url: o.shipping_label_url, stale: true });
+          return res.status(502).json({ error: 'Aramex: ' + l.errors.map(e => `${e.code} ${e.message}`).join('; ') });
+        } catch (e) {
+          if (o.shipping_label_url) return res.status(200).json({ ok: true, url: o.shipping_label_url, stale: true });
+          return res.status(502).json({ error: e.message });
+        }
+      }
       if (op === 'invoice') {
         // Full order details for the printed invoice sheet — the ONLY
         // op that returns per-line prices to the picker page. Called on
