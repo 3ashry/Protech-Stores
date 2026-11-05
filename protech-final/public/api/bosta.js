@@ -97,9 +97,13 @@ export default async function handler(req, res) {
   const order = ((await orderRes.json().catch(() => [])) || [])[0];
   if (!order) return res.status(404).json({ error: 'Order not found' });
 
-  const sbPatch = (patch) => sbFetch(`orders?id=eq.${encodeURIComponent(orderId)}`, {
-    method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(patch),
-  });
+  const sbPatch = async (patch) => {
+    const r = await sbFetch(`orders?id=eq.${encodeURIComponent(orderId)}`, {
+      method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(patch),
+    });
+    if (!r.ok) console.error('order update failed', orderId, Object.keys(patch).join(','), r.status, (await r.text().catch(() => '')).slice(0, 300));
+    return r;
+  };
   if (!order.second_phone && body.secondPhone) {
     order.second_phone = String(body.secondPhone);
     try { await sbPatch({ second_phone: order.second_phone }); } catch (_) {}
@@ -165,10 +169,11 @@ export default async function handler(req, res) {
       await sbPatch({ courier: 'aramex', ship_error: msg, calc_shipping: estimate.total }).catch(() => {});
       return res.status(200).json({ success: false, aramexError: msg, whatsapp: waResult });
     }
-    await sbPatch({
-      courier: 'aramex', ship_code: r.awb, shipping_label_url: r.labelUrl, ship_error: null,
-      ship_sent_at: new Date().toISOString(), calc_shipping: estimate.total, actual_shipping: 0,
-    });
+    // The tracking number is saved on its own first, so a problem with any
+    // other field can never lose it (that happened once: a missing column
+    // failed the whole update while Aramex had created the shipment).
+    await sbPatch({ courier: 'aramex', ship_code: r.awb, ship_error: null, ship_sent_at: new Date().toISOString() });
+    await sbPatch({ shipping_label_url: r.labelUrl, calc_shipping: estimate.total, actual_shipping: 0 });
     console.log('Aramex shipment created', order.code, r.awb);
     return res.status(200).json({ success: true, trackingNumber: r.awb, labelUrl: r.labelUrl, estimate, whatsapp: waResult });
   } catch (e) {
