@@ -2988,16 +2988,19 @@ async function delOrder(id) {
   } catch (e) { showToast('Error: ' + e.message); }
 }
 
-// Cancelling an order returns its products to inventory and deletes the order entirely.
-// Stock is only restored if it hasn't already been returned (warehouse_confirmed).
+// Cancelling an order returns its products to inventory and marks it
+// Cancelled — it is never deleted (the owner wants every cancelled order kept;
+// see them with "Show cancelled"). Stock is only restored if it hasn't already
+// been returned (warehouse_confirmed).
 async function cancelOrder(id) {
   const order = cache.orders.find(x => x.id === id);
   if (!order) return;
+  if (order.status === 'Cancelled') { showToast('Already cancelled'); return; }
   // Phase 3: an order that was already SENT TO PREP must not just vanish — if
   // it's cancelled now, the prep staff could ship it by mistake. So instead of
   // deleting it we keep it on the board, flagged "DO NOT SHIP", and raise a
   // sticky popup+alarm until a prep employee acknowledges it. Orders cancelled
-  // BEFORE reaching prep carry no shipping risk, so they're deleted as before.
+  // BEFORE reaching prep carry no shipping risk; they are simply marked Cancelled.
   // Only an order the prep center already PREPARED raises the DO NOT SHIP
   // alarm. One that was sent but not prepared yet is kept as "failed before
   // preparing" (it simply drops off the prep queue).
@@ -3007,7 +3010,7 @@ async function cancelOrder(id) {
     ? 'Cancel this order?\nIt was already prepared, so the prep center gets a "DO NOT SHIP" popup until they acknowledge it, and its stock goes back to inventory.'
     : sentToPrep
     ? 'Cancel this order?\nIt is marked "failed before preparing" and removed from the prep queue; its stock goes back to inventory.'
-    : 'Cancel this order?\nIts products go back to inventory and the order is deleted permanently.';
+    : 'Cancel this order?\nIt is marked Cancelled (kept, not deleted) and its products go back to inventory.';
   if (!confirm(msg)) return;
   try {
     if (!order.warehouse_confirmed) {
@@ -3038,9 +3041,12 @@ async function cancelOrder(id) {
       try { logAudit('order.cancel_before_prep', { entity: 'orders', entity_id: order.code || id, summary: 'Order cancelled before it was prepared' }); } catch (_) {}
       showToast('Order cancelled — failed before preparing, stock restored ✓');
     } else {
-      await dbDelete('orders', id);
-      cache.orders = cache.orders.filter(x => x.id !== id);
-      showToast('Order cancelled — stock restored & order deleted ✓');
+      const patch = { status: 'Cancelled', customer_confirmed: false, confirm_outcome: 'cancelled', cancel_stage: 'before_prep' };
+      await dbUpdate('orders', id, patch);
+      const i = cache.orders.findIndex(x => x.id === id);
+      if (i >= 0) cache.orders[i] = { ...cache.orders[i], ...patch };
+      try { logAudit('order.cancel', { entity: 'orders', entity_id: order.code || id, summary: 'Order cancelled (kept, stock restored)' }); } catch (_) {}
+      showToast('Order cancelled — kept as Cancelled, stock restored ✓');
     }
     closeModal(); renderAllKeepScroll();
     if (typeof renderPostPrepCancelAlert === 'function') renderPostPrepCancelAlert();
