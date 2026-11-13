@@ -2301,12 +2301,13 @@ function renderOrders() {
   }
   sessionStorage.setItem("protech_order_count", newCount);
   const smap = { 'Processing': 'b-info', 'In Transit': 'b-warning', 'Heading to Customer': 'b-orange', 'Delivered': 'b-success', 'On its way to me': 'b-purple', 'Returned': 'b-purple', 'Cancelled': 'b-danger', 'Awaiting Action': 'b-danger' };
-  // Cancelled orders are removed entirely from the list (and are excluded from
-  // all money calcs) — EXCEPT a post-prep cancellation that the prep center
-  // hasn't acknowledged yet: that one stays visible, flagged "DO NOT SHIP",
-  // until someone acknowledges it (Phase 3).
-  const showCancelled = !!document.getElementById('orders-show-cancelled')?.checked;
-  let visibleOrders = cache.orders.filter(o => showCancelled || o.status !== 'Cancelled' || isPostPrepCancelled(o));
+  // Cancelled orders (from the dashboard or by the customer on WhatsApp) stay
+  // in the list, greyed out with their "Cancelled" label — they are never
+  // deleted, and they're still excluded from all money calcs. "Hide cancelled"
+  // removes them from view, except a post-prep cancellation the prep center
+  // hasn't acknowledged yet (flagged "DO NOT SHIP"), which always shows.
+  const hideCancelled = !!document.getElementById('orders-hide-cancelled')?.checked;
+  let visibleOrders = cache.orders.filter(o => !hideCancelled || o.status !== 'Cancelled' || isPostPrepCancelled(o));
   // Free-text search — matches against every field the user is likely
   // to search by. Case-insensitive, matches partial words, and Arabic
   // digits get normalised to ASCII so "٠١٢٠٨" matches "01208".
@@ -2329,7 +2330,7 @@ function renderOrders() {
     ? `${visibleOrders.length} match${visibleOrders.length === 1 ? '' : 'es'}`
     : '';
   document.getElementById('orders-tbody').innerHTML = visibleOrders.length ? visibleOrders.map(o => `
-    <tr${o.status === 'Awaiting Action' ? ' style="background:#fff4f4"' : ''}>
+    <tr${o.status === 'Awaiting Action' ? ' style="background:#fff4f4"' : (o.status === 'Cancelled' && !isPostPrepCancelled(o) ? ' style="background:#f6f6f6;opacity:.7"' : '')}>
       <td><span class="badge b-orange">${esc(o.code)}</span> ${o.status === 'Cancelled' && o.cancel_stage === 'before_prep' ? '<span class="badge b-gray" title="Cancelled before the prep center prepared it">❌ Failed before preparing</span> ' : ''}${o.status === 'Cancelled' && o.cancel_stage === 'after_prep' && !isPostPrepCancelled(o) ? '<span class="badge b-danger" title="Cancelled after it was prepared — prep center acknowledged">🚫 Cancelled after preparing</span> ' : ''}${isPostPrepCancelled(o) ? '<span class="badge b-danger" style="animation:ppcPulse 1s infinite" title="Cancelled after it was sent to prep — DO NOT SHIP">🚫 CANCELLED — DO NOT SHIP</span> ' : ''}${orderProgressBadge(o)}${!o.ship_code && o.ship_error && o.status === 'Processing' ? ` <span class="badge b-danger" title="${esc(o.ship_error)}">⚠️ Not sent to Aramex</span>` : ''}${o.allow_open ? ' <span class="badge b-warning" title="Wants to open the package before paying">📦</span>' : ''}${o.status === 'Returned' && !o.warehouse_confirmed ? ' <span class="badge b-danger" title="Returned — not back in the warehouse yet">↩️ Not in warehouse</span>' : ''}${o.picker_prepared_at ? ' <span class="badge b-success" title="Prepared by the picker">✅ Ready</span>' : ''}${o.revised_at ? ' <span class="badge b-success" title="Reviewed">📝 Reviewed</span>' : ''}${o.pending_elashry_at ? ' <span class="badge b-warning" title="In the Elashry returns list">📦 Elashry list</span>' : ''}${o.needs_call ? ` <span class="badge b-danger" title="${esc(o.needs_call_reason || 'Needs a call')}">📞 Needs call</span>` : ''}${cashCycleBadge(o)}</td>
       <td><strong>${esc(o.customer_name)}</strong></td>
       <td>${phoneCell(o)}</td>
