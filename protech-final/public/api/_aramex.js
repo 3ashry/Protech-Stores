@@ -324,6 +324,34 @@ export function aramexStatusOf(u) {
   return null;
 }
 
+// Status from a shipment's WHOLE history (sorted oldest → newest), not just
+// the newest event. Aramex keeps adding events after delivery ("Shipment
+// charges paid", "Shipment Update", cash "collected"…), and those used to
+// leave a delivered order stuck on an older status or even flip it back.
+// Rules: a return-to-shipper event wins; otherwise any real delivery wins
+// (unless a return started after it); otherwise the newest event we can map.
+const RX_RETURNED = /(returned|delivered) to (shipper|sender|origin)|rts delivered|return delivered/;
+const RX_RETURNING = /\breturn|\brts\b/;
+const RX_DELIVERED = /\bdelivered\b|delivery completed/;
+export function aramexStatusFromHistory(hist) {
+  if (!Array.isArray(hist) || !hist.length) return null;
+  const desc = (u) => `${u.code} ${u.description}`.toLowerCase();
+  let deliveredAt = -1, returnedAt = -1, returningAt = -1;
+  hist.forEach((u, i) => {
+    const d = desc(u);
+    if (RX_RETURNED.test(d)) returnedAt = i;
+    else if (RX_RETURNING.test(d)) returningAt = i;
+    else if (RX_DELIVERED.test(d) && !/attempt|not delivered|undelivered|failed/.test(d)) deliveredAt = i;
+  });
+  if (returnedAt >= 0) return { status: 'Returned', event: hist[returnedAt] };
+  if (deliveredAt >= 0 && returningAt < deliveredAt) return { status: 'Delivered', event: hist[deliveredAt] };
+  for (let i = hist.length - 1; i >= 0; i--) {
+    const m = aramexStatusOf(hist[i]);
+    if (m) return { status: m, event: hist[i] };
+  }
+  return null;
+}
+
 export function aramexTrackingUrl(awb) {
   return `https://www.aramex.com/eg/ar/track/results?ShipmentNumber=${encodeURIComponent(String(awb || ''))}`;
 }
