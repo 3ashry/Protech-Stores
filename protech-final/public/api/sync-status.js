@@ -6,7 +6,7 @@
 //   Returned/Cancelled or returned-to-stock.
 // - Tries to read the actual shipping fee from Bosta's pricing if present (usually empty).
 import { tgNotifyStatusChange, tgSendDailySummary, tgConfigured } from './_telegram.js';
-import { aramexCall, aramexErrors, aramexEnvStatus, aramexConfigured, aramexBaseUrl, aramexTrack, aramexStatusOf, aramexLoginShape, aramexLabel } from './_aramex.js';
+import { aramexCall, aramexErrors, aramexEnvStatus, aramexConfigured, aramexBaseUrl, aramexTrack, aramexStatusOf, aramexStatusFromHistory, aramexLoginShape, aramexLabel } from './_aramex.js';
 
 // Vercel: tell the platform we need the full function-duration window.
 // The default on Pro is 10s and the sync (hundreds of per-order Bosta
@@ -418,13 +418,14 @@ async function runAramexSync() {
       const hist = tr.results.get(String(o.ship_code)) || [];
       if (!hist.length) continue;
       const last = hist[hist.length - 1];
-      const mapped = aramexStatusOf(last);
+      const derived = aramexStatusFromHistory(hist);
+      const mapped = derived ? derived.status : null;
       const patch = {};
       const statusText = [last.description, last.location].filter(Boolean).join(' — ').slice(0, 300);
       if (statusText && statusText !== o.courier_status) { patch.courier_status = statusText; patch.courier_status_at = last.at || new Date().toISOString(); }
       if (mapped && mapped !== o.status && !o.warehouse_confirmed) {
         patch.status = mapped;
-        if (mapped === 'Delivered' && !o.delivered_at) patch.delivered_at = last.at || new Date().toISOString();
+        if (mapped === 'Delivered' && !o.delivered_at) patch.delivered_at = (derived.event && derived.event.at) || last.at || new Date().toISOString();
         if (mapped === 'Delivered' && o.needs_call) patch.needs_call = false;
         if (mapped === 'Awaiting Action') { patch.needs_call = true; patch.needs_call_reason = ('أرامكس: ' + (last.description || last.problem || 'مشكلة في التوصيل')).slice(0, 200); }
       }
@@ -466,6 +467,23 @@ export default async function handler(req, res) {
   // Aramex account (or Aramex's sandbox with env=test): lists Egypt's cities,
   // creates nothing. Reports which live settings exist (true/false only,
   // never their values) and Aramex's own error messages.
+  // ?action=aramex-track&awb=<number> — read-only: the Aramex tracking history
+  // of ONE of our own shipments (must exist in orders) and the status the sync
+  // derives from it. Same information as Aramex's public tracking page.
+  if (action === 'aramex-track') {
+    const awb = String(req.query?.awb || '').replace(/\D/g, '').slice(0, 20);
+    if (!awb) return res.status(400).json({ error: 'awb required' });
+    const own = await sbGet(`orders?select=code,status&ship_code=eq.${awb}&limit=1`);
+    if (!own.length) return res.status(404).json({ error: 'not one of our shipments' });
+    try {
+      const tr = await aramexTrack([awb]);
+      const hist = tr.results.get(awb) || [];
+      const derived = aramexStatusFromHistory(hist);
+      return res.status(200).json({ awb, ourStatus: own[0].status, derivedStatus: derived && derived.status,
+        events: hist.map(u => ({ at: u.at, code: u.code, description: u.description, location: u.location, problem: u.problem, perEventStatus: aramexStatusOf(u) })),
+        errors: tr.errors });
+    } catch (e) { return res.status(502).json({ error: e.message }); }
+  }
   if (action === 'aramex-check') {
     const mode = req.query?.env === 'test' ? 'test' : 'live';
     const envPresent = aramexEnvStatus();
