@@ -15,8 +15,11 @@ Claude session in this repo is the **Maestro**; the specialists live in
   delivery and every customer opens the parcel before paying; no partial
   deliveries.
 - Courier: Bosta historically; moving to Aramex (Nov 2026).
-- Marketing: paid Meta ads run by a media buyer (paid 1% of each delivered
-  order's sales after courier cost + 20% of Meta ad spend), plus organic video
+- Marketing: paid Meta ads run by a media buyer, paid monthly. Orders placed
+  from 24 Nov 2026: 2% of the products value (no shipping) of each order once
+  it is delivered, nothing on ad spend. Orders placed before that: 1% of each
+  delivered order's sales after courier cost + 20% of Meta ad spend (spend
+  before 24 Nov 2026). Plus organic video
   in five series only: معمل بروتيك (lab tests + result posts), WhatsApp
   questions, Real workers, voiceover product videos (قبل ما تشتري), ASMR.
 - Running experiment (from 5 Nov 2026): some unconfirmed orders are shipped
