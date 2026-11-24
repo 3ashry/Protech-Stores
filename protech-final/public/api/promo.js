@@ -27,6 +27,40 @@ function normalizeCode(raw) {
   return s;
 }
 
+// Loose key for comparing Arabic codes: customers type أ/إ/آ vs ا, ة vs ه,
+// ى vs ي, add tashkeel/tatweel, spaces, dashes or underscores, Arabic digits.
+function looseKey(raw) {
+  return String(raw || '')
+    .replace(/[٠-٩]/g, d => String.fromCharCode(d.charCodeAt(0) - 0x0660 + 48))
+    .replace(/[۰-۹]/g, d => String.fromCharCode(d.charCodeAt(0) - 0x06F0 + 48))
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
+    .replace(/[أإآٱ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي')
+    .replace(/[\s_\-ـ.]+/g, '')
+    .toLowerCase();
+}
+
+// What a code gives, from promo_codes.discount:
+//   'free_shipping'                 → free shipping
+//   'product_off:<amount>:min<price>' → <amount> EGP off the order if the cart has
+//                                      a product priced at <price> or more
+function describe(discount) {
+  const d = String(discount || 'free_shipping');
+  let m = d.match(/^product_off:(\d+(?:\.\d+)?):min(\d+(?:\.\d+)?)$/);
+  if (m) return { kind: 'product_off', amount: +m[1], minItemPrice: +m[2], freeShipping: false };
+  if (d === 'free_shipping') return { kind: 'free_shipping', freeShipping: true };
+  return null;   // a type this checkout doesn't support → not accepted
+}
+
+// Find a code: exact match first (the single-use بروتيك-#### codes), then the
+// reusable codes compared loosely.
+async function findCode(norm) {
+  const exact = await sbGet(`promo_codes?code=eq.${encodeURIComponent(norm)}&select=code,used,reusable,discount&limit=1`);
+  if (exact.length) return exact[0];
+  const reusable = await sbGet('promo_codes?reusable=eq.true&select=code,used,reusable,discount');
+  const k = looseKey(norm);
+  return reusable.find(r => looseKey(r.code) === k) || null;
+}
+
 async function sbGet(path) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
@@ -51,6 +85,9 @@ export default async function handler(req, res) {
       // Only redeem against a real order (blocks burning codes without ordering).
       const ord = await sbGet(`orders?id=eq.${encodeURIComponent(orderId)}&select=id&limit=1`);
       if (!ord.length) return res.status(400).json({ ok: false, reason: 'Order not found' });
+      // Reusable codes are never "used up" — the order itself records promo_code.
+      const found = await findCode(norm);
+      if (found && found.reusable) return res.status(200).json({ ok: !found.used, code: found.code, reusable: true });
       // Atomic single-use: the used=false filter means only the FIRST redeem wins.
       const r = await fetch(`${SUPABASE_URL}/rest/v1/promo_codes?code=eq.${encodeURIComponent(norm)}&used=eq.false`, {
         method: 'PATCH',
@@ -66,10 +103,13 @@ export default async function handler(req, res) {
     }
 
     // Default: validate (no state change).
-    const rows = await sbGet(`promo_codes?code=eq.${encodeURIComponent(norm)}&select=code,used&limit=1`);
-    if (!rows.length) return res.status(200).json({ valid: false, reason: 'كود غير صحيح' });
-    if (rows[0].used) return res.status(200).json({ valid: false, reason: 'هذا الكود مستخدم من قبل' });
-    return res.status(200).json({ valid: true, code: norm, freeShipping: true });
+    const row = await findCode(norm);
+    if (!row) return res.status(200).json({ valid: false, reason: 'كود غير صحيح' });
+    // For a reusable code, used=true means it has been switched off.
+    if (row.used) return res.status(200).json({ valid: false, reason: row.reusable ? 'هذا الكود غير متاح حالياً' : 'هذا الكود مستخدم من قبل' });
+    const info = describe(row.discount);
+    if (!info) return res.status(200).json({ valid: false, reason: 'هذا الكود غير متاح حالياً' });
+    return res.status(200).json({ valid: true, code: row.code, reusable: !!row.reusable, ...info });
   } catch (e) {
     console.error('promo error', e.message);
     return res.status(500).json({ valid: false, reason: 'خطأ في الخادم' });
