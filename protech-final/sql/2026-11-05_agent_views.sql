@@ -14,8 +14,11 @@
 --                        never invoiced, products.buy_price (matches the
 --                        invoiced net price within ~0.3% where both exist).
 --   * Ad spend         = meta_ad_spend_daily (Meta's daily spend).
---   * Media buyer      = 1% of (goods revenue − courier cost) on delivered
---                        orders + 20% of ad spend.
+--   * Media buyer      = orders placed before 2026-11-24: 1% of (goods revenue −
+--                        courier cost) on delivered orders + 20% of ad spend
+--                        dated before 2026-11-24.
+--                        Orders placed from 2026-11-24: 2% of goods revenue
+--                        (products only) on delivered orders; no ads share.
 --   * Returned goods come back to stock, so a return costs courier only.
 --   * Outcomes: delivered / returned / cancelled / not_shipped (customer never
 --     confirmed, so it never left the warehouse) / open (still in progress).
@@ -143,26 +146,30 @@ with o as (
 ),
 cost as (select order_id, sum(goods_cost) as goods_cost from agent.order_lines group by 1),
 ads as (
-  select date_trunc('month', spend_date)::date as month, sum(spend) as spend
+  -- spend_buyer = spend + the media buyer's 20% (only on spend before 2026-11-24)
+  select date_trunc('month', spend_date)::date as month, sum(spend) as spend,
+         sum(spend * case when spend_date < date '2026-11-24' then 1.20 else 1 end) as spend_buyer
   from public.meta_ad_spend_daily group by 1
 ),
 per_month as (select month, count(*) as orders from o group by 1)
 select o.*,
        coalesce(c.goods_cost, 0) as goods_cost,
        round(coalesce(a.spend, 0) / nullif(pm.orders, 0), 2) as ad_cost_share,
-       round(coalesce(a.spend, 0) / nullif(pm.orders, 0) * 1.20, 2) as ad_cost_incl_buyer,
+       round(coalesce(a.spend_buyer, 0) / nullif(pm.orders, 0), 2) as ad_cost_incl_buyer,
        case o.outcome
          when 'delivered' then round(o.goods_revenue - coalesce(c.goods_cost, 0) - o.courier_cost
-                                     - 0.01 * (o.goods_revenue - o.courier_cost), 2)
+                                     - case when o.order_date >= date '2026-11-24' then 0.02 * o.goods_revenue
+                                            else 0.01 * (o.goods_revenue - o.courier_cost) end, 2)
          when 'returned'  then -o.courier_cost
          else 0 end as gross_profit,
        case o.outcome
          when 'delivered' then round(o.goods_revenue - coalesce(c.goods_cost, 0) - o.courier_cost
-                                     - 0.01 * (o.goods_revenue - o.courier_cost)
-                                     - coalesce(a.spend, 0) / nullif(pm.orders, 0) * 1.20, 2)
-         when 'returned'  then round(-o.courier_cost - coalesce(a.spend, 0) / nullif(pm.orders, 0) * 1.20, 2)
-         when 'cancelled'   then round(-coalesce(a.spend, 0) / nullif(pm.orders, 0) * 1.20, 2)
-         when 'not_shipped' then round(-coalesce(a.spend, 0) / nullif(pm.orders, 0) * 1.20, 2)
+                                     - case when o.order_date >= date '2026-11-24' then 0.02 * o.goods_revenue
+                                            else 0.01 * (o.goods_revenue - o.courier_cost) end
+                                     - coalesce(a.spend_buyer, 0) / nullif(pm.orders, 0), 2)
+         when 'returned'  then round(-o.courier_cost - coalesce(a.spend_buyer, 0) / nullif(pm.orders, 0), 2)
+         when 'cancelled'   then round(-coalesce(a.spend_buyer, 0) / nullif(pm.orders, 0), 2)
+         when 'not_shipped' then round(-coalesce(a.spend_buyer, 0) / nullif(pm.orders, 0), 2)
          else null end as profit_after_ads
 from o
 left join cost c on c.order_id = o.order_id
@@ -213,7 +220,8 @@ with wk as (
   from agent.order_economics group by 1
 ),
 ads as (
-  select date_trunc('week', spend_date)::date as week, sum(spend) as ad_spend
+  select date_trunc('week', spend_date)::date as week, sum(spend) as ad_spend,
+         sum(spend * case when spend_date < date '2026-11-24' then 1.20 else 1 end) as ad_spend_buyer
   from public.meta_ad_spend_daily group by 1
 )
 select coalesce(w.week, a.week) as week,
@@ -223,7 +231,7 @@ select coalesce(w.week, a.week) as week,
        round(coalesce(a.ad_spend, 0) / nullif(w.orders, 0), 0)    as ad_cost_per_order,
        round(coalesce(a.ad_spend, 0) / nullif(w.delivered, 0), 0) as ad_cost_per_delivered,
        w.revenue_delivered,
-       round(coalesce(w.gross_profit, 0) - coalesce(a.ad_spend, 0) * 1.20, 0) as profit_after_ads
+       round(coalesce(w.gross_profit, 0) - coalesce(a.ad_spend_buyer, 0), 0) as profit_after_ads
 from wk w full join ads a on a.week = w.week;
 
 -- ---------------------------------------------------------------------------
@@ -241,7 +249,8 @@ where outcome = 'open';
 -- Pricing base for the price researcher.
 --   unit_cost        hard floor: never recommend a price below it.
 --   order_overhead   what one delivered order costs beyond the goods
---                    (avg courier + ad spend incl. media buyer 20%, per
+--                    (avg courier + ad spend incl. media buyer 20% on spend
+--                    before 2026-11-24, per
 --                    delivered order, trailing 60 days).
 --   standalone_profit  selling price − unit cost − order_overhead: profit if
 --                    this product is the whole order. Negative on a cheap
@@ -254,16 +263,17 @@ with recent as (
          count(*) filter (where outcome = 'delivered') as delivered
   from agent.order_economics where order_date >= current_date - 60
 ),
-ads as (select sum(spend) as spend from public.meta_ad_spend_daily where spend_date >= current_date - 60)
+ads as (select sum(spend * case when spend_date < date '2026-11-24' then 1.20 else 1 end) as spend
+        from public.meta_ad_spend_daily where spend_date >= current_date - 60)
 select p.code, p.name, p.brand, p.category, p.is_published, p.qty as stock_qty,
        case when p.is_offer and p.offer_price > 0 then p.offer_price else p.price end as selling_price,
        uc.unit_cost, uc.cost_source,
        round((case when p.is_offer and p.offer_price > 0 then p.offer_price else p.price end) - uc.unit_cost, 2) as margin,
        round(100.0 * ((case when p.is_offer and p.offer_price > 0 then p.offer_price else p.price end) - uc.unit_cost)
              / nullif(case when p.is_offer and p.offer_price > 0 then p.offer_price else p.price end, 0), 1) as margin_pct,
-       round(coalesce(r.avg_courier, 0) + coalesce(a.spend * 1.20 / nullif(r.delivered, 0), 0), 0) as order_overhead,
+       round(coalesce(r.avg_courier, 0) + coalesce(a.spend / nullif(r.delivered, 0), 0), 0) as order_overhead,
        round((case when p.is_offer and p.offer_price > 0 then p.offer_price else p.price end) - uc.unit_cost
-             - coalesce(r.avg_courier, 0) - coalesce(a.spend * 1.20 / nullif(r.delivered, 0), 0), 0) as standalone_profit,
+             - coalesce(r.avg_courier, 0) - coalesce(a.spend / nullif(r.delivered, 0), 0), 0) as standalone_profit,
        pp.units_delivered_90d, pp.return_rate_pct
 from public.products p
 left join agent.unit_cost uc on uc.code = p.code

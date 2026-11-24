@@ -4508,6 +4508,65 @@ function finElashryOwed() {
 }
 
 // Full P&L for one Cairo month, in the mockup's four-column shape.
+// ── Media buyer pay rule ────────────────────────────────────────────────
+// Orders PLACED before 24 Nov 2026 (old deal): 1% of (collected − shipping
+// cost) on delivered orders + 20% of paid-ads spend (spend before 24 Nov only).
+// Orders PLACED from 24 Nov 2026 (new deal): 2% of the PRODUCTS value only
+// (no shipping) of each order, counted once it is Delivered; no ads share.
+// Paid monthly, bucketed by the month the order was made.
+const MB_NEW_RULE_FROM = '2026-11-24';
+function cairoDayKey(value) {
+  const s = String(value == null ? '' : value).trim();
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return '';
+  try { return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d); }
+  catch { return d.toISOString().slice(0, 10); }
+}
+function mbIsNewRuleOrder(o) { return cairoDayKey(o.created_at || o.date) >= MB_NEW_RULE_FROM; }
+function mbOrderProductsValue(o) {
+  const lines = Array.isArray(o.products) ? o.products : [];
+  if (!lines.length) return Math.max(0, (parseFloat(o.total) || 0) - (parseFloat(o.est_shipping) || 0));
+  return lines.reduce((a, l) => a + (parseFloat(l.price) || 0) * (parseInt(l.qty, 10) || 1), 0);
+}
+// Ad spend that still earns the 20% (spend dated before the new rule).
+function mbEligibleAdsForMonth(y, m) {
+  const monthStart = `${y}-${String(m).padStart(2, '0')}-01`;
+  const startY = +MB_NEW_RULE_FROM.slice(0, 4), startM = +MB_NEW_RULE_FROM.slice(5, 7);
+  if (y < startY || (y === startY && m < startM)) return finPaidAdsForMonth(y, m);   // fully old deal
+  if (monthStart >= MB_NEW_RULE_FROM) return 0;                                      // fully new deal
+  if (finIsStaticMonth(y, m)) {
+    return (cache.expenses || [])
+      .filter(e => e.category === 'Paid Ads' && finSameMonth(finMonthOfExpense(e), y, m) && cairoDayKey(e.date || e.created_at) < MB_NEW_RULE_FROM)
+      .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
+  }
+  const raw = (cache.metaAdSpend || [])
+    .filter(r => finSameMonth(cairoYM(r.spend_date), y, m) && String(r.spend_date).slice(0, 10) < MB_NEW_RULE_FROM)
+    .reduce((a, r) => a + (parseFloat(r.spend) || 0), 0);
+  return finRealAdSpend(raw);
+}
+// The month's formula pay (before adjustments). `collected` / `actualShipping`
+// are the month's figures from finComputeMonth so pinned historical months
+// keep their exact old numbers.
+function mbFormulaForMonth(y, m, delivered, collected, actualShipping) {
+  const newOrders = delivered.filter(mbIsNewRuleOrder);
+  let salesNet;            // old-deal base: collected − shipping cost
+  if (!newOrders.length) salesNet = collected - actualShipping;
+  else {
+    const oldOrders = delivered.filter(o => !mbIsNewRuleOrder(o));
+    salesNet = oldOrders.reduce((a, o) => a + (parseFloat(o.total || 0) - finShipOf(o)), 0);
+  }
+  const adsTopups = mbEligibleAdsForMonth(y, m);
+  const adsShare = adsTopups * 0.20;
+  const oldSalesShare = salesNet * 0.01;
+  const newSalesBase = newOrders.reduce((a, o) => a + mbOrderProductsValue(o), 0);
+  const newSalesShare = newSalesBase * 0.02;
+  return { adsTopups, adsShare, salesNet, oldSalesShare, newSalesBase, newSalesShare,
+    newOrdersCount: newOrders.length, salesShare: oldSalesShare + newSalesShare,
+    base: adsShare + oldSalesShare + newSalesShare };
+}
+
 function finComputeMonth(y, m) {
   const orders = cache.orders || [];
   const expenses = cache.expenses || [];
@@ -4567,7 +4626,8 @@ function finComputeMonth(y, m) {
   const paidAds = finPaidAdsForMonth(y, m);
   // Media-buyer salary — ONE source (summary == statement == P&L):
   //   static month  → the confirmed 'Media Buyer' expense you logged
-  //   computed month → 1% of (collected − delivered shipping) + 20% of paid ads
+  //   computed month → mbFormulaForMonth (old deal 1% + 20% ads for orders placed
+  //                    before 24/11; 2% of products for orders placed from 24/11)
   //                    (+ stored adjustments), or a frozen lock snapshot.
   let mediaBuyer;
   if (staticMonth) {
@@ -4577,8 +4637,7 @@ function finComputeMonth(y, m) {
     if (mbRec && mbRec.locked && mbRec.snapshot && mbRec.snapshot.gross != null) {
       mediaBuyer = parseFloat(mbRec.snapshot.gross) || 0;
     } else {
-      const mbSalesNet = collected - actualShipping;   // delivered-side net sales
-      mediaBuyer = (mbSalesNet * 0.01) + (paidAds * 0.20) + finMbAdjust(y, m);
+      mediaBuyer = mbFormulaForMonth(y, m, delivered, collected, actualShipping).base + finMbAdjust(y, m);
     }
   }
   const marketingTotal = -(paidAds + mediaBuyer);
@@ -5721,17 +5780,18 @@ function computeMediaBuyerMonth(y, m) {
   const fc = finComputeMonth(y, m);
   const gross = fc.mediaBuyer;
   // Informational ads-vs-sales breakdown (same sources finComputeMonth uses).
-  let adsTopups, salesNet, adsShare, salesShare;
+  let adsTopups, salesNet, adsShare, salesShare, oldSalesShare, newSalesBase = 0, newSalesShare = 0, newOrdersCount = 0;
   if (rec && rec.locked && rec.snapshot) {
     adsTopups  = parseFloat(rec.snapshot.ads_topups) || 0;
     salesNet   = parseFloat(rec.snapshot.sales_net) || 0;
     adsShare   = parseFloat(rec.snapshot.ads_share) || 0;
     salesShare = parseFloat(rec.snapshot.sales_share) || 0;
+    newSalesBase  = parseFloat(rec.snapshot.new_sales_base) || 0;
+    newSalesShare = parseFloat(rec.snapshot.new_sales_share) || 0;
+    oldSalesShare = rec.snapshot.old_sales_share != null ? (parseFloat(rec.snapshot.old_sales_share) || 0) : salesShare - newSalesShare;
   } else {
-    adsTopups  = fc.paidAds;
-    salesNet   = fc.collected - fc.actualShipping;
-    adsShare   = adsTopups * 0.20;
-    salesShare = salesNet * 0.01;
+    const F = mbFormulaForMonth(y, m, fc.delivered, fc.collected, fc.actualShipping);
+    ({ adsTopups, salesNet, adsShare, salesShare, oldSalesShare, newSalesBase, newSalesShare, newOrdersCount } = F);
   }
   const adjustments = Array.isArray(rec && rec.adjustments) ? rec.adjustments : [];
   const adjTotal = adjustments.reduce((a, x) => a + (parseFloat(x.amount) || 0), 0);
@@ -5745,7 +5805,8 @@ function computeMediaBuyerMonth(y, m) {
     .filter(r => inM(cairoYM(r.spend_date)))
     .reduce((a, r) => a + (parseFloat(r.spend) || 0), 0));
   return { key, y, m, rec, locked: !!(rec && rec.locked), lockedAt: rec ? rec.locked_at : null,
-    adsTopups, salesNet, adsShare, salesShare, adjustments, adjTotal, base, gross,
+    adsTopups, salesNet, adsShare, salesShare, oldSalesShare, newSalesBase, newSalesShare, newOrdersCount,
+    adjustments, adjTotal, base, gross,
     adsPct, salesPct, paid, owed, metaSpend, monthDelivered, staticMonth: fc.staticMonth };
 }
 
@@ -5810,7 +5871,8 @@ async function mbToggleLock() {
     return;
   }
   if (!confirm(`Lock ${MB_MO_EN[S.m - 1]} ${S.y}? The salary (EGP ${fmt(S.gross)}) will be frozen so later deliveries or ad-spend corrections can't change it. You can unlock later.`)) return;
-  const snapshot = { ads_topups: S.adsTopups, ads_share: S.adsShare, sales_net: S.salesNet, sales_share: S.salesShare, adj_total: S.adjTotal, gross: S.gross };
+  const snapshot = { ads_topups: S.adsTopups, ads_share: S.adsShare, sales_net: S.salesNet, sales_share: S.salesShare,
+    old_sales_share: S.oldSalesShare, new_sales_base: S.newSalesBase, new_sales_share: S.newSalesShare, adj_total: S.adjTotal, gross: S.gross };
   try { await mbSaveMonth(S.key, { locked: true, locked_at: new Date().toISOString(), snapshot }); showToast('Month locked 🔒'); _mbRerender(); }
   catch (e) { showToast('Error: ' + e.message); }
 }
@@ -5859,7 +5921,7 @@ function renderMediaBuyer() {
     </div>
     <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600">
       <span style="color:#F26A21">🟧 Ads 20%: EGP ${fmt(S.adsShare)} · ${adsPctR}%</span>
-      <span style="color:#10b981">🟩 Sales 1%: EGP ${fmt(S.salesShare)} · ${salesPctR}%</span>
+      <span style="color:#10b981">🟩 Sales: EGP ${fmt(S.salesShare)} · ${salesPctR}%</span>
     </div>`
     : '<div style="font-size:12px;color:var(--muted);margin:6px 0">No ads or sales recorded for this month yet.</div>';
   const incentiveHint = S.base > 0 && adsPctR >= 70
@@ -5896,11 +5958,15 @@ function renderMediaBuyer() {
       <span style="margin-inline-start:auto;display:flex;align-items:center;gap:8px">${lockBtn}</span>
     </div>
 
-    <div class="fin-row"><span>Ad top-ups (this month)</span><span class="fin-val">EGP ${fmt(S.adsTopups)}</span></div>
+    <div style="margin:4px 0 8px;padding:8px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:12px;color:#1e40af">📌 From 24 Nov 2026: <b>2% of the products value</b> of each order placed from that day, counted once it's Delivered. The 20% of ads and the 1% stop for orders placed from 24 Nov.</div>
+    <div class="fin-row"><span>Ad top-ups (this month${S.y > 2026 || (S.y === 2026 && S.m >= 11) ? ', before 24 Nov' : ''})</span><span class="fin-val">EGP ${fmt(S.adsTopups)}</span></div>
     <div class="fin-row"><span>20% of top-ups</span><span class="fin-val">EGP ${fmt(S.adsShare)}</span></div>
     <div class="fin-row" style="opacity:.75;font-size:11px"><span>Meta actual spend <span style="font-size:10px;color:var(--muted)">· incl. 14% VAT · ROAS only</span> <button class="btn btn-ghost btn-xs" onclick="syncMetaAds()">🔄 Sync Meta</button></span><span class="fin-val">EGP ${fmt(S.metaSpend)}</span></div>
-    <div class="fin-row"><span>Delivered sales (net of shipping)</span><span class="fin-val">EGP ${fmt(S.salesNet)}</span></div>
-    <div class="fin-row"><span>1% of delivered sales</span><span class="fin-val">EGP ${fmt(S.salesShare)}</span></div>
+    <div class="fin-row"><span>Delivered sales (net of shipping)${S.newSalesBase ? ' · orders before 24 Nov' : ''}</span><span class="fin-val">EGP ${fmt(S.salesNet)}</span></div>
+    <div class="fin-row"><span>1% of delivered sales</span><span class="fin-val">EGP ${fmt(S.oldSalesShare != null ? S.oldSalesShare : S.salesShare)}</span></div>
+    ${(S.y > 2026 || (S.y === 2026 && S.m >= 11)) ? `
+    <div class="fin-row"><span>Delivered products value · orders from 24 Nov (${S.newOrdersCount || 0})</span><span class="fin-val">EGP ${fmt(S.newSalesBase || 0)}</span></div>
+    <div class="fin-row"><span>2% of products value</span><span class="fin-val">EGP ${fmt(S.newSalesShare || 0)}</span></div>` : ''}
 
     <div style="margin:12px 0 4px;font-size:12px;color:var(--muted);font-weight:700">How his pay is split — ads vs sales</div>
     ${splitBar}
@@ -6709,13 +6775,18 @@ function downloadDeliveredByMonthExcel() {
     const collected = list.reduce((a, o) => a + (parseFloat(o.total) || 0), 0);
     const shipping = list.reduce((a, o) => a + (parseFloat(o.actual_shipping) || 0), 0);
     const net = collected - shipping;
+    // Commission per order: placed before 24 Nov 2026 → 1% of net (after
+    // shipping); placed from 24 Nov 2026 → 2% of the products value.
+    const commission = list.reduce((a, o) => a + (mbIsNewRuleOrder(o)
+      ? mbOrderProductsValue(o) * 0.02
+      : ((parseFloat(o.total) || 0) - (parseFloat(o.actual_shipping) || 0)) * 0.01), 0);
     return {
       'Month': m,
       'Orders': list.length,
       'Total Paid (EGP)': Math.round(collected * 100) / 100,
       'Actual Shipping (EGP)': Math.round(shipping * 100) / 100,
       'Net (after shipping) (EGP)': Math.round(net * 100) / 100,
-      '1% of Net (EGP)': Math.round(net * 0.01 * 100) / 100,
+      'Sales commission (EGP)': Math.round(commission * 100) / 100,
     };
   });
   const grand = summaryRows.reduce((a, r) => ({
@@ -6724,8 +6795,8 @@ function downloadDeliveredByMonthExcel() {
     'Total Paid (EGP)': Math.round((a['Total Paid (EGP)'] + r['Total Paid (EGP)']) * 100) / 100,
     'Actual Shipping (EGP)': Math.round((a['Actual Shipping (EGP)'] + r['Actual Shipping (EGP)']) * 100) / 100,
     'Net (after shipping) (EGP)': Math.round((a['Net (after shipping) (EGP)'] + r['Net (after shipping) (EGP)']) * 100) / 100,
-    '1% of Net (EGP)': Math.round((a['1% of Net (EGP)'] + r['1% of Net (EGP)']) * 100) / 100,
-  }), { 'Month': '', 'Orders': 0, 'Total Paid (EGP)': 0, 'Actual Shipping (EGP)': 0, 'Net (after shipping) (EGP)': 0, '1% of Net (EGP)': 0 });
+    'Sales commission (EGP)': Math.round((a['Sales commission (EGP)'] + r['Sales commission (EGP)']) * 100) / 100,
+  }), { 'Month': '', 'Orders': 0, 'Total Paid (EGP)': 0, 'Actual Shipping (EGP)': 0, 'Net (after shipping) (EGP)': 0, 'Sales commission (EGP)': 0 });
   const wsSummary = XLSX.utils.json_to_sheet([...summaryRows, {}, grand]);
   wsSummary['!cols'] = [{ wch: 14 }, { wch: 10 }, { wch: 20 }, { wch: 22 }, { wch: 26 }, { wch: 18 }];
   XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
@@ -6736,11 +6807,16 @@ function downloadDeliveredByMonthExcel() {
     const dataRows = list.map(o => {
       const collected = parseFloat(o.total) || 0;
       const shipping = parseFloat(o.actual_shipping) || 0;
+      const isNew = mbIsNewRuleOrder(o);
+      const prodVal = mbOrderProductsValue(o);
       return [
         o.customer_name || '',
         Math.round(collected * 100) / 100,
         Math.round(shipping * 100) / 100,
         Math.round((collected - shipping) * 100) / 100,
+        Math.round(prodVal * 100) / 100,
+        isNew ? '2% of products (from 24 Nov)' : '1% of net',
+        Math.round((isNew ? prodVal * 0.02 : (collected - shipping) * 0.01) * 100) / 100,
       ];
     });
     // Excel is 1-indexed. Rows 1–2 are the input/summary strip, 3–4
@@ -6751,18 +6827,19 @@ function downloadDeliveredByMonthExcel() {
     const sumB = `SUM(B${DATA_START}:B${DATA_END})`;
     const sumC = `SUM(C${DATA_START}:C${DATA_END})`;
     const sumD = `SUM(D${DATA_START}:D${DATA_END})`;
+    const sumG = `SUM(G${DATA_START}:G${DATA_END})`;
 
     const aoa = [
       // Row 1
-      ['Paid Ads This Month (EGP) — إجمالي الإعلانات', '', '', '', '20% of Ads — 20٪ من الإعلانات', { t: 'n', f: 'B1*0.2' }],
+      ['Paid Ads This Month (EGP, spend before 24 Nov 2026 only) — إجمالي الإعلانات', '', '', '', '20% of Ads — 20٪ من الإعلانات', { t: 'n', f: 'B1*0.2' }],
       // Row 2
-      ['Total Sales (after shipping) — المبيعات بعد الشحن', { t: 'n', f: dataRows.length ? sumD : '0' }, '', '', '1% of Sales — 1٪ من المبيعات', { t: 'n', f: dataRows.length ? `${sumD}*0.01` : '0' }],
+      ['Total Sales (after shipping) — المبيعات بعد الشحن', { t: 'n', f: dataRows.length ? sumD : '0' }, '', '', 'Sales commission — عمولة المبيعات', { t: 'n', f: dataRows.length ? sumG : '0' }],
       // Row 3 — blank
       [],
       // Row 4 — blank
       [],
       // Row 5 — header
-      ['Customer', 'Total Paid (EGP)', 'Actual Shipping (EGP)', 'Net (EGP)'],
+      ['Customer', 'Total Paid (EGP)', 'Actual Shipping (EGP)', 'Net (EGP)', 'Products value (EGP)', 'Rule', 'Commission (EGP)'],
       // Rows 6+ — data
       ...dataRows,
       // Row N — TOTAL (uses formulas so editing a row flows into the strip)
@@ -6771,10 +6848,12 @@ function downloadDeliveredByMonthExcel() {
         { t: 'n', f: dataRows.length ? sumB : '0' },
         { t: 'n', f: dataRows.length ? sumC : '0' },
         { t: 'n', f: dataRows.length ? sumD : '0' },
+        '', '',
+        { t: 'n', f: dataRows.length ? sumG : '0' },
       ],
     ];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws['!cols'] = [{ wch: 44 }, { wch: 18 }, { wch: 22 }, { wch: 16 }, { wch: 34 }, { wch: 18 }];
+    ws['!cols'] = [{ wch: 44 }, { wch: 18 }, { wch: 22 }, { wch: 16 }, { wch: 34 }, { wch: 26 }, { wch: 16 }];
     const safeName = String(m).replace(/[\\/\?\*\[\]]/g, '-').slice(0, 31);
     XLSX.utils.book_append_sheet(wb, ws, safeName);
   }
@@ -6865,12 +6944,17 @@ function financeData() {
     .filter(o => inCycle(o.created_at || o.date))
     .slice()
     .sort((a, b) => String(a.created_at || a.date || '').localeCompare(String(b.created_at || b.date || '')));
-  const cycleSales = cycleDelivered.reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
+  // Same deal as mbFormulaForMonth: orders placed before 24 Nov 2026 → 1% of
+  // sales excl. shipping + 20% of ads spent before 24 Nov; orders placed from
+  // 24 Nov → 2% of products value.
+  const cycleSales = cycleDelivered.filter(o => !mbIsNewRuleOrder(o)).reduce((a, o) => a + (parseFloat(o.total || 0) - parseFloat(o.est_shipping || 0)), 0);
+  const cycleNewSales = cycleDelivered.filter(mbIsNewRuleOrder).reduce((a, o) => a + mbOrderProductsValue(o), 0);
   const paidAdsCycle = expenses
-    .filter(e => e.category === 'Paid Ads' && inCycle(e.created_at || e.date))
+    .filter(e => e.category === 'Paid Ads' && inCycle(e.created_at || e.date) && cairoDayKey(e.date || e.created_at) < MB_NEW_RULE_FROM)
     .reduce((a, e) => a + parseFloat(e.amount || 0), 0);
   const adsShare = paidAdsCycle * 0.20;
-  const salesShare = cycleSales * 0.01;
+  const newSalesShare = cycleNewSales * 0.02;
+  const salesShare = cycleSales * 0.01 + newSalesShare;
   const mbFee = adsShare + salesShare;
   const mbPaid = mbPayments.reduce((a, e) => a + parseFloat(e.amount || 0), 0);
   const mbOwed = Math.max(0, mbFee);
@@ -6881,7 +6965,7 @@ function financeData() {
   return { collected, delShip, retShip, shouldReceive, receipts, received, bostaRemaining,
     deliveredNet, deliveredElashryOwed, deliveredGrossProfit, deliveredCount: delivered.length,
     goodsOwed, purchases, purchasesTotal, owed, payments, paid, elashryRemaining, notReturnedCost,
-    productSalesDelivered, paidAds: paidAdsAll, paidAdsCycle, adsShare, salesShare, mbFee, mbPaid, mbOwed,
+    productSalesDelivered, paidAds: paidAdsAll, paidAdsCycle, adsShare, salesShare, cycleNewSales, newSalesShare, mbFee, mbPaid, mbOwed,
     cycleDelivered, cycleSales, cycleFrom, cycleTo, generalExpenses };
 }
 
@@ -6916,12 +7000,14 @@ function _finAoa(section, d) {
     ...d.payments.map(x => [x.date || '', r2(x.amount), x.note || '']),
   ];
   if (section === 'mediabuyer') return [
-    ['Media Buyer Payment (20% ads + 1% delivered sales)'], [],
+    ['Media Buyer Payment — before 24 Nov 2026: 20% ads + 1% delivered sales; from 24 Nov 2026: 2% of delivered products value'], [],
     [`Cycle window: ${d.cycleFrom} → ${d.cycleTo}`], [],
     ['Paid ads spend (this cycle)', r2(d.paidAdsCycle)],
     ['20% of paid ads', r2(d.adsShare)],
     ['Delivered product sales (this cycle, excl. shipping)', r2(d.cycleSales)],
-    ['1% of delivered sales', r2(d.salesShare)],
+    ['1% of delivered sales (orders before 24 Nov)', r2(d.salesShare - d.newSalesShare)],
+    ['Delivered products value (orders from 24 Nov)', r2(d.cycleNewSales)],
+    ['2% of products value', r2(d.newSalesShare)],
     ['Total owed now', r2(d.mbOwed)], [],
     [`Delivered orders in this cycle (${d.cycleDelivered.length})`], [],
     ['Order code', 'Date', 'Customer', 'Phone', 'City', 'Total (EGP)', 'Shipping (EGP)', 'Product sales (EGP)'],
@@ -7070,12 +7156,13 @@ function finReportRows() {
   // ── Media buyer (per month, single source) ──
   const mbRows = months.map(mo => {
     const S = (typeof computeMediaBuyerMonth === 'function') ? computeMediaBuyerMonth(mo.y, mo.m) : null;
-    return S ? [moName(mo), r2(S.adsTopups), r2(S.adsShare), r2(S.salesNet), r2(S.salesShare),
+    return S ? [moName(mo), r2(S.adsTopups), r2(S.adsShare), r2(S.salesNet), r2(S.oldSalesShare != null ? S.oldSalesShare : S.salesShare),
+      r2(S.newSalesBase || 0), r2(S.newSalesShare || 0),
       r2(S.gross), r2(S.paid), r2(S.owed), S.staticMonth ? 'pinned' : 'computed'] : [moName(mo)];
   });
   sheets.push({ name: 'Media Buyer', aoa: [
-    ['Media-buyer salary — 20% of ad spend + 1% of (collected − delivered shipping)'], [],
-    ['Month', 'Ad spend', '20% ads', 'Net sales', '1% sales', 'Gross salary', 'Paid', 'Owed', 'Basis'],
+    ['Media-buyer salary — orders before 24 Nov 2026: 20% of ad spend + 1% of (collected − shipping); orders from 24 Nov 2026: 2% of products value (delivered)'], [],
+    ['Month', 'Ad spend (20% eligible)', '20% ads', 'Net sales (old deal)', '1% sales', 'Products value (from 24 Nov)', '2% products', 'Gross salary', 'Paid', 'Owed', 'Basis'],
     ...mbRows,
   ]});
 
