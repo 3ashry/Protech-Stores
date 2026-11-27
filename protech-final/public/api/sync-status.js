@@ -434,7 +434,12 @@ async function runAramexSync() {
       if (r.ok) {
         out.updated++;
         out.changes.push({ code: o.code, from: o.status, to: patch.status || o.status, update: statusText });
-        if (patch.status) { try { await tgNotifyStatusChange(o, o.status, patch.status); } catch (_) {} }
+        if (patch.status) {
+          // Latest Aramex message (+ its comment and time) for Awaiting Action.
+          const when = last.at ? new Date(last.at).toLocaleString('en-GB', { timeZone: 'Africa/Cairo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+          const note = ['أرامكس: ' + (statusText || last.problem || 'مشكلة في التوصيل'), last.comments, when].filter(Boolean).join(' · ');
+          try { await tgNotifyStatusChange(o, o.status, patch.status, note); } catch (_) {}
+        }
       }
     }
   }
