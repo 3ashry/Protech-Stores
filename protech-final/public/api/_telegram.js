@@ -132,13 +132,16 @@ const STATUS_EMOJI = {
   'Processing': '⏳',
   'Awaiting Action': '⚠️',
 };
-export async function tgNotifyStatusChange(order, from, to) {
+// `courierUpdate` (optional): the courier's latest tracking message, shown
+// under the status for Awaiting Action so you see WHY without opening Aramex.
+export async function tgNotifyStatusChange(order, from, to, courierUpdate) {
   if (!tgConfigured()) return { ok: false, error: 'not configured' };
   if (!order || !to || from === to) return { ok: false, error: 'noop' };
   const emoji = STATUS_EMOJI[to] || '🔄';
   const displayCode = order.code || order.id || '';
   const parts = [
     `${emoji} <b>${esc(to)}</b>`,
+    (to === 'Awaiting Action' && courierUpdate) ? `📝 <i>${esc(String(courierUpdate).slice(0, 400))}</i>` : '',
     ``,
     `🆔 <code>${esc(displayCode)}</code>`,
     order.customer_name ? `👤 ${esc(order.customer_name)}` : '',
